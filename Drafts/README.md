@@ -1,7 +1,8 @@
 # DumpLedger implementation drafts
 
-Status: planning only. These documents do not claim that the TypeScript
-implementation, generated model port, or MBT acceptance suite exists.
+Status: mixed historical and active design material. The 2026-09-04 plans
+record the baseline that was subsequently implemented. Each newer document
+states its own implementation status and must not be read as a shipped claim.
 
 ## Plans
 
@@ -11,6 +12,10 @@ implementation, generated model port, or MBT acceptance suite exists.
 - [`mirrorecma-mbt-plan.md`](mirrorecma-mbt-plan.md) defines the required TLA+
   changes, model-interface compiler artifacts, generated port, handwritten
   DumpLedger adapter, MirrorECMA runner, trace corpus, and negative matrix.
+- [`vite-react-typescript7-frontend-design.md`](vite-react-typescript7-frontend-design.md)
+  defines the proposed Vite 8, React 19, and TypeScript 7 browser application,
+  its same-origin Fastify HTTP interface, security rules, migration sequence,
+  ownership slices, and acceptance gates. It is design-only.
 
 Read the MBT plan before implementing the lifecycle engine. It exposes three
 constraints that affect the production shape rather than merely adding tests at
