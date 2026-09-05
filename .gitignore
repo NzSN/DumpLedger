@@ -1,0 +1,15 @@
+# Runtime data and secrets
+/data/
+
+# TLA+ checker output
+/_apalache-out/
+/states/
+/tmp/
+/node_modules/
+/dist/
+/.test-dist-http/
+
+# Local editor and operating-system files
+.DS_Store
+*.swp
+*~

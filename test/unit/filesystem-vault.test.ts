@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import { mkdtempSync,rmSync,symlinkSync,writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after,it } from "node:test";
+import { parseDumpId } from "../../src/domain/ids.js";
+import { FilesystemVault } from "../../src/vault/filesystem-vault.js";
+import { vaultContract } from "./vault-contract.js";
+const roots:string[]=[];after(()=>{for(const root of roots)rmSync(root,{force:true,recursive:true});});
+vaultContract("filesystem",()=>{const root=mkdtempSync(join(tmpdir(),"dump-ledger-vault-"));roots.push(root);return new FilesystemVault(root);});
+it("refuses a symbolic-link object directory",{skip:process.platform==="win32"?"symlink privileges":false},()=>{const root=mkdtempSync(join(tmpdir(),"dump-ledger-links-")),outside=mkdtempSync(join(tmpdir(),"dump-ledger-outside-"));roots.push(root,outside);const vault=new FilesystemVault(root),id=parseDumpId("dump_01JTEST0000000000000000003");vault.createStaging(id);vault.append(id,Uint8Array.of(1));vault.syncAndClose(id);writeFileSync(join(outside,"original.dmp"),"bad");symlinkSync(outside,join(vault.vaultRoot,id),"dir");assert.throws(()=>vault.promote(id));assert.throws(()=>vault.openImmutable(id),/not a real directory/);});

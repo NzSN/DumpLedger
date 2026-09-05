@@ -1,0 +1,31 @@
+{
+  "name": "dump-ledger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24 <25" },
+  "packageManager": "pnpm@11.5.1",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/main.js",
+    "generate:grant-key": "tsc -p tsconfig.json && node dist/tools/generate-grant-key.js",
+    "generate:operator-password-hash": "tsc -p tsconfig.json && node dist/tools/generate-operator-password-hash.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "node --test dist/test/unit/**/*.test.js",
+    "test:integration": "node --test dist/test/integration/**/*.test.js",
+    "test:mbt": "node --test dist/test/mbt/**/*.test.js",
+    "check:model-interface": "bash tools/check-model-interface.sh",
+    "generate:mbt-traces": "pnpm run build && node dist/tools/generate-mbt-traces.js",
+    "test": "pnpm run typecheck && pnpm run check:model-interface && pnpm run build && pnpm run test:unit && pnpm run test:integration && pnpm run test:mbt"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "fastify": "5.12.3",
+    "mirrorecma": "link:../MirrorECMA"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2"
+  }
+}
