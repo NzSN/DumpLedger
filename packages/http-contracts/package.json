@@ -1,0 +1,28 @@
+{
+  "name": "@dump-ledger/http-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Framework-free serializable HTTP contracts, stable error codes, and runtime decoders for the DumpLedger browser/Fastify interface.",
+  "engines": { "node": ">=24 <25" },
+  "packageManager": "pnpm@11.5.1",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm run build && node --test dist/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2"
+  }
+}

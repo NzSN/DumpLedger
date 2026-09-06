@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -29,7 +30,20 @@ interface CliOptions {
   readonly replace: boolean;
 }
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+function locateRepositoryRoot(moduleDirectory: string): string {
+  const candidates = [
+    resolve(moduleDirectory, ".."),
+    resolve(moduleDirectory, "..", ".."),
+  ];
+  const found = candidates.find((candidate) =>
+    existsSync(join(candidate, "specs", "DumpLedger.tla")));
+  if (found === undefined) {
+    throw new Error(`cannot locate repository root from ${moduleDirectory}`);
+  }
+  return found;
+}
+
+const repositoryRoot = locateRepositoryRoot(dirname(fileURLToPath(import.meta.url)));
 const specsRoot = join(repositoryRoot, "specs");
 const fixturesRoot = join(repositoryRoot, "test", "fixtures", "mbt", "traces");
 
@@ -50,10 +64,16 @@ function sequenceSlot(state: JsonObject, name: string, slot: number): Json | und
 
 function parametersMatch(
   state: JsonObject,
-  expected: { readonly token: string; readonly dump: string; readonly kind: string },
+  expected: {
+    readonly case?: string;
+    readonly token: string;
+    readonly dump: string;
+    readonly kind: string;
+  },
 ): boolean {
   const parameters = state["parameters"];
   return isObject(parameters) &&
+    (expected.case === undefined || isEncodedInt(parameters["case"], expected.case)) &&
     isEncodedInt(parameters["token"], expected.token) &&
     isEncodedInt(parameters["dump"], expected.dump) &&
     parameters["kind"] === expected.kind;
@@ -131,6 +151,20 @@ const traceCases: readonly TraceCase[] = [
       parametersMatch(state, { token: "1", dump: "0", kind: "unclassified" }) &&
       sequenceSlot(state, "tokenState", 1) === "revoked" &&
       sequenceSlot(state, "tokenState", 2) === "expired",
+  },
+  {
+    destination: "07-case-closed-grants-revoked.itf.json",
+    witnessModule: "CaseWorkflow",
+    lengthBound: 6,
+    nextPredicate: "WitnessNext",
+    terminalDescription: "CloseCase with case slot 1 closed and its issued grant revoked",
+    terminalMatches: (state) =>
+      state["action_taken"] === "CloseCase" &&
+      parametersMatch(state, { case: "1", token: "0", dump: "0", kind: "unclassified" }) &&
+      sequenceSlot(state, "caseStatus", 1) === "closed" &&
+      sequenceSlot(state, "caseStatus", 2) === "new" &&
+      sequenceSlot(state, "tokenState", 1) === "revoked" &&
+      sequenceSlot(state, "tokenState", 2) === "unused",
   },
 ];
 

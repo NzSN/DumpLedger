@@ -1,0 +1,35 @@
+{
+  "name": "@dump-ledger/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vite 8 / React 19 operator and public-uploader interface for DumpLedger, sharing runtime-validated HTTP contracts with the Fastify backend.",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "pnpm@11.5.1",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dump-ledger/http-contracts": "workspace:*",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router": "7.18.3"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.1",
+    "jsdom": "30.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,35 @@
+/* ---------------------------------------------------------------------------
+ * Feature-scoped additions for the public uploader (T6). These are the only
+ * T6-owned CSS rules; everything else reuses the migrated tokens/classes in
+ * frontend/src/styles/ (tokens.css, app.css, responsive.css).
+ *
+ * The native <input type="file"> is hidden with an sr-only pattern while it
+ * stays in the DOM: the visible drop-zone <button> (a native button, so it
+ * inherits the shared `button:focus-visible` ring from app.css) opens the
+ * file picker. The input is removed from the tab order so keyboard users get
+ * one clear target instead of an invisible one.
+ * ------------------------------------------------------------------------- */
+
+.upload-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The drop zone is a real <button>; it must inherit the token text colour and
+   centre its label copy like the legacy drop-zone surface did. */
+.drop-zone-chooser {
+  color: inherit;
+  text-align: center;
+}
+
+.drop-zone-chooser:disabled {
+  cursor: not-allowed;
+}

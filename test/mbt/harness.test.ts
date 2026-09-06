@@ -7,7 +7,11 @@ import {
   MbtHarness,
   createMbtProbe,
 } from "../../src/mbt/harness.js";
-import { initialPayload, stepPayload } from "./support/model-values.js";
+import {
+  casePayload,
+  initialPayload,
+  stepPayload,
+} from "./support/model-values.js";
 
 test("generated port drives the production engine and observes only its projection", () => {
   const probe = createMbtProbe();
@@ -16,6 +20,11 @@ test("generated port drives the production engine and observes only its projecti
   const binding = bindDumpLedger(port, { paramVars: "parameters" });
 
   let state = binding.computer("Init", initialPayload(), {});
+  state = binding.computer(
+    "StartInvestigation",
+    casePayload(1n),
+    state,
+  );
   state = binding.computer("IssueToken", stepPayload(1n, 0n), state);
   state = binding.computer("BeginUpload", stepPayload(1n, 1n), state);
   state = binding.computer("SealUpload", stepPayload(0n, 1n), state);
@@ -38,8 +47,8 @@ test("generated port drives the production engine and observes only its projecti
     tag: "set",
     val: [{ tag: "int", val: 1n }],
   });
-  assert.equal(probe.observationCalls, 7);
-  assert.equal(probe.portCalls, 7);
+  assert.equal(probe.observationCalls, 8);
+  assert.equal(probe.portCalls, 8);
   assert.ok(
     probe.engineCalls > probe.portCalls,
     "initialization must seed real customers and cases",
@@ -56,6 +65,7 @@ test("every concrete generated-port method returns exactly void", () => {
   const port = new DumpLedgerMbtPort(harness, probe);
 
   assert.equal(port.initialize(), undefined);
+  assert.equal(port.startInvestigation({ case_: 1n }), undefined);
   assert.equal(port.issueToken({ token: 1n }), undefined);
   assert.equal(port.beginUpload({ token: 1n, dump: 1n }), undefined);
   assert.equal(port.failUpload({ dump: 1n }), undefined);

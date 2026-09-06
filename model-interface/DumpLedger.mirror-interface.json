@@ -27,7 +27,14 @@
           "id": "Token",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "token" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
           }
         }
       ]
@@ -41,7 +48,14 @@
           "id": "Token",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "token" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
           }
         }
       ]
@@ -55,7 +69,14 @@
           "id": "Token",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "token" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
           }
         }
       ]
@@ -69,14 +90,28 @@
           "id": "Token",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "token" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
           }
         },
         {
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -90,7 +125,14 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -104,7 +146,14 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -118,7 +167,14 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -132,7 +188,14 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -146,14 +209,28 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         },
         {
           "id": "Kind",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "kind" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "kind"
+              }
+            ]
           }
         }
       ]
@@ -167,7 +244,14 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -181,7 +265,14 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
           }
         }
       ]
@@ -195,21 +286,174 @@
           "id": "Dump",
           "from": {
             "root": "stepParameters",
-            "path": [{ "field": "parameters" }, { "field": "dump" }]
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "StartInvestigation",
+      "wireAction": "StartInvestigation",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "WaitForCustomer",
+      "wireAction": "WaitForCustomer",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ResumeInvestigation",
+      "wireAction": "ResumeInvestigation",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ResolveCase",
+      "wireAction": "ResolveCase",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "CloseCase",
+      "wireAction": "CloseCase",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
           }
         }
       ]
     }
   ],
   "observations": [
-    { "id": "TokenState", "wireName": "tokenState", "provenance": "implementation" },
-    { "id": "TokenDump", "wireName": "tokenDump", "provenance": "implementation" },
-    { "id": "DumpPhase", "wireName": "dumpPhase", "provenance": "implementation" },
-    { "id": "DumpCase", "wireName": "dumpCase", "provenance": "implementation" },
-    { "id": "BlobState", "wireName": "blobState", "provenance": "implementation" },
-    { "id": "DigestRecorded", "wireName": "digestRecorded", "provenance": "implementation" },
-    { "id": "Validation", "wireName": "validation", "provenance": "implementation" },
-    { "id": "Coverage", "wireName": "coverage", "provenance": "implementation" },
-    { "id": "Downloadable", "wireName": "downloadable", "provenance": "implementation" }
+    {
+      "id": "TokenState",
+      "wireName": "tokenState",
+      "provenance": "implementation"
+    },
+    {
+      "id": "TokenDump",
+      "wireName": "tokenDump",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DumpPhase",
+      "wireName": "dumpPhase",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DumpCase",
+      "wireName": "dumpCase",
+      "provenance": "implementation"
+    },
+    {
+      "id": "BlobState",
+      "wireName": "blobState",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DigestRecorded",
+      "wireName": "digestRecorded",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Validation",
+      "wireName": "validation",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Coverage",
+      "wireName": "coverage",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Downloadable",
+      "wireName": "downloadable",
+      "provenance": "implementation"
+    },
+    {
+      "id": "CaseStatus",
+      "wireName": "caseStatus",
+      "provenance": "implementation"
+    }
   ]
 }

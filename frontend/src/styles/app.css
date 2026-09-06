@@ -1,28 +1,4 @@
-export const appCss = `
-:root {
-  color-scheme: dark;
-  font: 16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --bg: #07111f;
-  --bg-deep: #040b14;
-  --surface: rgba(15, 29, 47, .86);
-  --surface-solid: #0f1d2f;
-  --surface-raised: #14253a;
-  --surface-soft: rgba(23, 42, 65, .64);
-  --line: rgba(144, 173, 207, .16);
-  --line-strong: rgba(144, 173, 207, .3);
-  --text: #f4f8fd;
-  --text-soft: #c1d0df;
-  --muted: #849ab2;
-  --accent: #67e8c1;
-  --accent-strong: #25c99b;
-  --blue: #73a8ff;
-  --amber: #f7bd73;
-  --red: #ff7d8f;
-  --green: #64dfb4;
-  --shadow: 0 24px 70px rgba(0, 8, 20, .34);
-  --radius: 18px;
-}
-
+/* Migrated from src/http/views/app.css.ts (read-only reference). */
 * { box-sizing: border-box; }
 body, header, main, footer, section, article, div { min-width: 0; }
 html { min-height: 100%; background: var(--bg-deep); }
@@ -217,35 +193,43 @@ input::placeholder { color: #536a82; }
 .health-ok strong { color: var(--text); }
 .health-ok p { margin: .15rem 0 0; color: var(--muted); font-size: .75rem; }
 
-@media (max-width: 860px) {
-  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metric-grid-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .layout-grid { grid-template-columns: 1fr; }
-  .page-frame { padding-top: 3rem; }
-}
+/* ---------------------------------------------------------------------------
+ * Shell extensions (frontend/src/shared/components). Reuse the tokens above;
+ * the evidence-vault language is unchanged.
+ * ------------------------------------------------------------------------- */
 
-@media (max-width: 600px) {
-  .topbar { width: min(100% - 24px, 1280px); min-height: 68px; }
-  .page-frame, .page-frame-wide { width: min(100% - 24px, 1280px); padding: 2.4rem 0 4rem; }
-  .brand-copy small { display: none; }
-  .public-page .trust-chip { display: none; }
-  .primary-nav > a { display: none; }
-  .page-heading { align-items: flex-start; flex-direction: column; }
-  .metric-grid { grid-template-columns: 1fr 1fr; gap: .55rem; }
-  .metric { min-height: 90px; padding: .8rem; }
-  .metric-value { font-size: 1.45rem; }
-  .detail-grid { grid-template-columns: 1fr; }
-  .record-row { align-items: flex-start; flex-direction: column; }
-  .record-actions { justify-content: flex-start; }
-  .copy-row, .upload-actions, .inline-field { align-items: stretch; flex-direction: column; }
-  .metric-grid-three { grid-template-columns: 1fr; }
-  .auth-card, .upload-card, .success-card { padding: 1.2rem; border-radius: 18px; }
-  .drop-zone { min-height: 190px; padding: 1.1rem .85rem; }
-  .notice { padding: .85rem; }
-  .site-footer { width: calc(100% - 24px); flex-direction: column; }
-}
+/* Field-level validation text (FormField). */
+.field-error { margin: 0; color: var(--red); font-size: .72rem; font-weight: 650; }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
-}
-`;
+/* Notice tone variants (Notice / ErrorDisplay). The base `.notice` is amber. */
+.notice[data-tone="error"] { color: #ffdbe0; background: rgba(255,125,143,.08); border-color: rgba(255,125,143,.28); }
+.notice[data-tone="error"] .notice-icon { background: rgba(255,125,143,.12); color: var(--red); }
+.notice[data-tone="success"] { color: #d7f4e8; background: rgba(100,223,180,.08); border-color: rgba(100,223,180,.25); }
+.notice[data-tone="success"] .notice-icon { background: rgba(100,223,180,.12); color: var(--green); }
+.notice[data-tone="info"] { color: #d6e4ff; background: rgba(115,168,255,.08); border-color: rgba(115,168,255,.25); }
+.notice[data-tone="info"] .notice-icon { background: rgba(115,168,255,.12); color: var(--blue); }
+
+/* Confirmation dialog (native buttons, focusable surface). */
+.dialog-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 1.2rem; background: rgba(2, 8, 16, .68); backdrop-filter: blur(6px); z-index: 30; }
+.dialog { width: min(460px, 100%); padding: 1.4rem; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface-solid); box-shadow: var(--shadow); }
+.dialog h2 { margin: 0 0 .4rem; font-size: 1.05rem; letter-spacing: -.01em; }
+.dialog p { margin: 0 0 1.1rem; color: var(--muted); font-size: .85rem; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: .6rem; flex-wrap: wrap; }
+
+/* Full-viewport transitional and fatal states. */
+.screen-status { width: min(600px, 100%); margin: 2rem auto 0; padding: 2rem; text-align: center; color: var(--muted); }
+.screen-status strong { display: block; color: var(--text-soft); margin-bottom: .3rem; }
+
+/* ---------------------------------------------------------------------------
+ * Shell page chrome (frontend/src/app, feature placeholders). Kept minimal;
+ * feature phases replace placeholders without touching the migrated language.
+ * ------------------------------------------------------------------------- */
+.screen-title { margin: 0 0 .5rem; color: var(--text); font-size: clamp(1.5rem, 3.6vw, 2.1rem); line-height: 1.15; letter-spacing: -.03em; }
+.screen-subtitle { margin: 0 0 1.5rem; color: var(--muted); font-size: .86rem; }
+.placeholder-page { display: grid; gap: 1rem; }
+.checking-screen { width: min(600px, 100%); margin: 3rem auto 0; padding: 2rem; text-align: center; color: var(--muted); }
+.header-error { width: min(1280px, calc(100% - 40px)); margin: .9rem auto 0; }
+.auth-error { margin: 1.1rem 0 0; }
+.auth-error:focus, .screen-status:focus { outline: none; }
+.notice-body > p { margin: .2rem 0 0; }
+.notice-body > p:first-child { margin-top: 0; }

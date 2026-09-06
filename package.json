@@ -3,22 +3,33 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24 <25" },
+  "engines": {
+    "node": ">=24 <25"
+  },
   "packageManager": "pnpm@11.5.1",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/src/main.js",
+    "build": "pnpm run build:contracts && pnpm run build:web && tsc -p tsconfig.json",
+    "build:contracts": "pnpm --filter @dump-ledger/http-contracts build",
+    "check:model-interface": "bash tools/check-model-interface.sh",
+    "dev:contracts": "pnpm --filter @dump-ledger/http-contracts dev",
     "generate:grant-key": "tsc -p tsconfig.json && node dist/tools/generate-grant-key.js",
+    "generate:mbt-traces": "pnpm run build && node dist/tools/generate-mbt-traces.js",
     "generate:operator-password-hash": "tsc -p tsconfig.json && node dist/tools/generate-operator-password-hash.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:unit": "node --test dist/test/unit/**/*.test.js",
+    "start": "node dist/src/main.js",
+    "test": "pnpm run typecheck && pnpm run check:model-interface && pnpm run build && pnpm run test:unit && pnpm run test:integration && pnpm run test:mbt",
     "test:integration": "node --test dist/test/integration/**/*.test.js",
     "test:mbt": "node --test dist/test/mbt/**/*.test.js",
-    "check:model-interface": "bash tools/check-model-interface.sh",
-    "generate:mbt-traces": "pnpm run build && node dist/tools/generate-mbt-traces.js",
-    "test": "pnpm run typecheck && pnpm run check:model-interface && pnpm run build && pnpm run test:unit && pnpm run test:integration && pnpm run test:mbt"
+    "test:unit": "node --test dist/test/unit/**/*.test.js",
+    "typecheck": "pnpm run typecheck:contracts && pnpm run typecheck:web && tsc -p tsconfig.json --noEmit",
+    "typecheck:contracts": "pnpm --filter @dump-ledger/http-contracts typecheck",
+    "dev:web": "pnpm --filter @dump-ledger/web dev",
+    "typecheck:web": "pnpm --filter @dump-ledger/web typecheck",
+    "build:web": "pnpm --filter @dump-ledger/web build",
+    "test:web": "pnpm --filter @dump-ledger/web test",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@dump-ledger/http-contracts": "workspace:*",
     "better-sqlite3": "13.0.3",
     "fastify": "5.12.3",
     "mirrorecma": "link:../MirrorECMA"
@@ -26,6 +37,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "24.10.1",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "@playwright/test": "1.63.0"
   }
 }

@@ -16,6 +16,7 @@ import type {
   AcceptDumpInput,
   BeginPurgeInput,
   BeginUploadInput,
+  CloseCaseInput,
   DumpLedgerBinding,
   DumpLedgerObservation,
   DumpLedgerPort,
@@ -26,8 +27,12 @@ import type {
   MarkQuarantinedInput,
   PromoteObjectInput,
   RejectDumpInput,
+  ResolveCaseInput,
+  ResumeInvestigationInput,
   RevokeTokenInput,
   SealUploadInput,
+  StartInvestigationInput,
+  WaitForCustomerInput,
 } from "../generated/dump-ledger/DumpLedgerMirror.generated.js";
 import { createVaultMinidumpInspectionPort } from "../inspection/index.js";
 import { MemoryVault } from "../vault/memory-vault.js";
@@ -233,6 +238,22 @@ export class MbtHarness {
     }
   }
 
+  startInvestigation(caseValue: bigint): void {
+    this.execute({ type: "StartInvestigation", caseId: this.caseFor(caseValue) });
+  }
+  waitForCustomer(caseValue: bigint): void {
+    this.execute({ type: "WaitForCustomer", caseId: this.caseFor(caseValue) });
+  }
+  resumeInvestigation(caseValue: bigint): void {
+    this.execute({ type: "ResumeInvestigation", caseId: this.caseFor(caseValue) });
+  }
+  resolveCase(caseValue: bigint): void {
+    this.execute({ type: "ResolveCase", caseId: this.caseFor(caseValue) });
+  }
+  closeCase(caseValue: bigint): void {
+    this.execute({ type: "CloseCase", caseId: this.caseFor(caseValue) });
+  }
+
   issueToken(tokenValue: bigint): void {
     const token = slot(tokenValue, "token");
     const session = this.requireSession();
@@ -384,6 +405,15 @@ export class MbtHarness {
     );
 
     const observation: DumpLedgerObservation = {
+      caseStatus: session.cases.map((caseId) => {
+        const found = projection.cases.find(
+          (candidate) => candidate.caseId === caseId,
+        );
+        if (found === undefined) {
+          throw new Error(`case ${caseId} is missing from the ledger`);
+        }
+        return found.status;
+      }),
       tokenState: MODEL_SLOTS.map(
         (modelSlot) => grantBySlot(modelSlot)?.state ?? "unused",
       ),
@@ -462,6 +492,11 @@ export class MbtHarness {
     return this.session;
   }
 
+  private caseFor(caseValue: bigint): CaseId {
+    const caseSlot = slot(caseValue, "case");
+    return this.requireSession().cases[Number(caseSlot - 1n)]!;
+  }
+
   private requireGrant(
     tokenValue: bigint,
   ): { readonly grantId: GrantId; readonly secret: string } {
@@ -512,6 +547,9 @@ export class DumpLedgerMbtPort implements DumpLedgerPort {
   beginUpload(input: BeginUploadInput): void {
     this.call("BeginUpload", () => this.harness.beginUpload(input.token, input.dump));
   }
+  closeCase(input: CloseCaseInput): void {
+    this.call("CloseCase", () => this.harness.closeCase(input.case_));
+  }
   expireToken(input: ExpireTokenInput): void {
     this.call("ExpireToken", () => this.harness.expireToken(input.token));
   }
@@ -533,11 +571,23 @@ export class DumpLedgerMbtPort implements DumpLedgerPort {
   rejectDump(input: RejectDumpInput): void {
     this.call("RejectDump", () => this.harness.rejectDump(input.dump));
   }
+  resolveCase(input: ResolveCaseInput): void {
+    this.call("ResolveCase", () => this.harness.resolveCase(input.case_));
+  }
+  resumeInvestigation(input: ResumeInvestigationInput): void {
+    this.call("ResumeInvestigation", () => this.harness.resumeInvestigation(input.case_));
+  }
   revokeToken(input: RevokeTokenInput): void {
     this.call("RevokeToken", () => this.harness.revokeToken(input.token));
   }
   sealUpload(input: SealUploadInput): void {
     this.call("SealUpload", () => this.harness.sealUpload(input.dump));
+  }
+  startInvestigation(input: StartInvestigationInput): void {
+    this.call("StartInvestigation", () => this.harness.startInvestigation(input.case_));
+  }
+  waitForCustomer(input: WaitForCustomerInput): void {
+    this.call("WaitForCustomer", () => this.harness.waitForCustomer(input.case_));
   }
 
   observe(): DumpLedgerObservation {
@@ -602,6 +652,21 @@ type RevokeTokenReturnsVoid = Assert<
 type SealUploadReturnsVoid = Assert<
   IsExactly<ReturnType<DumpLedgerMbtPort["sealUpload"]>, void>
 >;
+type CloseCaseReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["closeCase"]>, void>
+>;
+type ResolveCaseReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["resolveCase"]>, void>
+>;
+type ResumeInvestigationReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["resumeInvestigation"]>, void>
+>;
+type StartInvestigationReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["startInvestigation"]>, void>
+>;
+type WaitForCustomerReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["waitForCustomer"]>, void>
+>;
 
 type ConcreteVoidAssertions =
   | InitializeReturnsVoid
@@ -616,7 +681,12 @@ type ConcreteVoidAssertions =
   | PromoteObjectReturnsVoid
   | RejectDumpReturnsVoid
   | RevokeTokenReturnsVoid
-  | SealUploadReturnsVoid;
+  | SealUploadReturnsVoid
+  | CloseCaseReturnsVoid
+  | ResolveCaseReturnsVoid
+  | ResumeInvestigationReturnsVoid
+  | StartInvestigationReturnsVoid
+  | WaitForCustomerReturnsVoid;
 
 const concreteVoidAssertions: ConcreteVoidAssertions = true;
 void concreteVoidAssertions;

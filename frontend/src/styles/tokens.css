@@ -1,0 +1,24 @@
+/* Migrated from src/http/views/app.css.ts (read-only reference). */
+:root {
+  color-scheme: dark;
+  font: 16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #07111f;
+  --bg-deep: #040b14;
+  --surface: rgba(15, 29, 47, .86);
+  --surface-solid: #0f1d2f;
+  --surface-raised: #14253a;
+  --surface-soft: rgba(23, 42, 65, .64);
+  --line: rgba(144, 173, 207, .16);
+  --line-strong: rgba(144, 173, 207, .3);
+  --text: #f4f8fd;
+  --text-soft: #c1d0df;
+  --muted: #849ab2;
+  --accent: #67e8c1;
+  --accent-strong: #25c99b;
+  --blue: #73a8ff;
+  --amber: #f7bd73;
+  --red: #ff7d8f;
+  --green: #64dfb4;
+  --shadow: 0 24px 70px rgba(0, 8, 20, .34);
+  --radius: 18px;
+}

@@ -72,6 +72,11 @@ class Engine implements DumpLedgerEngine {
     switch (command.type) {
       case "CreateCustomer": { const customerId=this.ids.next("customer"); this.ledger.createCustomer(customerId,assertText(command.displayName,"displayName",200),event()); return {ok:true,action:command.type,occurredAt,customerId}; }
       case "CreateCase": { const customerId=parseCustomerId(command.customerId), caseId=this.ids.next("case"); this.ledger.createCase(caseId,customerId,assertText(command.title,"title",500),event()); return {ok:true,action:command.type,occurredAt,caseId,customerId}; }
+      case "StartInvestigation": { const caseId=parseCaseId(command.caseId); this.ledger.startInvestigation(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId}; }
+      case "WaitForCustomer": { const caseId=parseCaseId(command.caseId); this.ledger.waitForCustomer(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId}; }
+      case "ResumeInvestigation": { const caseId=parseCaseId(command.caseId); this.ledger.resumeInvestigation(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId}; }
+      case "ResolveCase": { const caseId=parseCaseId(command.caseId); this.ledger.resolveCase(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId}; }
+      case "CloseCase": { const caseId=parseCaseId(command.caseId); const revokedGrantIds=this.ledger.closeCase(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId,revokedGrantIds}; }
       case "IssueGrant": {
         const caseId=parseCaseId(command.caseId), expiresAt=assertIsoTimestamp(command.expiresAt,"expiresAt"), maxBytes=assertPositiveBigint(command.maxBytes,"maxBytes");
         if (expiresAt <= occurredAt) throw new DumpLedgerError("invalid_input","grant expiry must be in the future");

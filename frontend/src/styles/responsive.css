@@ -1,0 +1,32 @@
+/* Migrated from src/http/views/app.css.ts (read-only reference). */
+@media (max-width: 860px) {
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-grid-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .layout-grid { grid-template-columns: 1fr; }
+  .page-frame { padding-top: 3rem; }
+}
+
+@media (max-width: 600px) {
+  .topbar { width: min(100% - 24px, 1280px); min-height: 68px; }
+  .page-frame, .page-frame-wide { width: min(100% - 24px, 1280px); padding: 2.4rem 0 4rem; }
+  .brand-copy small { display: none; }
+  .public-page .trust-chip { display: none; }
+  .primary-nav > a { display: none; }
+  .page-heading { align-items: flex-start; flex-direction: column; }
+  .metric-grid { grid-template-columns: 1fr 1fr; gap: .55rem; }
+  .metric { min-height: 90px; padding: .8rem; }
+  .metric-value { font-size: 1.45rem; }
+  .detail-grid { grid-template-columns: 1fr; }
+  .record-row { align-items: flex-start; flex-direction: column; }
+  .record-actions { justify-content: flex-start; }
+  .copy-row, .upload-actions, .inline-field { align-items: stretch; flex-direction: column; }
+  .metric-grid-three { grid-template-columns: 1fr; }
+  .auth-card, .upload-card, .success-card { padding: 1.2rem; border-radius: 18px; }
+  .drop-zone { min-height: 190px; padding: 1.1rem .85rem; }
+  .notice { padding: .85rem; }
+  .site-footer { width: calc(100% - 24px); flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

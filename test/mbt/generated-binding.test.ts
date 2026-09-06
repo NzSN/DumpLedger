@@ -26,6 +26,7 @@ function assertBindingCode(
 
 const VALID_OBSERVATION: DumpLedgerObservation = {
   blobState: ["none", "none"],
+  caseStatus: ["new", "new"],
   coverage: ["unclassified", "unclassified"],
   digestRecorded: [],
   downloadable: [],
@@ -44,6 +45,7 @@ function noOpPort(
     acceptDump(): void {},
     beginPurge(): void {},
     beginUpload(): void {},
+    closeCase(): void {},
     expireToken(): void {},
     failUpload(): void {},
     finishPurge(): void {},
@@ -51,8 +53,12 @@ function noOpPort(
     markQuarantined(): void {},
     promoteObject(): void {},
     rejectDump(): void {},
+    resolveCase(): void {},
+    resumeInvestigation(): void {},
     revokeToken(): void {},
     sealUpload(): void {},
+    startInvestigation(): void {},
+    waitForCustomer(): void {},
     observe,
   };
 }

@@ -5,12 +5,13 @@
     "varTypes": {
       "action_taken": "Str",
       "blobState": "Seq(Str)",
+      "caseStatus": "Seq(Str)",
       "coverage": "Seq(Str)",
       "digestRecorded": "Set(Int)",
       "downloadable": "Set(Int)",
       "dumpCase": "Seq(Int)",
       "dumpPhase": "Seq(Str)",
-      "parameters": "{ dump: Int, kind: Str, token: Int }",
+      "parameters": "{ case: Int, dump: Int, kind: Str, token: Int }",
       "tokenDump": "Seq(Int)",
       "tokenState": "Seq(Str)",
       "validation": "Seq(Str)"
@@ -25,6 +26,10 @@
       "blobState": [
         "none",
         "none"
+      ],
+      "caseStatus": [
+        "new",
+        "new"
       ],
       "coverage": [
         "unclassified",
@@ -49,6 +54,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "0"
         },
@@ -83,6 +91,10 @@
         "none",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "unclassified",
         "unclassified"
@@ -106,6 +118,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "0"
         },
@@ -140,6 +155,10 @@
         "staging",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "unclassified",
         "unclassified"
@@ -163,6 +182,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "1"
         },
@@ -197,6 +219,10 @@
         "staging",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "unclassified",
         "unclassified"
@@ -224,6 +250,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "1"
         },
@@ -258,6 +287,10 @@
         "vault",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "unclassified",
         "unclassified"
@@ -285,6 +318,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "1"
         },
@@ -319,6 +355,10 @@
         "vault",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "unclassified",
         "unclassified"
@@ -346,6 +386,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "1"
         },
@@ -380,6 +423,10 @@
         "vault",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "partial",
         "unclassified"
@@ -411,6 +458,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "3"
         },
@@ -445,6 +495,10 @@
         "vault",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "partial",
         "unclassified"
@@ -472,6 +526,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "1"
         },
@@ -506,6 +563,10 @@
         "none",
         "none"
       ],
+      "caseStatus": [
+        "new",
+        "new"
+      ],
       "coverage": [
         "partial",
         "unclassified"
@@ -533,6 +594,9 @@
         "absent"
       ],
       "parameters": {
+        "case": {
+          "#bigint": "0"
+        },
         "dump": {
           "#bigint": "1"
         },
@@ -566,6 +630,7 @@
     "digestRecorded",
     "tokenDump",
     "action_taken",
+    "caseStatus",
     "parameters",
     "tokenState",
     "dumpCase",

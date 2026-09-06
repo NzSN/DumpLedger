@@ -1,7 +1,7 @@
 import BetterSqlite3 from "better-sqlite3";
 import { DumpLedgerError } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId } from "../domain/ids.js";
-import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
+import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
 import type { AuditEventProjection, DumpLedgerProjection, DumpProjection, GrantProjection } from "../engine/projection.js";
 import { applyMigrations } from "./migrations.js";
 
@@ -49,9 +49,30 @@ export class SqliteLedger {
 
   createCustomer(customerId: CustomerId, displayName: string, event: EventIdentity): void { this.database.transaction(() => { this.prepare("INSERT INTO customers(customer_id, display_name, created_at) VALUES (?, ?, ?)").run(customerId, displayName, event.occurredAt); this.insertAudit(event, "CreateCustomer", customerId, null, null, {}); })(); }
   createCase(caseId: CaseId, customerId: CustomerId, title: string, event: EventIdentity): void { this.database.transaction(() => { this.prepare("INSERT INTO cases(case_id, customer_id, title, status, created_at) VALUES (?, ?, ?, 'new', ?)").run(caseId, customerId, title, event.occurredAt); this.insertAudit(event, "CreateCase", customerId, caseId, null, {}); })(); }
+  startInvestigation(caseId: CaseId, event: EventIdentity): void { this.transitionCase(caseId, ["new"], event, "StartInvestigation", "investigating"); }
+  waitForCustomer(caseId: CaseId, event: EventIdentity): void { this.transitionCase(caseId, ["investigating"], event, "WaitForCustomer", "waiting-for-customer"); }
+  resumeInvestigation(caseId: CaseId, event: EventIdentity): void { this.transitionCase(caseId, ["waiting-for-customer", "resolved", "closed"], event, "ResumeInvestigation", "investigating"); }
+  resolveCase(caseId: CaseId, event: EventIdentity): void { this.transitionCase(caseId, ["investigating", "waiting-for-customer"], event, "ResolveCase", "resolved"); }
+  closeCase(caseId: CaseId, event: EventIdentity): readonly GrantId[] {
+    return this.database.transaction(() => {
+      const status = this.caseStatusFor(caseId);
+      if (this.prepare("UPDATE cases SET status = 'closed' WHERE case_id = ? AND status = 'resolved'").run(caseId).changes !== 1) throw new DumpLedgerError("invalid_transition", `cannot CloseCase from status ${status}`);
+      const rows = this.prepare("SELECT grant_id FROM upload_grants WHERE case_id = ? AND state = 'issued' ORDER BY grant_id").all(caseId) as Row[];
+      const revokedGrantIds = rows.map(row => databaseValue("grant_id", parseGrantId, row.grant_id));
+      for (const grantId of revokedGrantIds) {
+        if (this.prepare("UPDATE upload_grants SET state = 'revoked' WHERE grant_id = ? AND state = 'issued'").run(grantId).changes !== 1) throw new DumpLedgerError("integrity_failure", "issued grant could not be revoked during CloseCase");
+      }
+      this.insertAudit(event, "CloseCase", this.customerForCase(caseId), caseId, null, { revokedGrantIds });
+      return revokedGrantIds;
+    })();
+  }
   issueGrant(grantId: GrantId, caseId: CaseId, secretDigest: string, expiresAt: string, maxBytes: bigint, event: EventIdentity): void {
-    const customerId = this.customerForCase(caseId);
-    this.database.transaction(() => { this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at) VALUES (?, ?, ?, 'issued', ?, ?, NULL, ?)").run(grantId, caseId, secretDigest, expiresAt, maxBytes.toString(), event.occurredAt); this.insertAudit(event, "IssueGrant", customerId, caseId, null, { grantId }); })();
+    this.database.transaction(() => {
+      if (this.caseStatusFor(caseId) === "closed") throw new DumpLedgerError("invalid_transition", "cannot IssueGrant on a closed case");
+      const customerId = this.customerForCase(caseId);
+      this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at) VALUES (?, ?, ?, 'issued', ?, ?, NULL, ?)").run(grantId, caseId, secretDigest, expiresAt, maxBytes.toString(), event.occurredAt);
+      this.insertAudit(event, "IssueGrant", customerId, caseId, null, { grantId });
+    })();
   }
   findGrantByDigest(secretDigest: string): GrantRecord | null { const row = this.prepare("SELECT * FROM upload_grants WHERE secret_digest = ?").get(secretDigest) as Row | undefined; return row === undefined ? null : grantFromRow(row); }
   transitionGrant(grantId: GrantId, next: "revoked" | "expired", event: EventIdentity): void {
@@ -64,8 +85,9 @@ export class SqliteLedger {
   }
   beginUpload(grantId: GrantId, dumpId: DumpId, originalName: string, event: EventIdentity): void {
     this.database.transaction(() => {
-      const row = this.prepare("SELECT g.case_id, c.customer_id FROM upload_grants g JOIN cases c ON c.case_id = g.case_id WHERE g.grant_id = ?").get(grantId) as Row | undefined;
+      const row = this.prepare("SELECT g.case_id, c.customer_id, c.status AS case_status FROM upload_grants g JOIN cases c ON c.case_id = g.case_id WHERE g.grant_id = ?").get(grantId) as Row | undefined;
       if (row === undefined) throw new DumpLedgerError("grant_invalid", "upload grant is invalid");
+      if (row.case_status === "closed") throw new DumpLedgerError("invalid_transition", "cannot BeginUpload on a closed case");
       const caseId = parseCaseId(row.case_id);
       if (this.prepare("UPDATE upload_grants SET state = 'consumed', consumed_by_dump_id = ? WHERE grant_id = ? AND state = 'issued' AND consumed_by_dump_id IS NULL").run(dumpId, grantId).changes !== 1) throw new DumpLedgerError("grant_consumed", "upload grant has already been used");
       this.prepare("INSERT INTO dumps(dump_id, case_id, phase, blob_state, original_name, byte_size, sha256, validation, coverage, downloadable, inspection_error, inspection_facts_json, received_at, available_at, purged_at) VALUES (?, ?, 'receiving', 'staging', ?, NULL, NULL, 'not-checked', NULL, 0, NULL, NULL, ?, NULL, NULL)").run(dumpId, caseId, originalName, event.occurredAt);
@@ -112,6 +134,19 @@ export class SqliteLedger {
       const result = this.prepare(`UPDATE dumps SET ${assignments} WHERE dump_id = @dumpId AND phase IN (${placeholders}) AND ${extraPredicate}`).run({dumpId, ...values}, ...expected);
       if (result.changes !== 1) throw new DumpLedgerError("invalid_transition", `cannot ${action} from phase ${dump.phase}`);
       this.insertAudit(event, action, this.customerForCase(dump.caseId), dump.caseId, dumpId, {});
+    })();
+  }
+  private caseStatusFor(caseId: CaseId): CaseStatus {
+    const row = this.prepare("SELECT status FROM cases WHERE case_id = ?").get(caseId) as Row | undefined;
+    if (row === undefined) throw new DumpLedgerError("not_found", "case was not found");
+    return databaseValue("case status", parseCaseStatus, row.status);
+  }
+  private transitionCase(caseId: CaseId, expected: readonly CaseStatus[], event: EventIdentity, action: string, next: CaseStatus): void {
+    this.database.transaction(() => {
+      const status = this.caseStatusFor(caseId);
+      const placeholders = expected.map(() => "?").join(", ");
+      if (this.prepare(`UPDATE cases SET status = ? WHERE case_id = ? AND status IN (${placeholders})`).run(next, caseId, ...expected).changes !== 1) throw new DumpLedgerError("invalid_transition", `cannot ${action} from status ${status}`);
+      this.insertAudit(event, action, this.customerForCase(caseId), caseId, null, {});
     })();
   }
   private customerForCase(caseId: CaseId): CustomerId {

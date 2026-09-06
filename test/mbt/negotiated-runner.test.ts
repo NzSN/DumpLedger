@@ -134,16 +134,21 @@ const EXPECTED_COVERAGE = {
   AcceptDump: 3,
   BeginPurge: 5,
   BeginUpload: 5,
+  CloseCase: 1,
   ExpireToken: 1,
   FailUpload: 1,
   FinishPurge: 5,
-  Initialize: 6,
-  IssueToken: 7,
+  Initialize: 7,
+  IssueToken: 8,
   MarkQuarantined: 4,
   PromoteObject: 4,
   RejectDump: 1,
+  ResolveCase: 1,
+  ResumeInvestigation: 1,
   RevokeToken: 1,
   SealUpload: 4,
+  StartInvestigation: 1,
+  WaitForCustomer: 1,
 } as const;
 
 test("checked-in corpus reaches all_steps_done through negotiated generated binding", async () => {
@@ -164,14 +169,14 @@ test("checked-in corpus reaches all_steps_done through negotiated generated bind
   assert.equal(recording.closeCalls(), 1);
   assert.equal(
     probe.sessionCreates,
-    6,
+    7,
     "each trace must receive a fresh engine and SQLite ledger",
   );
-  assert.equal(probe.sessionCloses, 6);
-  assert.equal(probe.portCalls, 47);
+  assert.equal(probe.sessionCloses, 7);
+  assert.equal(probe.portCalls, 54);
   assert.equal(
     probe.observationCalls,
-    47,
+    54,
     "each replayed action must be observed exactly once",
   );
   assert.deepEqual(probe.generatedBinding?.coverage(), EXPECTED_COVERAGE);
