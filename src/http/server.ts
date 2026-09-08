@@ -18,6 +18,7 @@ import { UploadAdmission } from "../intake/upload-admission.js";
 import type { UploadPostProcessor } from "../intake/intake-facade.js";
 import type { PostProcessingQueue } from "../intake/post-processing-queue.js";
 import { UploadSession, type UploadByteSink, type UploadLifecyclePort } from "../intake/upload-session.js";
+import type { TransferManager } from "../transfer/manager.js";
 import type { RuntimeJobSnapshot } from "./runtime-jobs.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { registerCaseRoutes } from "./routes/case-routes.js";
@@ -26,6 +27,7 @@ import { registerCustomerRoutes } from "./routes/customer-routes.js";
 import { registerDumpRoutes } from "./routes/dump-routes.js";
 import { registerGrantRoutes } from "./routes/grant-routes.js";
 import { registerOperationRoutes } from "./routes/operation-routes.js";
+import { registerTransferRoutes } from "./routes/transfer-routes.js";
 import { registerUploadRoutes } from "./routes/upload-routes.js";
 import { registerStaticWeb } from "./static-web.js";
 
@@ -71,6 +73,27 @@ export interface HttpServerOptions {
   readonly loginRateLimiter?: FixedWindowRateLimiter;
   readonly uploadGrantRateLimiter?: FixedWindowRateLimiter;
   readonly secureDeployment?: boolean;
+  /**
+   * Trust X-Forwarded-Proto/Host from the immediately connected peer (design
+   * section 7.2's trusted reverse proxy). Required in the production topology
+   * where the proxy terminates TLS: without it `request.protocol` is `http`
+   * and the Origin defense-in-depth check rejects every browser mutation,
+   * since the browser's origin is `https://`. Enable only when the process
+   * is reachable solely through that proxy (the HTTPS assertion in main.ts
+   * keeps the listener on loopback unless the operator overrides it).
+   */
+  readonly trustProxy?: boolean;
+  /**
+   * Transfer manager backing the import/export operations routes
+   * (import/export design, "HTTP and UI surface"), plus the exports directory
+   * it was constructed with — the download route streams sealed bundles from
+   * `<exportsDir>/<exportId>/bundle.tar` and the manager deliberately does not
+   * expose its directory. Both must be provided together; when absent the
+   * transfer routes are not registered and their paths 404 like any other
+   * unknown /api path.
+   */
+  readonly transfer?: TransferManager;
+  readonly transferExportsDir?: string;
   readonly runtimeJobs?: readonly { snapshot(): RuntimeJobSnapshot }[];
   /** Directory containing the Vite production build (defaults to `<cwd>/dist/web`). */
   readonly webRoot?: string;
@@ -102,7 +125,7 @@ const PRODUCTION_CSP = [
 ].join("; ");
 
 export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
-  const server = Fastify({ logger: false, bodyLimit: 16 * 1024 });
+  const server = Fastify({ logger: false, bodyLimit: 16 * 1024, trustProxy: options.trustProxy ?? false });
   const upload = new UploadSession(options.uploadLifecycle, options.uploadSink);
   const now = options.now ?? Date.now;
   const uploadAdmission = options.uploadAdmission ?? new UploadAdmission(options.maxConcurrentUploads ?? 2);
@@ -141,6 +164,7 @@ export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
   registerGrantRoutes(server, ctx);
   registerDumpRoutes(server, ctx);
   registerOperationRoutes(server, ctx);
+  registerTransferRoutes(server, ctx);
   registerUploadRoutes(server, ctx);
 
   // The React build is mounted at the final browser routes last; nothing is

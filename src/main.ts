@@ -12,6 +12,7 @@ import { EngineUploadLifecycle, EngineUploadPostProcessor, VaultUploadSink } fro
 import { PostProcessingQueue } from "./intake/post-processing-queue.js";
 import { reconcile } from "./recovery/reconcile.js";
 import { runRetention } from "./recovery/retention.js";
+import { TransferManager } from "./transfer/manager.js";
 import { FilesystemVault } from "./vault/filesystem-vault.js";
 
 function requiredEnvironment(name: string): string {
@@ -82,6 +83,12 @@ export async function main(): Promise<void> {
     intervalMs: retentionIntervalMs,
     run: () => { runRetention(engine, undefined, { limit: retentionBatchSize }); },
   });
+  // Import/export transfer surface (import/export design): one manager per
+  // process over the real engine and vault. The constructor runs the startup
+  // reconciliation scan of the exports directory (sealed bundles are listed,
+  // leftover .part/import work areas are removed).
+  const transferExportsDir = join(dataRoot, "exports");
+  const transfer = new TransferManager({ engine, vault, exportsDir: transferExportsDir });
   const server = buildHttpServer({
     application: new EngineHttpApplication(engine, vault),
     sessions,
@@ -91,6 +98,11 @@ export async function main(): Promise<void> {
     postProcessingQueue,
     maxConcurrentUploads,
     secureDeployment: https,
+    // DUMP_LEDGER_HTTPS=true asserts a trusted HTTPS endpoint in front; honor
+    // its X-Forwarded-Proto so the Origin check sees the browser's https URL.
+    trustProxy: https,
+    transfer,
+    transferExportsDir,
     runtimeJobs: [retentionJob],
   });
   let closing = false;

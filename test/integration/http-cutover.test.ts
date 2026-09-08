@@ -214,6 +214,41 @@ test("authenticated mutations reject foreign origins and cross-site fetch metada
   assert.equal(after.statusCode, 201);
 });
 
+test("authenticated mutations accept the browser HTTPS origin behind a trusted TLS proxy", async t => {
+  const { server, cleanup } = await makeFixture({ trustProxy: true });
+  t.after(cleanup);
+  const auth = await loginJson(server);
+  const headers = { cookie: auth.cookie, "content-type": "application/json", "x-csrf-token": auth.csrf, host: "ledger.example" };
+  const body = JSON.stringify({ displayName: "Acme" });
+
+  // Production topology: the proxy terminates TLS and forwards over loopback
+  // HTTP with X-Forwarded-Proto; the browser Origin stays https. The origin
+  // check must compare against the forwarded protocol, not the socket's.
+  const proxied = await server.inject({ method: "POST", url: "/api/v1/customers", headers: { ...headers, origin: "https://ledger.example", "x-forwarded-proto": "https" }, payload: body });
+  assert.equal(proxied.statusCode, 201);
+  decodeCreateCustomerResponse(proxied.json(), "$");
+
+  // Without the proxy's forwarded-proto evidence the https origin does not
+  // match the plain-HTTP request, so the mutation stays rejected.
+  const unforwarded = await server.inject({ method: "POST", url: "/api/v1/customers", headers: { ...headers, origin: "https://ledger.example" }, payload: body });
+  assert.equal(unforwarded.statusCode, 403);
+});
+
+test("authenticated mutations keep rejecting foreign origins behind a trusted proxy", async t => {
+  const { server, cleanup } = await makeFixture({ trustProxy: true });
+  t.after(cleanup);
+  const auth = await loginJson(server);
+  const headers = { cookie: auth.cookie, "content-type": "application/json", "x-csrf-token": auth.csrf, host: "ledger.example" };
+  const body = JSON.stringify({ displayName: "Acme" });
+
+  const foreignOrigin = await server.inject({ method: "POST", url: "/api/v1/customers", headers: { ...headers, origin: "https://evil.example", "x-forwarded-proto": "https" }, payload: body });
+  assert.equal(foreignOrigin.statusCode, 403);
+
+  // A spoofed protocol downgrade does not help an https attacker origin either.
+  const downgrade = await server.inject({ method: "POST", url: "/api/v1/customers", headers: { ...headers, origin: "https://ledger.example", "x-forwarded-proto": "http" }, payload: body });
+  assert.equal(downgrade.statusCode, 403);
+});
+
 test("the upload header path still streams without Origin checks (public bearer transport)", async t => {
   const { server, cleanup } = await makeFixture();
   t.after(cleanup);
