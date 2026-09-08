@@ -1,0 +1,132 @@
+// DumpLedgerTransfer.tla state machines, rendered via Graphviz.
+// Dark theme aligned with specs/DumpLedger.svg (#07111f canvas, #101f33 panels).
+// Regenerate: dot -Tsvg specs/DumpLedgerTransfer.dot -o specs/DumpLedgerTransfer.svg
+digraph DumpLedgerTransfer {
+  graph [rankdir=LR, newrank=true, bgcolor="#07111f", pad="0.4", nodesep="0.4", ranksep="0.85",
+         fontname="Helvetica", fontsize="11", fontcolor="#e2e8f0", labelloc="t",
+         label="DumpLedgerTransfer.tla — export/import transfer state machines\nTLC: 1,382,830 states, depth 35, no error  ·  Apalache: no error to length 8  ·  checked together with the base SafetyInvariant"];
+  node  [shape="box", style="rounded,filled", fontname="Helvetica", fontsize="10", margin="0.12,0.07",
+         color="#64748b", fillcolor="#13233c", fontcolor="#cbd5e1"];
+  edge  [fontname="Helvetica", fontsize="9", color="#94a3b8", fontcolor="#94a3b8"];
+
+  /* ---------------- export selection: live phase decides the manifest ---- */
+  subgraph cluster_export {
+    label="Export selection — ExportStart partitions live dumpPhase into the manifest";
+    fontname="Helvetica"; fontsize="10"; color="#f59e0b"; fontcolor="#fbbf24"; style="rounded"; fillcolor="#0f1c33";
+    live_avail [label="live: available", fillcolor="#0d2b22", color="#34d399", fontcolor="#a7f3d0"];
+    live_tomb  [label="live: rejected | deleted", fillcolor="#13233c", color="#64748b", fontcolor="#cbd5e1"];
+    live_skip  [label="live: receiving | sealed |\nquarantined | deleting", fillcolor="#2b241d", color="#f59e0b", fontcolor="#fcd34d"];
+    promised   [label="promised (manifest.dumps)\ncarries vault bytes + byteSize + sha256", fillcolor="#0d2b22", color="#34d399", fontcolor="#a7f3d0"];
+    tombent    [label="tombstone entry\nmetadata only, entry = NULL", fillcolor="#13233c", color="#64748b", fontcolor="#cbd5e1"];
+    skipent    [label="skipped (manifest.skipped)\nabsent from manifest.dumps", fillcolor="#2b241d", color="#f59e0b", fontcolor="#fcd34d"];
+    live_avail -> promised;
+    live_tomb  -> tombent;
+    live_skip  -> skipent;
+  }
+
+  { rank=source; absent; live_avail; live_tomb; live_skip; }
+
+  /* ---------------- the single bundle slot + job lock -------------------- */
+  subgraph cluster_bundle {
+    label="Single bundle slot and job lock — at most one running / importing job";
+    fontname="Helvetica"; fontsize="10"; color="#818cf8"; fontcolor="#a5b4fc"; style="rounded"; fillcolor="#0f1c33";
+    absent       [label="absent\nno bundle on disk"];
+    running      [label="running\nbundle.tar.part streamed\n(manifest first, then ledger, then dumps)", fillcolor="#101f33", color="#818cf8", fontcolor="#c7d2fe"];
+    sealed       [label="sealed\nfsync + atomic rename\nbyte-exact by construction", fillcolor="#101f33", color="#818cf8", fontcolor="#c7d2fe"];
+    failed       [label="failed\nwork dir removed —\nno partial bundle survives", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+    importing    [label="importing\nFreshLedger guard passed\n(BeginImport marker written)", fillcolor="#101f33", color="#818cf8", fontcolor="#c7d2fe"];
+    finished     [label="finished\nFinishImport echoes manifest digest", fillcolor="#0d2b22", color="#34d399", fontcolor="#a7f3d0"];
+    importfailed [label="import-failed\npartial ledger/vault state persists,\nno FinishImport marker (crash evidence)", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+
+    absent -> running      [label="ExportStart\n(guard: no job running)"];
+    running -> sealed      [label="ExportSeal\n(every promised entry copied byte-exact)"];
+    running -> failed      [label="ExportFail\nmid-copy purge race, retryable"];
+    sealed  -> sealed      [label="TamperBundle(d)\nbytes flipped between seal and import", color="#fb7185", fontcolor="#fb7185"];
+    fresh       [label="fresh instance\nall tables empty (FreshLedger)", fillcolor="#0c2433", color="#38bdf8", fontcolor="#bae6fd"];
+    sealed  -> fresh      [label="WipeInstance\noperator starts a fresh instance\n(e2e: second process, empty data dir)"];
+    fresh   -> importing  [label="ImportStart\n(guard: FreshLedger)"];
+    importing -> finished  [label="ImportFinish\n(every declared dump disposed of)"];
+    importing -> importfailed [label="ImportHardFail\ncrash or hard error after BeginImport"];
+    sealed  -> absent      [label="DeleteBundle", constraint=false];
+    failed  -> absent      [label="DeleteBundle", constraint=false];
+    finished -> absent     [label="DeleteBundle"];
+    importfailed -> absent [label="DeleteBundle", constraint=false];
+  }
+
+  /* ---------------- per-dump import disposition -------------------------- */
+  subgraph cluster_disposition {
+    label="Per-dump import disposition — verified dumps re-earn trust through the base lifecycle";
+    fontname="Helvetica"; fontsize="10"; color="#2dd4bf"; fontcolor="#5eead4"; style="rounded"; fillcolor="#0f1c33";
+    decl_ok  [label="promised ∧ hash verified\nstreamed to staging, sha256 matches", fillcolor="#0d2b22", color="#34d399", fontcolor="#a7f3d0"];
+    row      [label="ledger row: sealed / staging\nImportDumpOk · digest recorded · case bound", fillcolor="#101f33", color="#818cf8", fontcolor="#c7d2fe"];
+    vault    [label="blobState = vault\n(PromoteI — atomic rename)", fillcolor="#101f33", color="#818cf8", fontcolor="#c7d2fe"];
+    quar     [label="quarantined\n(QuarantineI)", fillcolor="#101f33", color="#818cf8", fontcolor="#c7d2fe"];
+    avail    [label="available (AcceptI)\ncoverage from FRESH inspection only", fillcolor="#0d2b22", color="#34d399", fontcolor="#a7f3d0"];
+    rej_ins  [label="rejected (RejectI)\ninspection outcome mismatch", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+    decl_bad [label="promised ∧ tampered\nsha256 / size mismatch", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+    rej_tom  [label="rejected tombstone\nblobState none · transfer-failed\nnever downloadable", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+    exp_rej  [label="exported rejected", fillcolor="#13233c", color="#64748b", fontcolor="#cbd5e1"];
+    rej_tom2 [label="rejected tombstone\nblobState none", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+    exp_del  [label="exported deleted", fillcolor="#13233c", color="#64748b", fontcolor="#cbd5e1"];
+    del_tom  [label="deleted tombstone\nblobState none · purge metadata kept", fillcolor="#13233c", color="#64748b", fontcolor="#cbd5e1"];
+    skipnote [label="undeclared (skipped at export)\nnever imported — slot stays absent", shape="note", fillcolor="#2b241d", color="#f59e0b", fontcolor="#fcd34d"];
+    shared   [label="Promote → quarantine → accept/reject is the SAME\nmachine live uploads use (base DumpLedger actions)", shape="note", fillcolor="#0c2433", color="#38bdf8", fontcolor="#bae6fd"];
+
+    decl_ok  -> row   [label="ImportDumpOk(d, c)"];
+    row      -> vault [label="PromoteI(d)"];
+    vault    -> quar  [label="QuarantineI(d)"];
+    quar     -> avail [label="AcceptI(d, kind)"];
+    quar     -> rej_ins [label="RejectI(d)"];
+    decl_bad -> rej_tom;
+    exp_rej  -> rej_tom2 [label="ImportDumpTombR"];
+    exp_del  -> del_tom  [label="ImportDumpTombD"];
+  }
+
+  /* ---------------- import pipeline order (entity rows first) ------------ */
+  subgraph cluster_pipeline {
+    label="Import pipeline order (import.ts) — entity rows before dumps before audit";
+    fontname="Helvetica"; fontsize="10"; color="#38bdf8"; fontcolor="#7dd3fc"; style="rounded"; fillcolor="#0f1c33";
+    stage1 [label="1 · ImportCustomer × n", fillcolor="#101f33", color="#38bdf8", fontcolor="#bae6fd"];
+    stage2 [label="2 · ImportCase × n\nFK: customer imported first", fillcolor="#101f33", color="#38bdf8", fontcolor="#bae6fd"];
+    stage3 [label="3 · ImportGrant × n\nFK: case imported first", fillcolor="#101f33", color="#38bdf8", fontcolor="#bae6fd"];
+    stage4 [label="4 · dumps × n\nFK: case imported first", fillcolor="#101f33", color="#38bdf8", fontcolor="#bae6fd"];
+    stage5 [label="5 · ImportAuditEvent × n\nhistorical trail, all entities exist", fillcolor="#101f33", color="#38bdf8", fontcolor="#bae6fd"];
+    stage1 -> stage2 [label="then"];
+    stage2 -> stage3 [label="then"];
+    stage3 -> stage4 [label="then"];
+    stage4 -> stage5 [label="then"];
+  }
+
+  /* ---------------- grant fingerprint policy ----------------------------- */
+  subgraph cluster_grants {
+    label="Grant import policy — ImportTokens(t)";
+    fontname="Helvetica"; fontsize="10"; color="#a78bfa"; fontcolor="#c4b5ff"; style="rounded"; fillcolor="#0f1c33";
+    gsrc     [label="exported grant, state issued", fillcolor="#13233c", color="#64748b", fontcolor="#cbd5e1"];
+    gmatch   [label="fingerprintMatches = TRUE\n→ issuable (issued)", fillcolor="#0d2b22", color="#34d399", fontcolor="#a7f3d0"];
+    gmismatch [label="fingerprintMatches = FALSE\n→ revoked · terminal · audited forced\n(grant key differs — secret unusable)", fillcolor="#2b1b25", color="#fb7185", fontcolor="#fecaca"];
+    gsrc -> gmatch;
+    gsrc -> gmismatch;
+  }
+
+  /* ---------------- invariants footer ------------------------------------ */
+  inv [shape="note", fontsize="9", fillcolor="#101f33", color="#475569", fontcolor="#cbd5e1",
+       label="Checked invariants (TLC finite exploration + Apalache bounded)\n• base SafetyInvariant holds for imported dumps: AvailableHasEvidence,\n   NoPrematureBlob, DeletedHasNoBlob, RejectedIsNotDownloadable, …\n• ImportDisposition: tampered → rejected · tombstones → blobState none\n• EntityOrder: case after customer · grant/dump after its case\n• FingerprintPolicy: mismatched key ⇒ no issuable imported grant\n• BundleStructure: manifest sets disjoint · bad ∈ promised ∪ {0}\n• Crash: sealed/staging rows resume via base startup reconciliation"];
+  finished -> inv [style="invis"];
+  importfailed -> inv [style="invis"];
+
+  /* ---- wiring between clusters ---- */
+  promised -> running  [style="dashed", label="recorded in manifest.json\n(first tar entry)"];
+  tombent  -> running  [style="dashed"];
+  skipent  -> running  [style="dashed", label="skipped list"];
+  importing -> stage1    [style="dashed", label="BeginImport marker,
+then entity rows"];
+  stage3 -> gsrc         [style="dashed", constraint=false, label="policy details"];
+  stage4 -> decl_ok      [style="dashed", constraint=false, label="disposition details"];
+  stage5 -> finished     [style="dashed", constraint=false, label="then FinishImport"];
+  importing -> decl_ok   [style="dashed", constraint=false, label="per declared dump"];
+  importing -> decl_bad  [style="dashed", constraint=false];
+  importing -> exp_rej   [style="dashed", constraint=false];
+  importing -> exp_del   [style="dashed", constraint=false];
+  importing -> skipnote  [style="dashed", constraint=false, label="matched by id only,\nnever materialized"];
+  importing -> gsrc      [style="dashed", constraint=false, label="per exported grant"];
+}
