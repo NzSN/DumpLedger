@@ -23,6 +23,8 @@ release.
   to the TLA+ state machine and its safety properties.
 - [`docs/implementation-plan.md`](docs/implementation-plan.md) breaks delivery
   into independently verifiable milestones.
+- [`docs/import-export-design.md`](docs/import-export-design.md) proposes the
+  export bundle format, verified import pipeline, and delivery milestones.
 - [`specs/DumpLedger.tla`](specs/DumpLedger.tla) is the executable TLA+ model.
 - [`specs/DumpLedger.svg`](specs/DumpLedger.svg) visualizes its case workflow,
   association, grant, intake, validation, and deletion state machines.
@@ -152,6 +154,11 @@ apalache-mc check \
   --inv=SafetyInvariant \
   --length=8 \
   specs/DumpLedger.tla
+```
+
+The companion transfer model of export/import is checked separately (it
+extends the base spec and is not part of the model interface or MBT corpus);
+see `specs/README.md` for its TLC and Apalache commands.
 ```
 
 The 2026-09-05 case-workflow revision produced 515,075 TLC-generated states,
