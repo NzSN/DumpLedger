@@ -1,11 +1,17 @@
 import BetterSqlite3 from "better-sqlite3";
 import { DumpLedgerError } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId } from "../domain/ids.js";
-import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
+import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type TokenState, type ValidationState } from "../domain/lifecycle.js";
 import type { AuditEventProjection, DumpLedgerProjection, DumpProjection, GrantProjection } from "../engine/projection.js";
 import { applyMigrations } from "./migrations.js";
 
 export interface GrantRecord extends GrantProjection { readonly secretDigest: string }
+export interface ImportCustomerInsert { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string }
+export interface ImportCaseInsert { readonly caseId: CaseId; readonly customerId: CustomerId; readonly title: string; readonly status: CaseStatus; readonly createdAt: string }
+export interface ImportGrantInsert { readonly grantId: GrantId; readonly caseId: CaseId; readonly secretDigest: string; readonly state: TokenState; readonly expiresAt: string; readonly maxBytes: bigint; readonly consumedByDumpId: DumpId | null; readonly createdAt: string }
+export interface ImportDumpStagedInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly originalName: string; readonly byteSize: bigint; readonly sha256: string; readonly receivedAt: string; readonly purgeAt: string | null }
+export interface ImportDumpTombstoneInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly phase: "rejected" | "deleted"; readonly originalName: string; readonly byteSize: bigint | null; readonly sha256: string | null; readonly validation: ValidationState; readonly coverage: CoverageKind | null; readonly inspectionError: string | null; readonly inspectionFacts: Readonly<Record<string, unknown>> | null; readonly receivedAt: string; readonly availableAt: string | null; readonly purgeAt: string | null; readonly purgedAt: string | null }
+export interface ImportAuditEventInsert { readonly eventId: AuditEventId; readonly occurredAt: string; readonly action: string; readonly customerId: CustomerId | null; readonly caseId: CaseId | null; readonly dumpId: DumpId | null; readonly detail: Readonly<Record<string, unknown>> }
 interface EventIdentity { readonly eventId: AuditEventId; readonly occurredAt: string }
 type Row = Record<string, unknown>;
 function requiredString(row: Row, key: string): string { const value = row[key]; if (typeof value !== "string") throw new DumpLedgerError("integrity_failure", `invalid database ${key}`); return value; }
@@ -114,6 +120,75 @@ export class SqliteLedger {
   authorizeDownload(dumpId: DumpId, event: EventIdentity): DumpProjection {
     return this.database.transaction(() => { const dump = this.getDump(dumpId); if (dump === null) throw new DumpLedgerError("not_found", "dump was not found"); if (dump.phase !== "available" || !dump.downloadable) throw new DumpLedgerError("invalid_transition", "dump is not available for download"); this.insertAudit(event, "AuthorizeDownload", this.customerForCase(dump.caseId), dump.caseId, dumpId, {}); return dump; })();
   }
+  beginImport(event: EventIdentity, detail: Readonly<Record<string, unknown>>): void {
+    this.database.transaction(() => {
+      if (!this.isEmpty()) throw new DumpLedgerError("invalid_transition", "import requires an empty ledger");
+      if (this.unfinishedImportId() !== null) throw new DumpLedgerError("invalid_transition", "an import is already in progress");
+      this.insertAudit(event, "BeginImport", null, null, null, detail);
+    })();
+  }
+  finishImport(event: EventIdentity, importId: AuditEventId, detail: Readonly<Record<string, unknown>>): void {
+    this.database.transaction(() => {
+      const marker = this.prepare("SELECT detail_json FROM audit_events WHERE event_id = ? AND action = 'BeginImport'").get(importId) as Row | undefined;
+      if (marker === undefined) throw new DumpLedgerError("not_found", "import was not found");
+      if (this.importIsFinished(importId)) throw new DumpLedgerError("invalid_transition", "import has already been finished");
+      const manifestDigest = parseJsonObject(requiredString(marker, "detail_json")).manifestDigest;
+      this.insertAudit(event, "FinishImport", null, null, null, { manifestDigest: typeof manifestDigest === "string" ? manifestDigest : null, ...detail });
+    })();
+  }
+  importCustomer(record: ImportCustomerInsert, event: EventIdentity): void {
+    this.database.transaction(() => {
+      this.requireImportInProgress();
+      if (this.customerExists(record.customerId)) throw new DumpLedgerError("invalid_input", "import customer already exists");
+      this.prepare("INSERT INTO customers(customer_id, display_name, created_at) VALUES (?, ?, ?)").run(record.customerId, record.displayName, record.createdAt);
+      this.insertAudit(event, "ImportCustomer", record.customerId, null, null, {});
+    })();
+  }
+  importCase(record: ImportCaseInsert, event: EventIdentity): void {
+    this.database.transaction(() => {
+      this.requireImportInProgress();
+      if (!this.customerExists(record.customerId)) throw new DumpLedgerError("not_found", "import customer was not found");
+      if (this.caseExists(record.caseId)) throw new DumpLedgerError("invalid_input", "import case already exists");
+      this.prepare("INSERT INTO cases(case_id, customer_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)").run(record.caseId, record.customerId, record.title, record.status, record.createdAt);
+      this.insertAudit(event, "ImportCase", record.customerId, record.caseId, null, { status: record.status });
+    })();
+  }
+  importGrant(record: ImportGrantInsert, forcedState: "revoked" | undefined, event: EventIdentity): void {
+    this.database.transaction(() => {
+      this.requireImportInProgress();
+      if (!this.caseExists(record.caseId)) throw new DumpLedgerError("not_found", "import case was not found");
+      if (this.grantExists(record.grantId)) throw new DumpLedgerError("invalid_input", "import grant already exists");
+      if (this.findGrantByDigest(record.secretDigest) !== null) throw new DumpLedgerError("invalid_input", "import grant secret digest already exists");
+      const state = record.state === "issued" && forcedState === "revoked" ? "revoked" : record.state;
+      this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(record.grantId, record.caseId, record.secretDigest, state, record.expiresAt, record.maxBytes.toString(), record.consumedByDumpId, record.createdAt);
+      this.insertAudit(event, "ImportGrant", this.customerForCase(record.caseId), record.caseId, null, { grantId: record.grantId, state, forced: state !== record.state });
+    })();
+  }
+  importDumpStaged(record: ImportDumpStagedInsert, event: EventIdentity): void {
+    this.database.transaction(() => {
+      this.requireImportInProgress();
+      if (!this.caseExists(record.caseId)) throw new DumpLedgerError("not_found", "import case was not found");
+      if (this.dumpExists(record.dumpId)) throw new DumpLedgerError("invalid_input", "import dump already exists");
+      this.prepare("INSERT INTO dumps(dump_id, case_id, phase, blob_state, original_name, byte_size, sha256, validation, coverage, downloadable, inspection_error, inspection_facts_json, received_at, available_at, purge_at, purged_at) VALUES (?, ?, 'sealed', 'staging', ?, ?, ?, 'not-checked', NULL, 0, NULL, NULL, ?, NULL, ?, NULL)").run(record.dumpId, record.caseId, record.originalName, record.byteSize.toString(), record.sha256, record.receivedAt, record.purgeAt);
+      this.insertAudit(event, "ImportDumpStaged", this.customerForCase(record.caseId), record.caseId, record.dumpId, { exportedPhase: "available", disposition: "staged" });
+    })();
+  }
+  importDumpTombstone(record: ImportDumpTombstoneInsert, event: EventIdentity): void {
+    this.database.transaction(() => {
+      this.requireImportInProgress();
+      if (!this.caseExists(record.caseId)) throw new DumpLedgerError("not_found", "import case was not found");
+      if (this.dumpExists(record.dumpId)) throw new DumpLedgerError("invalid_input", "import dump already exists");
+      this.prepare("INSERT INTO dumps(dump_id, case_id, phase, blob_state, original_name, byte_size, sha256, validation, coverage, downloadable, inspection_error, inspection_facts_json, received_at, available_at, purge_at, purged_at) VALUES (?, ?, ?, 'none', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)").run(record.dumpId, record.caseId, record.phase, record.originalName, record.byteSize === null ? null : record.byteSize.toString(), record.sha256, record.validation, record.coverage, record.inspectionError, record.inspectionFacts === null ? null : stringifyJson(record.inspectionFacts), record.receivedAt, record.availableAt, record.purgeAt, record.purgedAt);
+      this.insertAudit(event, "ImportDumpStaged", this.customerForCase(record.caseId), record.caseId, record.dumpId, { exportedPhase: record.phase, disposition: "tombstone" });
+    })();
+  }
+  importAuditEvent(record: ImportAuditEventInsert): void {
+    this.database.transaction(() => {
+      this.requireImportInProgress();
+      if (this.prepare("SELECT 1 AS present FROM audit_events WHERE event_id = ?").get(record.eventId) !== undefined) throw new DumpLedgerError("invalid_input", "import audit event already exists");
+      this.prepare("INSERT INTO audit_events(event_id, occurred_at, action, customer_id, case_id, dump_id, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)").run(record.eventId, record.occurredAt, record.action, record.customerId, record.caseId, record.dumpId, stringifyJson(record.detail));
+    })();
+  }
   snapshot(): DumpLedgerProjection {
     const customers = (this.prepare("SELECT * FROM customers ORDER BY customer_id").all() as Row[]).map(row => ({ customerId: databaseValue("customer_id", parseCustomerId, row.customer_id), displayName: requiredString(row, "display_name"), createdAt: requiredString(row, "created_at") }));
     const cases = (this.prepare("SELECT * FROM cases ORDER BY case_id").all() as Row[]).map(row => ({ caseId: databaseValue("case_id", parseCaseId, row.case_id), customerId: databaseValue("customer_id", parseCustomerId, row.customer_id), title: requiredString(row, "title"), status: databaseValue("case status", parseCaseStatus, row.status), createdAt: requiredString(row, "created_at") }));
@@ -154,6 +229,31 @@ export class SqliteLedger {
     if (row === undefined) throw new DumpLedgerError("not_found", "case was not found");
     return databaseValue("customer_id", parseCustomerId, row.customer_id);
   }
+  private isEmpty(): boolean {
+    const row = this.prepare("SELECT (SELECT COUNT(*) FROM customers) AS customers, (SELECT COUNT(*) FROM cases) AS cases, (SELECT COUNT(*) FROM upload_grants) AS grants, (SELECT COUNT(*) FROM dumps) AS dumps").get() as Row;
+    return Number(row.customers) === 0 && Number(row.cases) === 0 && Number(row.grants) === 0 && Number(row.dumps) === 0;
+  }
+  private unfinishedImportId(): AuditEventId | null {
+    const rows = this.prepare("SELECT event_id, action, detail_json FROM audit_events WHERE action IN ('BeginImport', 'FinishImport') ORDER BY rowid").all() as Row[];
+    const finished = new Set<string>();
+    const begun: AuditEventId[] = [];
+    for (const row of rows) {
+      if (requiredString(row, "action") === "BeginImport") begun.push(databaseValue("event_id", parseAuditEventId, row.event_id));
+      else { const importId = parseJsonObject(requiredString(row, "detail_json")).importId; if (typeof importId === "string") finished.add(importId); }
+    }
+    return begun.find(candidate => !finished.has(candidate)) ?? null;
+  }
+  private importIsFinished(importId: AuditEventId): boolean {
+    const rows = this.prepare("SELECT detail_json FROM audit_events WHERE action = 'FinishImport'").all() as Row[];
+    return rows.some(row => parseJsonObject(requiredString(row, "detail_json")).importId === importId);
+  }
+  private requireImportInProgress(): void {
+    if (this.unfinishedImportId() === null) throw new DumpLedgerError("invalid_transition", "no import is in progress");
+  }
+  private customerExists(customerId: CustomerId): boolean { return this.prepare("SELECT 1 AS present FROM customers WHERE customer_id = ?").get(customerId) !== undefined; }
+  private caseExists(caseId: CaseId): boolean { return this.prepare("SELECT 1 AS present FROM cases WHERE case_id = ?").get(caseId) !== undefined; }
+  private grantExists(grantId: GrantId): boolean { return this.prepare("SELECT 1 AS present FROM upload_grants WHERE grant_id = ?").get(grantId) !== undefined; }
+  private dumpExists(dumpId: DumpId): boolean { return this.prepare("SELECT 1 AS present FROM dumps WHERE dump_id = ?").get(dumpId) !== undefined; }
   private insertAudit(event: EventIdentity, action: string, customerId: CustomerId | null, caseId: CaseId | null, dumpId: DumpId | null, detail: Readonly<Record<string,unknown>>): void {
     this.prepare("INSERT INTO audit_events(event_id, occurred_at, action, customer_id, case_id, dump_id, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)").run(event.eventId, event.occurredAt, action, customerId, caseId, dumpId, stringifyJson(detail));
   }

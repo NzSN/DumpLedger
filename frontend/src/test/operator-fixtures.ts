@@ -16,7 +16,11 @@ import type {
   CaseDumpSummary,
   CaseSummary,
   DumpDetailResponse,
+  ExportStatus,
+  ExportSummary,
   GrantState,
+  ImportProgressResponse,
+  ImportStatus,
   IssuedGrant,
   OperationsResponse,
   RuntimeJobSummary,
@@ -178,5 +182,44 @@ export function operationsFixture(overrides: OperationsOverrides = {}): Operatio
     uploads: { active: 2, capacity: 8 },
     postProcessing: { pending: 1, exhausted: 0, totalRetries: 3 },
     runtimeJobs: overrides.jobs ?? [runtimeJob("retention-sweep", true, 12, 0)],
+  };
+}
+
+export interface ExportSummaryOverrides {
+  readonly status?: ExportStatus;
+  readonly byteSize?: string | null;
+  readonly error?: string | null;
+  readonly createdAt?: string;
+}
+
+export function exportSummary(
+  exportId: string,
+  overrides: ExportSummaryOverrides = {},
+): ExportSummary {
+  const status = overrides.status ?? "sealed";
+  return {
+    exportId,
+    status,
+    createdAt: overrides.createdAt ?? "2026-09-05T12:00:00.000Z",
+    byteSize:
+      overrides.byteSize === undefined ? (status === "sealed" ? "10485760" : null) : overrides.byteSize,
+    error: overrides.error === undefined ? (status === "failed" ? "Vault read failed." : null) : overrides.error,
+  };
+}
+
+export function importProgress(
+  importId: string,
+  status: ImportStatus,
+  overrides: { readonly verified?: number; readonly imported?: number; readonly rejected?: number; readonly skipped?: number; readonly error?: string | null } = {},
+): ImportProgressResponse {
+  return {
+    importId,
+    status,
+    verified: overrides.verified ?? 0,
+    imported: overrides.imported ?? 0,
+    rejected: overrides.rejected ?? 0,
+    skipped: overrides.skipped ?? 0,
+    error:
+      overrides.error === undefined ? (status === "failed" ? "Bundle verification failed." : null) : overrides.error,
   };
 }

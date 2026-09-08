@@ -38,7 +38,8 @@ export class RandomIds implements IdSource {
   }
 }
 export class DeterministicIds implements IdSource {
-  private sequence = 0;
+  private sequence: number;
+  constructor(startAt = 0) { this.sequence = startAt; }
   next(kind: "customer"): CustomerId;
   next(kind: "case"): CaseId;
   next(kind: "grant"): GrantId;

@@ -137,6 +137,8 @@ input::placeholder { color: #536a82; }
 .record-meta { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: .3rem; color: var(--muted); font-size: .72rem; }
 .record-actions { display: flex; align-items: center; justify-content: flex-end; gap: .55rem; }
 .compact-form { margin: 0; }
+.check-field { display: flex; align-items: flex-start; gap: .55rem; color: var(--text-soft); font-size: .77rem; font-weight: 680; cursor: pointer; }
+.check-field input[type="checkbox"] { width: 1rem; height: 1rem; margin: .1rem 0 0; accent-color: var(--accent); flex: none; }
 
 .timeline { padding: .25rem 0; }
 .timeline-item { position: relative; padding: .7rem 1rem .7rem 2rem; }

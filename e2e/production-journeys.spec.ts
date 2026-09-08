@@ -85,10 +85,13 @@ test("(a) operator login, dashboard, customer, case, workflow, and grant issue",
   await page.getByRole("button", { name: "Add customer", exact: true }).click();
   await expect(page.getByText("Added customer Acme E2E.")).toBeVisible();
 
-  // Create a case under that customer.
-  await page.getByLabel("New case").fill("Renderer crash on startup");
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  const openCase = page.getByRole("link", { name: "Open case", exact: true });
+  // Create a case under that customer. The dashboard renders one "New case"
+  // form per customer card, and other specs sharing this server may have
+  // added their own cards, so scope to the Acme card.
+  const acmeCard = page.locator(".customer-card", { hasText: "Acme E2E" });
+  await acmeCard.getByLabel("New case").fill("Renderer crash on startup");
+  await acmeCard.getByRole("button", { name: "Create", exact: true }).click();
+  const openCase = acmeCard.getByRole("link", { name: "Open case", exact: true });
   await expect(openCase).toBeVisible();
   await openCase.click();
 

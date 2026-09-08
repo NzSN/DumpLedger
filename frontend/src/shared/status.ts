@@ -9,7 +9,9 @@ import type {
   CaseStatus,
   CoverageKind,
   DumpPhase,
+  ExportStatus,
   GrantState,
+  ImportStatus,
   IntegrityStatus,
   UploadCompletePhase,
   ValidationState,
@@ -117,5 +119,27 @@ export function caseActionLabel(action: CaseAction): string {
       return "Resolve case";
     case "CloseCase":
       return "Close case";
+  }
+}
+
+export function exportStatusPresentation(status: ExportStatus): StatusPresentation {
+  switch (status) {
+    case "running":
+      return { tone: "info", label: "Running" };
+    case "sealed":
+      return { tone: "good", label: "Sealed" };
+    case "failed":
+      return { tone: "bad", label: "Failed" };
+  }
+}
+
+export function importStatusPresentation(status: ImportStatus): StatusPresentation {
+  switch (status) {
+    case "running":
+      return { tone: "info", label: "Running" };
+    case "finished":
+      return { tone: "good", label: "Finished" };
+    case "failed":
+      return { tone: "bad", label: "Failed" };
   }
 }

@@ -44,6 +44,9 @@ function setDocumentHidden(hidden: boolean): void {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function renderOperations(fake: OperatorFakeHttpClient, pollIntervalMs: number): void {
+  // The operations page also mounts the Export / Import section; serve its
+  // list as empty so these tests stay focused on the runtime summary.
+  fake.setQueryResponder("/api/v1/operations/exports", () => ({ exports: [] }));
   renderFeaturePage(fake, <OperationsPage pollIntervalMs={pollIntervalMs} />, { entry: "/operations" });
 }
 
@@ -186,12 +189,14 @@ describe("Operations operator page", () => {
     renderOperations(fake, 40);
 
     await screen.findByText("All checks passed");
-    expect(fake.queryCalls.filter((call) => call.path === OPERATIONS_PATH)).toHaveLength(1);
+    // Baseline: ticks at 40ms may already have re-polled before this
+    // assertion runs; what matters is that hiding stops further requests.
+    const callsBeforeHidden = fake.queryCalls.filter((call) => call.path === OPERATIONS_PATH).length;
 
     setDocumentHidden(true);
     // Several ticks pass while hidden; none may start a request.
     await sleep(220);
-    expect(fake.queryCalls.filter((call) => call.path === OPERATIONS_PATH)).toHaveLength(1);
+    expect(fake.queryCalls.filter((call) => call.path === OPERATIONS_PATH)).toHaveLength(callsBeforeHidden);
   });
 
   it("refreshes immediately when the document becomes visible again", async () => {

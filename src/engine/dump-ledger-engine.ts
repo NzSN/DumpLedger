@@ -1,10 +1,10 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
-import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
-import type { DumpPhase } from "../domain/lifecycle.js";
+import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
+import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
 import { SqliteLedger } from "../ledger/sqlite-ledger.js";
 import type { Vault } from "../vault/vault.js";
-import type { LifecycleCommand } from "./commands.js";
+import type { ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
 import { CryptoEntropy, NoFailpoints, RandomIds, SystemClock, type Clock, type EntropySource, type FailpointPort } from "./dependencies.js";
 import type { InspectionPort } from "./inspection-port.js";
 import type { BackupInventory, DumpLedgerProjection, TransitionReceipt, TransitionSuccess } from "./projection.js";
@@ -12,12 +12,13 @@ import type { BackupInventory, DumpLedgerProjection, TransitionReceipt, Transiti
 export { DeterministicClock, DeterministicEntropy, DeterministicIds, ScriptedFailpoints } from "./dependencies.js";
 export type { DurableCheckpoint } from "./dependencies.js";
 export type { InspectionOutcome, InspectionPort } from "./inspection-port.js";
-export type { LifecycleCommand } from "./commands.js";
+export type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCustomerRecord, ImportDumpRecord, ImportGrantRecord, ImportSummary, LifecycleCommand } from "./commands.js";
 export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, TransitionReceipt } from "./projection.js";
 
 export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
 export interface DumpLedgerEngine {
   execute(command: LifecycleCommand): TransitionReceipt;
+  grantKeyFingerprint(): string;
   snapshot(): DumpLedgerProjection;
   dueForPurge(at?: string): readonly DumpId[];
   pendingPurgeCompletion(): readonly DumpId[];
@@ -32,6 +33,31 @@ function assertIsoTimestamp(value: unknown, name: string): string { if (typeof v
 function assertPositiveBigint(value: unknown, name: string): bigint { if (typeof value !== "bigint" || value <= 0n) throw new DumpLedgerError("invalid_input", `${name} must be a positive bigint`); return value; }
 function assertNonnegativeBigint(value: unknown, name: string): bigint { if (typeof value !== "bigint" || value < 0n) throw new DumpLedgerError("invalid_input", `${name} must be a nonnegative bigint`); return value; }
 function assertSha256(value: unknown): string { if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new DumpLedgerError("invalid_input", "sha256 must be 64 lowercase hexadecimal characters"); return value; }
+function assertNullableIsoTimestamp(value: unknown, name: string): string | null { return value === null ? null : assertIsoTimestamp(value, name); }
+function assertNullableByteSize(value: unknown): bigint | null { return value === null ? null : assertNonnegativeBigint(value, "byteSize"); }
+function assertNullableSha256(value: unknown): string | null { return value === null ? null : assertSha256(value); }
+function assertNullableCoverage(value: unknown): CoverageKind | null { if (value === null || value === undefined) return null; if (!isCoverageKind(value)) throw new DumpLedgerError("invalid_input", "coverage is invalid"); return value; }
+function assertInspectionFacts(value: unknown): Readonly<Record<string, unknown>> | null { if (value === null || value === undefined) return null; if (typeof value !== "object" || Array.isArray(value)) throw new DumpLedgerError("invalid_input", "inspectionFacts must be an object"); return value as Readonly<Record<string, unknown>>; }
+function assertPlainObject(value: unknown, name: string, maxSerializedBytes: number): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new DumpLedgerError("invalid_input", `${name} must be an object`);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined || Buffer.byteLength(serialized, "utf8") > maxSerializedBytes) throw new DumpLedgerError("invalid_input", `${name} exceeds its serialized size bound`);
+  return value as Readonly<Record<string, unknown>>;
+}
+function assertCount(value: unknown, name: string): number { if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new DumpLedgerError("invalid_input", `${name} must be a nonnegative integer`); return value; }
+function assertImportCounts(value: unknown, name: string): ImportCounts {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new DumpLedgerError("invalid_input", `${name} must be an object`);
+  const entries = value as Record<string, unknown>;
+  for (const key of Object.keys(entries)) if (!["customers", "cases", "grants", "dumps", "auditEvents"].includes(key)) throw new DumpLedgerError("invalid_input", `${name}.${key} is not a known count`);
+  const counts: ImportCounts = { customers: assertCount(entries.customers, `${name}.customers`), cases: assertCount(entries.cases, `${name}.cases`), grants: assertCount(entries.grants, `${name}.grants`), dumps: assertCount(entries.dumps, `${name}.dumps`) };
+  if (entries.auditEvents !== undefined) return { ...counts, auditEvents: assertCount(entries.auditEvents, `${name}.auditEvents`) };
+  return counts;
+}
+function assertImportSummary(value: unknown): ImportSummary {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new DumpLedgerError("invalid_input", "summary must be an object");
+  const entries = value as Record<string, unknown>;
+  return { imported: assertImportCounts(entries.imported, "summary.imported"), skipped: assertCount(entries.skipped, "summary.skipped") };
+}
 
 class Engine implements DumpLedgerEngine {
   private readonly ledger: SqliteLedger;
@@ -56,6 +82,7 @@ class Engine implements DumpLedgerEngine {
     }
   }
   snapshot(): DumpLedgerProjection { return this.ledger.snapshot(); }
+  grantKeyFingerprint(): string { return createHash("sha256").update(this.grantSecretKey).digest("base64url"); }
   dueForPurge(at?: string): readonly DumpId[] { return this.ledger.dueForPurge(assertIsoTimestamp(at ?? this.clock.now(), "retention time")); }
   pendingPurgeCompletion(): readonly DumpId[] { return this.snapshot().dumps.filter(dump => dump.phase === "deleting").map(dump => dump.dumpId); }
   backupInventory(): BackupInventory {
@@ -105,6 +132,62 @@ class Engine implements DumpLedgerEngine {
       case "SetRetention": { const dumpId=parseDumpId(command.dumpId), purgeAt=assertIsoTimestamp(command.purgeAt,"purgeAt"); if(purgeAt<=occurredAt) throw new DumpLedgerError("invalid_input","purgeAt must be in the future"); this.ledger.setRetention(dumpId,purgeAt,event()); return {ok:true,action:command.type,occurredAt,dumpId,purgeAt}; }
       case "BeginPurge": { const dumpId=parseDumpId(command.dumpId), dump=this.requireOneOfPhases(dumpId,["available","rejected"]); this.ledger.beginPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,phase:"deleting"}; }
       case "FinishPurge": { const dumpId=parseDumpId(command.dumpId); this.requirePhase(dumpId,"deleting"); this.options.vault.remove(dumpId); this.failpoints.hit("after_vault_remove"); this.ledger.finishPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,phase:"deleted"}; }
+      case "BeginImport": {
+        const manifestDigest=assertText(command.manifestDigest,"manifestDigest",128), counts=assertImportCounts(command.counts,"counts");
+        const marker=event();
+        this.ledger.beginImport(marker,{importId:marker.eventId,manifestDigest,counts});
+        return {ok:true,action:command.type,occurredAt,importId:marker.eventId};
+      }
+      case "ImportCustomer": {
+        const record=command.record, customerId=parseCustomerId(record.customerId), displayName=assertText(record.displayName,"displayName",200), createdAt=assertIsoTimestamp(record.createdAt,"createdAt");
+        this.ledger.importCustomer({customerId,displayName,createdAt},event());
+        return {ok:true,action:command.type,occurredAt,customerId};
+      }
+      case "ImportCase": {
+        const record=command.record, caseId=parseCaseId(record.caseId), customerId=parseCustomerId(record.customerId), title=assertText(record.title,"title",500), status=parseCaseStatus(record.status), createdAt=assertIsoTimestamp(record.createdAt,"createdAt");
+        this.ledger.importCase({caseId,customerId,title,status,createdAt},event());
+        return {ok:true,action:command.type,occurredAt,caseId,customerId};
+      }
+      case "ImportGrant": {
+        const record=command.record;
+        if (command.forcedState!==undefined && command.forcedState!=="revoked") throw new DumpLedgerError("invalid_input","forcedState must be \"revoked\"");
+        const grantId=parseGrantId(record.grantId), caseId=parseCaseId(record.caseId), secretDigest=assertText(record.secretDigest,"secretDigest",128), state=parseTokenState(record.state);
+        const expiresAt=assertIsoTimestamp(record.expiresAt,"expiresAt"), maxBytes=assertPositiveBigint(record.maxBytes,"maxBytes"), createdAt=assertIsoTimestamp(record.createdAt,"createdAt");
+        const consumedByDumpId=record.consumedByDumpId===null?null:parseDumpId(record.consumedByDumpId);
+        this.ledger.importGrant({grantId,caseId,secretDigest,state,expiresAt,maxBytes,consumedByDumpId,createdAt},command.forcedState,event());
+        return {ok:true,action:command.type,occurredAt,grantId,caseId};
+      }
+      case "ImportDumpStaged": {
+        const record=command.record, dumpId=parseDumpId(record.dumpId), caseId=parseCaseId(record.caseId), phase=parseDumpPhase(record.phase);
+        const originalName=assertText(record.originalName,"originalName",1024), receivedAt=assertIsoTimestamp(record.receivedAt,"receivedAt");
+        const byteSize=assertNullableByteSize(record.byteSize), sha256=assertNullableSha256(record.sha256);
+        const purgeAt=assertNullableIsoTimestamp(record.purgeAt,"purgeAt"), purgedAt=assertNullableIsoTimestamp(record.purgedAt,"purgedAt");
+        if (phase==="available") {
+          if (byteSize===null || sha256===null) throw new DumpLedgerError("invalid_input","an available import requires byteSize and sha256");
+          const presence=this.options.vault.inspectPresence(dumpId);
+          if (!presence.staging || presence.vault) throw new DumpLedgerError("integrity_failure","imported dump bytes are not staged");
+          try { this.ledger.importDumpStaged({dumpId,caseId,originalName,byteSize,sha256,receivedAt,purgeAt},event()); } catch (error) { this.options.vault.removeStaging(dumpId); throw error; }
+          return {ok:true,action:command.type,occurredAt,dumpId,caseId,phase:"sealed"};
+        }
+        if (phase!=="rejected" && phase!=="deleted") throw new DumpLedgerError("invalid_transition",`dump phase ${phase} cannot be imported`);
+        const validation=parseValidationState(record.validation), coverage=assertNullableCoverage(record.coverage);
+        const inspectionError=record.inspectionError===null?null:assertText(record.inspectionError,"inspectionError",2000);
+        const availableAt=assertNullableIsoTimestamp(record.availableAt,"availableAt");
+        this.ledger.importDumpTombstone({dumpId,caseId,phase,originalName,byteSize,sha256,validation,coverage,inspectionError,inspectionFacts:assertInspectionFacts(record.inspectionFacts),receivedAt,availableAt,purgeAt,purgedAt},event());
+        return {ok:true,action:command.type,occurredAt,dumpId,caseId,phase};
+      }
+      case "ImportAuditEvent": {
+        const record=command.record, eventId=parseAuditEventId(record.eventId), action=assertText(record.action,"action",64), eventOccurredAt=assertIsoTimestamp(record.occurredAt,"occurredAt");
+        const customerId=record.customerId===null?null:parseCustomerId(record.customerId), caseId=record.caseId===null?null:parseCaseId(record.caseId), dumpId=record.dumpId===null?null:parseDumpId(record.dumpId);
+        const detail=assertPlainObject(record.detail,"detail",16 * 1024);
+        this.ledger.importAuditEvent({eventId,occurredAt:eventOccurredAt,action,customerId,caseId,dumpId,detail});
+        return {ok:true,action:command.type,occurredAt};
+      }
+      case "FinishImport": {
+        const importId=parseAuditEventId(command.importId), summary=assertImportSummary(command.summary);
+        this.ledger.finishImport(event(),importId,{importId,imported:summary.imported,skipped:summary.skipped});
+        return {ok:true,action:command.type,occurredAt,importId};
+      }
     }
   }
   private requirePhase(dumpId: DumpId, phase: DumpPhase): DumpLedgerProjection["dumps"][number] { return this.requireOneOfPhases(dumpId,[phase]); }

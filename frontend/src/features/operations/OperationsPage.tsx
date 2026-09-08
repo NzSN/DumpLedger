@@ -19,6 +19,7 @@ import { Notice } from "../../shared/components/notice";
 import { EmptyState } from "../../shared/components/empty-state";
 import { integrityStatusPresentation } from "../../shared/status";
 import { useOperationsPolling } from "./use-operations-polling";
+import { TransferSection } from "../transfer/TransferSection";
 
 export const DEFAULT_POLL_INTERVAL_MS = 30_000;
 
@@ -122,6 +123,7 @@ function ReadyView({ data }: { readonly data: OperationsResponse }): ReactNode {
           <IntegrityPanel data={data} />
         </Panel>
       </div>
+      <TransferSection />
     </>
   );
 }
