@@ -143,7 +143,7 @@ FinishImport(importId, summary)              -> audit + completion marker
 ```
 
 Preserving the original branded IDs keeps the audit trail continuous across
-instances; ULID-based IDs make cross-instance collisions negligible, which is
+instances; random ULID/UUID-based IDs make cross-instance collisions negligible, which is
 what makes merge (IE4) feasible later.
 
 ## Consistency and crash recovery

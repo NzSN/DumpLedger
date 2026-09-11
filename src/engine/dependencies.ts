@@ -33,6 +33,9 @@ export class RandomIds implements IdSource {
   next(kind: "dump"): DumpId;
   next(kind: "audit"): AuditEventId;
   next(kind: IdentifierKind): AnyId {
+    if (kind === "customer") {
+      return parseGeneratedId(kind, `${kind}_${randomUUID()}`) as AnyId;
+    }
     const body = randomUUID().replaceAll("-", "").slice(0, 26).toUpperCase();
     return parseGeneratedId(kind, `${kind}_${body}`) as AnyId;
   }
