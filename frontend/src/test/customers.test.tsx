@@ -128,6 +128,29 @@ describe("Customers operator page", () => {
     });
   });
 
+  it("generates a customer with a random UUID display name from the dedicated button", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());
+    fake.setMutationResponder("POST", "/api/v1/customers", (call) => {
+      const body = call.body as { readonly displayName: string };
+      return { customer: { customerId: "customer-generated", displayName: body.displayName } };
+    });
+    const user = userEvent.setup();
+    renderCustomers(fake);
+
+    await user.click(await screen.findByRole("button", { name: "Generate customer" }));
+
+    await waitFor(() => {
+      const calls = fake.mutationCalls.filter((call) => call.path === "/api/v1/customers");
+      expect(calls).toHaveLength(1);
+      const body = calls[0]!.body as { readonly displayName: string };
+      expect(body.displayName).toMatch(/^customer_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
+    await waitFor(() => {
+      expect(fake.queryCalls.filter((call) => call.path === "/api/v1/dashboard")).toHaveLength(2);
+    });
+  });
+
   it("surfaces a create-customer failure with the alert focused", async () => {
     const fake = new OperatorFakeHttpClient();
     fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());

@@ -61,6 +61,25 @@ export function CreateCustomerForm({ onCreated }: CreateCustomerFormProps): Reac
     }
   }
 
+  /* Generates a customer with a random `customer_<uuid>` display name in one
+     click; the server still assigns the real (UUID-shaped) identifier. */
+  async function handleGenerate(): Promise<void> {
+    setFieldError(undefined);
+    const created = await flow.run(async (signal) => {
+      const response = await client.mutate({
+        path: "/api/v1/customers",
+        method: "POST",
+        body: encodeCreateCustomerRequest({ displayName: `customer_${crypto.randomUUID()}` }),
+        decoder: decodeCreateCustomerResponse,
+        signal,
+      });
+      return response.customer;
+    });
+    if (created !== null) {
+      onCreated(created);
+    }
+  }
+
   return (
     <form className="form-stack" onSubmit={(event) => void handleSubmit(event)} noValidate>
       <MutationErrorSummary error={flow.error} fallback="The customer could not be added." />
@@ -91,6 +110,14 @@ export function CreateCustomerForm({ onCreated }: CreateCustomerFormProps): Reac
       </FormField>
       <button type="submit" className="button" disabled={flow.pending}>
         {flow.pending ? "Adding…" : "Add customer"}
+      </button>
+      <button
+        type="button"
+        className="button button-secondary"
+        onClick={() => void handleGenerate()}
+        disabled={flow.pending}
+      >
+        {flow.pending ? "Generating…" : "Generate customer"}
       </button>
     </form>
   );
