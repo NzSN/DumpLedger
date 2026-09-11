@@ -26,7 +26,8 @@
     "typecheck:web": "pnpm --filter @dump-ledger/web typecheck",
     "build:web": "pnpm --filter @dump-ledger/web build",
     "test:web": "pnpm --filter @dump-ledger/web test",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "generate:transfer-mbt-traces": "pnpm run build && node dist/tools/generate-transfer-mbt-traces.js"
   },
   "dependencies": {
     "@dump-ledger/http-contracts": "workspace:*",

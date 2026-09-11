@@ -33,9 +33,13 @@ one abstract bundle slot and a single-job transfer lock, reuses the base dump
 lifecycle actions so imported dumps re-earn `available` through quarantine,
 and checks the bundle-integrity, empty-ledger-precondition, tamper-rejection,
 and grant-key-fingerprint policies. The grant-key fingerprint match is chosen
-once per behavior, so one run covers both policies. It is deliberately
-outside the generated model interface and MBT corpus: `DumpLedger.tla` stays
-byte-identical and the trace tooling ignores this file.
+once per behavior, so one run covers both policies. Its MBT surface is the
+MirrorECMA low-level path only: a handwritten StateComputer
+(`src/mbt/transfer-harness.ts`) replays the witness corpus in
+`test/fixtures/mbt/transfer-traces/` against the real export/import sessions
+(`pnpm run generate:transfer-mbt-traces` regenerates it as an explicit
+maintainer action). It stays outside the generated model interface:
+`DumpLedger.tla` and its generated artifacts remain untouched.
 
 ```sh
 tlc -config specs/DumpLedgerTransfer.cfg specs/DumpLedgerTransfer.tla
