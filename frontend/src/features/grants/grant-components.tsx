@@ -20,6 +20,7 @@ import {
   decodeCreateGrantResponse,
   decodeRevokeGrantResponse,
   encodeCreateGrantRequest,
+  MAX_GRANT_MAX_UPLOADS,
   MAX_GRANT_VALID_FOR_HOURS,
   type CaseGrantSummary,
   type CreateGrantResponse,
@@ -129,10 +130,13 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
   const flow = useMutationFlow<CreateGrantResponse>();
   const hoursId = useId();
   const bytesId = useId();
+  const uploadsId = useId();
   const [hoursText, setHoursText] = useState(String(DEFAULT_VALID_FOR_HOURS));
   const [bytesText, setBytesText] = useState(DEFAULT_MAX_BYTES.toString());
+  const [uploadsText, setUploadsText] = useState("1");
   const [hoursError, setHoursError] = useState<string | undefined>(undefined);
   const [bytesError, setBytesError] = useState<string | undefined>(undefined);
+  const [uploadsError, setUploadsError] = useState<string | undefined>(undefined);
 
   const pending = flow.pending;
 
@@ -152,11 +156,17 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
       return;
     }
     setBytesError(undefined);
+    const maxUploads = Number(uploadsText);
+    if (!/^[0-9]+$/.test(uploadsText) || !Number.isSafeInteger(maxUploads) || maxUploads < 1 || maxUploads > MAX_GRANT_MAX_UPLOADS) {
+      setUploadsError(`Whole number from 1 to ${MAX_GRANT_MAX_UPLOADS}.`);
+      return;
+    }
+    setUploadsError(undefined);
     const created = await flow.run(async (signal) => {
       const response = await client.mutate({
         path: `/api/v1/cases/${encodeURIComponent(caseId)}/grants`,
         method: "POST",
-        body: encodeCreateGrantRequest({ validForHours: hours, maxBytes }),
+        body: encodeCreateGrantRequest({ validForHours: hours, maxBytes, maxUploads }),
         decoder: decodeCreateGrantResponse,
         signal,
       });
@@ -173,7 +183,9 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
       {flow.result !== null && (
         <MutationSuccessSummary active={true}>
           <p>
-            New one-time link for this case. Share it privately; it stops working after one upload.
+            {flow.result.grant.maxUploads > 1
+              ? `New batch link for this case. Share it privately; it stops working after ${flow.result.grant.maxUploads} uploads.`
+              : "New one-time link for this case. Share it privately; it stops working after one upload."}
           </p>
         </MutationSuccessSummary>
       )}
@@ -215,6 +227,29 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
             onChange={(event) => setBytesText(event.target.value)}
             disabled={pending}
             aria-invalid={bytesError !== undefined}
+            aria-describedby={describedBy}
+            required
+          />
+        )}
+      </FormField>
+      <FormField
+        id={uploadsId}
+        label="Dumps allowed"
+        hint="Default: 1 (one-time link). Batch links accept up to 16 dumps."
+        {...(uploadsError === undefined ? {} : { error: uploadsError })}
+      >
+        {({ describedBy }) => (
+          <input
+            id={uploadsId}
+            name="maxUploads"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={MAX_GRANT_MAX_UPLOADS}
+            value={uploadsText}
+            onChange={(event) => setUploadsText(event.target.value)}
+            disabled={pending}
+            aria-invalid={uploadsError !== undefined}
             aria-describedby={describedBy}
             required
           />
@@ -263,6 +298,9 @@ export function GrantRow({ grant, onRevoked }: GrantRowProps): ReactNode {
         <div className="record-meta">
           <span>Expires {formatUtcTimestamp(grant.expiresAt)}</span>
           <span>{formatBytes(grant.maxBytes)} max</span>
+          <span>
+            {grant.uploadsUsed} / {grant.maxUploads} uploads used
+          </span>
         </div>
       </div>
       <div className="record-actions">
@@ -285,7 +323,7 @@ export function GrantRow({ grant, onRevoked }: GrantRowProps): ReactNode {
       <ConfirmationDialog
         open={confirming}
         title="Revoke upload grant"
-        message="Revoking this grant immediately invalidates its one-time link. Any upload already in flight may still be consumed."
+        message="Revoking this grant immediately invalidates its remaining upload slots. Any upload already in flight may still be consumed."
         confirmLabel="Revoke grant"
         cancelLabel="Cancel"
         tone="danger"

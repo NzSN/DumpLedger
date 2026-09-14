@@ -136,6 +136,46 @@ describe("Upload grant operator flows", () => {
     });
   });
 
+  it("creates a batch grant via the bounded dumps-allowed field and shows slot usage", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () => caseDetailFixture({ grants: [caseGrant("grant-50", "issued")] }));
+    const mutation = deferredResponder<CreateGrantResponse>();
+    fake.setMutationResponder("POST", GRANTS_PATH, mutation.responder);
+    const user = userEvent.setup();
+    renderCaseDetail(fake);
+
+    await screen.findByText("Renderer crash on startup");
+    // Existing grant rows show slot usage (batch upload design).
+    expect(screen.getByText("0 / 1 uploads used")).toBeTruthy();
+
+    const uploads = screen.getByLabelText("Dumps allowed");
+    expect((uploads as HTMLInputElement).value).toBe("1");
+    await user.clear(uploads);
+    await user.type(uploads, "3");
+    await user.click(screen.getByRole("button", { name: "Generate secure link" }));
+
+    await act(async () => {
+      mutation.resolve({
+        grant: issuedGrantRecord("grant-51", "case-1001", "2026-09-08T10:00:00.000Z", 10737418240n, 3, 0),
+        uploadPath: UPLOAD_PATH,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/stops working after 3 uploads/)).toBeTruthy();
+    const calls = fake.mutationCalls.filter((call) => call.method === "POST" && call.path === GRANTS_PATH);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({ validForHours: 24, maxBytes: "10737418240", maxUploads: 3 });
+
+    // Out-of-range slot counts are rejected before anything reaches the server.
+    await user.clear(uploads);
+    await user.type(uploads, "17");
+    await user.click(screen.getByRole("button", { name: "Generate secure link" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Whole number from 1 to 16.");
+    expect(calls).toHaveLength(1);
+  });
+
   it("surfaces a grant-creation failure and moves focus to the alert", async () => {
     const fake = new OperatorFakeHttpClient();
     fake.setQueryResponder(DETAIL_PATH, () => caseDetailFixture());

@@ -87,7 +87,7 @@ function deletedDump(
     parametersMatch(state, { token: "0", dump: "1", kind: "unclassified" }) &&
     sequenceSlot(state, "dumpPhase", 1) === "deleted" &&
     sequenceSlot(state, "blobState", 1) === "none" &&
-    isEncodedInt(sequenceSlot(state, "tokenDump", 1), "1") &&
+    isEncodedInt(sequenceSlot(state, "dumpToken", 1), "1") &&
     sequenceSlot(state, "validation", 1) === "valid" &&
     sequenceSlot(state, "coverage", 1) === coverage;
 }
@@ -124,7 +124,7 @@ const traceCases: readonly TraceCase[] = [
       parametersMatch(state, { token: "0", dump: "1", kind: "unclassified" }) &&
       sequenceSlot(state, "dumpPhase", 1) === "deleted" &&
       sequenceSlot(state, "blobState", 1) === "none" &&
-      isEncodedInt(sequenceSlot(state, "tokenDump", 2), "1") &&
+      isEncodedInt(sequenceSlot(state, "dumpToken", 1), "2") &&
       sequenceSlot(state, "validation", 1) === "invalid",
   },
   {
@@ -137,7 +137,7 @@ const traceCases: readonly TraceCase[] = [
       parametersMatch(state, { token: "0", dump: "1", kind: "unclassified" }) &&
       sequenceSlot(state, "dumpPhase", 1) === "deleted" &&
       sequenceSlot(state, "blobState", 1) === "none" &&
-      isEncodedInt(sequenceSlot(state, "tokenDump", 1), "1") &&
+      isEncodedInt(sequenceSlot(state, "dumpToken", 1), "1") &&
       sequenceSlot(state, "validation", 1) === "transfer-failed",
   },
   {
@@ -151,6 +151,19 @@ const traceCases: readonly TraceCase[] = [
       parametersMatch(state, { token: "1", dump: "0", kind: "unclassified" }) &&
       sequenceSlot(state, "tokenState", 1) === "revoked" &&
       sequenceSlot(state, "tokenState", 2) === "expired",
+  },
+  {
+    destination: "08-batch-two-dumps-one-grant.itf.json",
+    witnessModule: "BatchTwoDumpsOneGrant",
+    lengthBound: 4,
+    terminalDescription: "two dumps begun under one two-slot grant, which is then consumed",
+    // Either dump slot may be the one begun last, so match the state, not the step.
+    terminalMatches: (state) =>
+      state["action_taken"] === "BeginUpload" &&
+      isEncodedInt(sequenceSlot(state, "dumpToken", 1), "2") &&
+      isEncodedInt(sequenceSlot(state, "dumpToken", 2), "2") &&
+      sequenceSlot(state, "tokenState", 2) === "consumed" &&
+      isEncodedInt(sequenceSlot(state, "tokenUploads", 2), "2"),
   },
   {
     destination: "07-case-closed-grants-revoked.itf.json",

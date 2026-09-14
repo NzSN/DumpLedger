@@ -4,6 +4,7 @@ import { pipeline } from "node:stream/promises";
 
 export type IntakeErrorCode =
   | "grant_invalid"
+  | "grant_slots_exhausted"
   | "upload_too_large"
   | "upload_incomplete"
   | "storage_unavailable"
@@ -60,7 +61,9 @@ export class UploadSession {
       grantSecret: input.grantSecret,
       originalName: input.originalName,
     });
-    if (!begun.ok) throw new IntakeError("grant_invalid");
+    // Batch upload design, decision 3: exhaustion is distinct for the uploader;
+    // every other begin failure stays the opaque grant_unavailable.
+    if (!begun.ok) throw new IntakeError(begun.code === "grant_consumed" ? "grant_slots_exhausted" : "grant_invalid");
 
     const { dumpId, maxBytes } = begun;
     if (input.contentLength !== undefined && input.contentLength > maxBytes) {

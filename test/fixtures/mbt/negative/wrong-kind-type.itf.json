@@ -11,9 +11,10 @@
       "downloadable": "Set(Int)",
       "dumpCase": "Seq(Int)",
       "dumpPhase": "Seq(Str)",
+      "dumpToken": "Seq(Int)",
       "parameters": "{ case: Int, dump: Int, kind: Str, token: Int }",
-      "tokenDump": "Seq(Int)",
       "tokenState": "Seq(Str)",
+      "tokenUploads": "Seq(Int)",
       "validation": "Seq(Str)"
     }
   },
@@ -53,6 +54,14 @@
         "absent",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "0"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -65,17 +74,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "unused",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "0"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "unused",
-        "unused"
       ],
       "validation": [
         "not-checked",
@@ -117,6 +126,14 @@
         "absent",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "0"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -129,17 +146,17 @@
           "#bigint": "1"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "issued",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "0"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "issued",
-        "unused"
       ],
       "validation": [
         "not-checked",
@@ -181,6 +198,14 @@
         "receiving",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -193,17 +218,17 @@
           "#bigint": "1"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "not-checked",
@@ -249,6 +274,14 @@
         "sealed",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -261,17 +294,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "not-checked",
@@ -317,6 +350,14 @@
         "sealed",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -329,17 +370,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "not-checked",
@@ -385,6 +426,14 @@
         "quarantined",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -397,17 +446,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "not-checked",
@@ -457,6 +506,14 @@
         "available",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -471,17 +528,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "valid",
@@ -527,6 +584,14 @@
         "deleting",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -539,17 +604,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "valid",
@@ -595,6 +660,14 @@
         "deleted",
         "absent"
       ],
+      "dumpToken": [
+        {
+          "#bigint": "1"
+        },
+        {
+          "#bigint": "0"
+        }
+      ],
       "parameters": {
         "case": {
           "#bigint": "0"
@@ -607,17 +680,17 @@
           "#bigint": "0"
         }
       },
-      "tokenDump": [
+      "tokenState": [
+        "consumed",
+        "unused"
+      ],
+      "tokenUploads": [
         {
           "#bigint": "1"
         },
         {
           "#bigint": "0"
         }
-      ],
-      "tokenState": [
-        "consumed",
-        "unused"
       ],
       "validation": [
         "valid",
@@ -626,14 +699,15 @@
     }
   ],
   "vars": [
+    "tokenUploads",
     "coverage",
     "blobState",
     "downloadable",
     "digestRecorded",
-    "tokenDump",
     "action_taken",
     "caseStatus",
     "parameters",
+    "dumpToken",
     "tokenState",
     "dumpCase",
     "validation",

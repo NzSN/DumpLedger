@@ -43,6 +43,18 @@ artifact; it is independent of case workflow.
 _Avoid_: Case status
 
 **Upload grant**:
-A one-time, case-bound authorization to begin one dump upload. Closing a case
-revokes every issued grant for that case.
+A short-lived, case-bound authorization to begin dump uploads. Each grant is
+issued with a slot count (`maxUploads`, 1–16); a one-slot grant is a one-time
+grant. Closing a case revokes every issued grant for that case.
 _Avoid_: Reusable upload link
+
+**Grant slot**:
+One unit of upload authorization on an upload grant. Beginning an upload
+consumes exactly one slot, whether the stream seals, exceeds the byte ceiling,
+or aborts.
+_Avoid_: Upload credit, attempt
+
+**Batch grant**:
+An upload grant issued with more than one slot, delivered as a single share
+link.
+_Avoid_: Multi-link, shared grant

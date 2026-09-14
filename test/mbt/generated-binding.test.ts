@@ -32,7 +32,8 @@ const VALID_OBSERVATION: DumpLedgerObservation = {
   downloadable: [],
   dumpCase: [0n, 0n],
   dumpPhase: ["absent", "absent"],
-  tokenDump: [0n, 0n],
+  dumpToken: [0n, 0n],
+  tokenUploads: [0n, 0n],
   tokenState: ["unused", "unused"],
   validation: ["not-checked", "not-checked"],
 };

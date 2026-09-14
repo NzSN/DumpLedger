@@ -3,8 +3,10 @@ import type { FastifyInstance } from "fastify";
 import {
   decodeFilenameBase64url,
   decodeUploadGrantSecret,
+  encodeGrantQuotaResponse,
   encodeUploadCompleteResponse,
   encodeUploadQueuedResponse,
+  GRANT_QUOTA_PATH,
   UPLOAD_FALLBACK_FILENAME,
   X_DUMP_FILENAME_HEADER,
   X_UPLOAD_GRANT_HEADER,
@@ -26,6 +28,28 @@ import type { RouteContext } from "./common.js";
  */
 export function registerUploadRoutes(server: FastifyInstance, ctx: RouteContext): void {
   const { options, upload, uploadAdmission, uploadGrantRateLimiter } = ctx;
+
+  // Batch upload design: secret-gated quota query so the upload page can cap
+  // file selection and explain exhaustion before a byte is streamed. Issued
+  // and consumed grants answer 200; revoked/expired/unknown stay opaque.
+  server.get(GRANT_QUOTA_PATH, async (request, reply) => {
+    if (!uploadGrantRateLimiter.take(request.ip)) {
+      reply.header("Retry-After", "60");
+      return sendError(reply, "rate_limited");
+    }
+    let grantSecret: string;
+    try {
+      grantSecret = decodeUploadGrantSecret(request.headers[X_UPLOAD_GRANT_HEADER]);
+    } catch {
+      return sendError(reply, "grant_unavailable");
+    }
+    const quota = options.application.grantQuota(grantSecret);
+    if (quota === undefined) return sendError(reply, "grant_unavailable");
+    return reply
+      .code(200)
+      .type("application/json; charset=utf-8")
+      .send(encodeGrantQuotaResponse(quota));
+  });
 
   server.post("/api/v1/uploads", async (request, reply) => {
     if (!uploadGrantRateLimiter.take(request.ip)) {
@@ -97,6 +121,7 @@ export function registerUploadRoutes(server: FastifyInstance, ctx: RouteContext)
       const code = error instanceof IntakeError ? error.code : "upload_incomplete";
       switch (code) {
         case "grant_invalid": return sendError(reply, "grant_unavailable");
+        case "grant_slots_exhausted": return sendError(reply, "grant_slots_exhausted");
         case "upload_too_large": return sendError(reply, "upload_too_large");
         case "storage_unavailable": return sendError(reply, "storage_unavailable");
         case "integrity_failure": return sendError(reply, "internal_error");

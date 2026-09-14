@@ -36,6 +36,10 @@ export interface ImportGrantRecord {
   readonly state: TokenState;
   readonly expiresAt: string;
   readonly maxBytes: bigint;
+  /** Batch slots (docs/batch-upload-design.md); absent in pre-batch bundles, defaults to 1. */
+  readonly maxUploads?: number;
+  /** Slots already consumed; absent in pre-batch bundles, defaults to 0. */
+  readonly uploadsUsed?: number;
   readonly consumedByDumpId: DumpId | null;
   readonly createdAt: string;
 }
@@ -83,7 +87,7 @@ export type LifecycleCommand =
   | { readonly type: "ResumeInvestigation"; readonly caseId: CaseId }
   | { readonly type: "ResolveCase"; readonly caseId: CaseId }
   | { readonly type: "CloseCase"; readonly caseId: CaseId }
-  | { readonly type: "IssueGrant"; readonly caseId: CaseId; readonly expiresAt: string; readonly maxBytes: bigint }
+  | { readonly type: "IssueGrant"; readonly caseId: CaseId; readonly expiresAt: string; readonly maxBytes: bigint; readonly maxUploads?: number }
   | { readonly type: "RevokeGrant"; readonly grantId: GrantId }
   | { readonly type: "ExpireGrant"; readonly grantId: GrantId }
   | { readonly type: "BeginUpload"; readonly grantSecret: string; readonly originalName: string }

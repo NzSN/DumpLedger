@@ -81,10 +81,17 @@ overflow checks.
 - Generate at least 256 bits of cryptographically secure randomness.
 - Put the secret only in the URL delivered to the customer; store a keyed or
   password-style hash, never the secret itself.
-- Bind the grant to one case, one maximum size, one expiry, and one dump.
-- Consume it atomically when a dump ID is allocated.
-- Return the same external response for unknown, expired, revoked, and consumed
-  secrets where practical.
+- Bind the grant to one case, one maximum size per dump, one expiry, and a
+  bounded slot count (`maxUploads`, 1–16). Total ingress from one leaked link
+  is bounded by slots × per-dump bytes, and a failed or aborted upload still
+  consumes its slot.
+- Consume each slot atomically when a dump ID is allocated; the grant is
+  consumed exactly when its last slot is taken.
+- Return the same external response for unknown, expired, and revoked secrets
+  where practical. Deliberate exception: a valid-but-exhausted secret earns
+  the distinct, non-retryable `grant_slots_exhausted` (batch upload design,
+  decision 3) so honest batch uploaders learn their link is full rather than
+  unusable.
 - Never place the secret in normal request logs, analytics, or referrer output.
 - Set `Referrer-Policy: no-referrer` on upload pages.
 

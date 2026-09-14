@@ -66,9 +66,11 @@ refer to the same engineering defect.
 
 ### Upload grant
 
-A short-lived, one-time authorization bound to exactly one case. The customer
-receives the grant as an HTTPS URL. DumpLedger stores only a cryptographic hash
-of the secret token.
+A short-lived authorization bound to exactly one case. Each grant is issued
+with a slot count (1–16 dumps, default 1); a one-slot grant is a one-time
+grant, and a multi-slot grant is a batch grant shared as a single link (see
+`docs/batch-upload-design.md`). The customer receives the grant as an HTTPS
+URL. DumpLedger stores only a cryptographic hash of the secret token.
 
 ### Dump
 
@@ -130,14 +132,19 @@ cannot list customers, cases, or existing dumps.
    minidump, classifies memory coverage, and publishes the record.
 6. The case page shows the accepted dump or a visible rejection reason.
 
-### Customer uploads a file
+### Customer uploads files
 
-1. The operator selects **Create upload link** on a case.
-2. DumpLedger creates a one-time grant with an expiry and maximum byte count.
-3. The customer opens the link and streams one dump.
-4. Beginning the upload consumes the grant. A retry requires an explicit new
-   grant; this avoids one token silently creating multiple dump records.
-5. The case page updates as the dump moves through `receiving`, `sealed`,
+1. The operator selects **Create upload link** on a case, choosing how many
+   dumps the link accepts (1–16).
+2. DumpLedger creates a grant with an expiry, a maximum byte count per dump,
+   and that many upload slots.
+3. The customer opens the link and streams their dumps one request per file,
+   strictly sequentially; the page reports per-file outcomes and partial
+   success is normal.
+4. Beginning an upload consumes one slot, even if the stream fails or aborts.
+   A retry requires an explicit new grant; this avoids one token silently
+   creating unbounded dump records.
+5. The case page updates as each dump moves through `receiving`, `sealed`,
    `quarantined`, and either `available` or `rejected`.
 
 ### Analyst downloads a dump
@@ -216,8 +223,8 @@ finishes deletion if the process stops between those operations.
 
 - **F1:** Every dump has exactly one immutable case association.
 - **F2:** Each case has exactly one customer.
-- **F3:** Each upload grant is bound to one case and can begin at most one
-  upload.
+- **F3:** Each upload grant is bound to one case and can begin at most as
+  many uploads as its issued slot count (1–16).
 - **F4:** Input is streamed; memory consumption is bounded independently of
   dump size.
 - **F5:** SHA-256 is computed over the original bytes while receiving them.

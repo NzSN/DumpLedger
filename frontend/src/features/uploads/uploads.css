@@ -33,3 +33,77 @@
 .drop-zone-chooser:disabled {
   cursor: not-allowed;
 }
+
+/* ---------------------------------------------------------------------------
+ * Batch upload queue and summary (docs/batch-upload-design.md)
+ * ------------------------------------------------------------------------- */
+
+.upload-queue {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.upload-queue-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+}
+
+.upload-queue-row .upload-queue-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.upload-queue-row .upload-queue-size {
+  color: var(--muted, #666);
+  flex: none;
+}
+
+.upload-queue-row .upload-queue-state {
+  flex: none;
+  min-width: 7.5rem;
+  text-align: right;
+  color: var(--muted, #666);
+}
+
+.upload-queue-row.is-uploading .upload-queue-state {
+  color: var(--accent, #175cd3);
+}
+
+.upload-queue-row.is-done .upload-queue-state {
+  color: var(--success, #067647);
+}
+
+.upload-queue-row.is-failed .upload-queue-state {
+  color: var(--danger, #b42318);
+}
+
+.upload-current-file {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted, #666);
+}
+
+.upload-batch-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.upload-batch-list li {
+  margin: 0.25rem 0;
+}
+
+.upload-batch-receipt {
+  color: var(--muted, #666);
+}

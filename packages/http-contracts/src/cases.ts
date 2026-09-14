@@ -15,12 +15,14 @@ import {
   fail,
   field,
   identifierField,
+  integerField,
   nullableField,
   object,
   optional,
   text,
   type Decoder,
 } from "./decode.js";
+import { MAX_GRANT_MAX_UPLOADS } from "./grants.js";
 import {
   caseActionDecoder,
   caseStatusDecoder,
@@ -166,6 +168,9 @@ export interface CaseGrantSummary {
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly maxBytes: bigint;
+  /** Batch slots (batch upload design); 1/0 from a pre-batch server. */
+  readonly maxUploads: number;
+  readonly uploadsUsed: number;
 }
 
 function decodeCaseGrantSummaryField(value: unknown, path: string): bigint {
@@ -180,6 +185,8 @@ export const decodeCaseGrantSummary: Decoder<CaseGrantSummary> = (value, path) =
       createdAt: field(canonicalTimestamp("createdAt")),
       expiresAt: field(canonicalTimestamp("expiresAt")),
       maxBytes: field(decodeCaseGrantSummaryField),
+      maxUploads: optional(integerField({ min: 1, max: MAX_GRANT_MAX_UPLOADS, label: "maxUploads" })),
+      uploadsUsed: optional(integerField({ min: 0, max: MAX_GRANT_MAX_UPLOADS, label: "uploadsUsed" })),
     },
     "case grant summary",
   )(value, path);
@@ -189,16 +196,21 @@ export const decodeCaseGrantSummary: Decoder<CaseGrantSummary> = (value, path) =
     createdAt: decoded.createdAt,
     expiresAt: decoded.expiresAt,
     maxBytes: decoded.maxBytes,
+    maxUploads: decoded.maxUploads ?? 1,
+    uploadsUsed: decoded.uploadsUsed ?? 0,
   };
 };
 
 export function encodeCaseGrantSummary(summary: CaseGrantSummary): Record<string, unknown> {
+  // Slot fields ride along so the operator UI can show "used / max".
   return {
     grantId: summary.grantId,
     state: summary.state,
     createdAt: summary.createdAt,
     expiresAt: summary.expiresAt,
     maxBytes: summary.maxBytes.toString(),
+    maxUploads: summary.maxUploads,
+    uploadsUsed: summary.uploadsUsed,
   };
 }
 

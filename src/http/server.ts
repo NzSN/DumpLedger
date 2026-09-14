@@ -9,6 +9,7 @@ import type {
   CaseSummary,
   DashboardResponse,
   DumpDetailResponse,
+  GrantQuotaResponse,
   GrantRecord,
   TransitionResponse,
 } from "@dump-ledger/http-contracts";
@@ -45,7 +46,9 @@ export type CaseTransitionOutcome =
 export interface HttpApplicationPort {
   createCustomer(displayName: string): MutationResult;
   createCase(customerId: string, title: string): MutationResult;
-  issueGrant(caseId: string, expiresAt: number, maxBytes: bigint): MutationResult;
+  issueGrant(caseId: string, expiresAt: number, maxBytes: bigint, maxUploads?: number): MutationResult;
+  /** Public grant-quota query (batch upload design); undefined hides unknown/revoked/expired secrets. */
+  grantQuota(grantSecret: string): GrantQuotaResponse | undefined;
   revokeGrant(grantId: string): MutationResult;
   setRetention(dumpId: string, purgeAt: string): MutationResult;
   caseManifest(caseId: string): unknown;

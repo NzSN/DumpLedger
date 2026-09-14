@@ -25,11 +25,13 @@ import { createTestRouter } from "../app/router";
 import { FakeHttpClient } from "./fake-http-client";
 import {
   HttpRequestError,
+  type QueryRequest,
   type UploadHandle,
   type UploadObserver,
   type UploadRequest,
   type UploadSuccess,
 } from "../shared/http-client";
+import { GRANT_QUOTA_PATH, X_UPLOAD_GRANT_HEADER } from "@dump-ledger/http-contracts";
 
 /** 32-char base64url secret (matches UPLOAD_GRANT_SECRET_PATTERN). */
 const VALID_GRANT = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
@@ -56,6 +58,25 @@ interface PendingUpload {
  */
 class UploadFake extends FakeHttpClient {
   readonly uploads: PendingUpload[] = [];
+  /** Quota answers for the batch-aware page (default: a one-time link). */
+  readonly quotaCalls: QueryRequest<unknown>[] = [];
+  quotaMaxUploads = 1;
+  quotaUploadsUsed = 0;
+  quotaError: unknown = null;
+
+  override async query<T>(request: QueryRequest<T>): Promise<T> {
+    if (request.path === GRANT_QUOTA_PATH) {
+      this.quotaCalls.push(request as QueryRequest<unknown>);
+      if (this.quotaError !== null) throw this.quotaError;
+      return {
+        maxUploads: this.quotaMaxUploads,
+        uploadsUsed: this.quotaUploadsUsed,
+        maxBytes: 10_737_418_240n,
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      } as T;
+    }
+    return super.query(request);
+  }
 
   upload(request: UploadRequest, observer: UploadObserver): UploadHandle {
     let resolve!: (value: UploadSuccess) => void;
@@ -126,6 +147,10 @@ async function chooseMinidump(user: User, file = makeFile()): Promise<File> {
 }
 
 async function beginUpload(user: User, fake: UploadFake): Promise<void> {
+  // The button arms only once the quota answer has landed.
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "Upload dump" }) as HTMLButtonElement).disabled).toBe(false),
+  );
   await user.click(screen.getByRole("button", { name: "Upload dump" }));
   await waitFor(() => expect(fake.uploads).toHaveLength(1));
 }
@@ -167,8 +192,11 @@ describe("fragment grant transport", () => {
     expect(await screen.findByRole("button", { name: "Choose a minidump or drop it here" })).toBeTruthy();
     await waitFor(() => expect(window.location.hash).toBe(""));
     expect(screen.queryByText("No intake link found")).toBeNull();
-    // Public route: no session bootstrap or any metadata query occurred.
+    // Public route: no session bootstrap occurred; the only metadata query is
+    // the grant-quota check, and it carries the secret in the header.
     expect(fake.calls.filter((call) => call.kind === "query")).toHaveLength(0);
+    await waitFor(() => expect(fake.quotaCalls).toHaveLength(1));
+    expect(fake.quotaCalls[0]?.headers?.[X_UPLOAD_GRANT_HEADER]).toBe(VALID_GRANT);
 
     // The captured secret is sent only in the upload request contract.
     await chooseMinidump(user);
@@ -502,5 +530,182 @@ describe("accessibility", () => {
     await waitFor(() => {
       expect(document.activeElement?.getAttribute("aria-labelledby")).toBe("upload-result-title");
     });
+  });
+});
+
+describe("batch uploads (docs/batch-upload-design.md)", () => {
+  const batchInput = () => screen.findByLabelText("Choose minidump files");
+
+  it("caps selection at the link's remaining slots and explains trimmed files", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 2;
+    const user = userEvent.setup();
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    await waitFor(() => expect(fake.quotaCalls).toHaveLength(1));
+    await user.upload(await batchInput(), [makeFile("a.dmp", 64), makeFile("b.dmp", 64), makeFile("c.dmp", 64)]);
+
+    expect(await screen.findByText("2 files selected")).toBeTruthy();
+    expect(screen.getByText("a.dmp")).toBeTruthy();
+    expect(screen.getByText("b.dmp")).toBeTruthy();
+    expect(screen.queryByText("c.dmp")).toBeNull();
+    expect(screen.getByText(/This link accepts 2 more files; 1 were not added/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Upload 2 dumps" })).toBeTruthy();
+    expect(screen.getByText(/2-upload case-bound link/)).toBeTruthy();
+  });
+
+  it("uploads files strictly sequentially and reports per-file outcomes in the batch summary", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 3;
+    const user = userEvent.setup();
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    await user.upload(await batchInput(), [makeFile("one.dmp", 64), makeFile("two.dmp", 64)]);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Upload 2 dumps" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(screen.getByRole("button", { name: "Upload 2 dumps" }));
+
+    // Sequential: the second request starts only after the first settles.
+    await waitFor(() => expect(fake.uploads).toHaveLength(1));
+    expect(fake.latest.request.filename).toBe("one.dmp");
+    await fake.succeed({ kind: "complete", response: completeResponse("available", { dumpId: "dump-1" }) });
+    await waitFor(() => expect(fake.uploads).toHaveLength(2));
+    expect(fake.latest.request.filename).toBe("two.dmp");
+    await fake.succeed({ kind: "complete", response: completeResponse("available", { dumpId: "dump-2" }) });
+
+    const region = await screen.findByRole("status");
+    expect(region.textContent).toContain("Batch upload complete");
+    expect(region.textContent).toContain("2 of 2 files uploaded");
+    expect(region.textContent).toContain("one.dmp");
+    expect(region.textContent).toContain("two.dmp");
+    expect(region.textContent).toContain("Dump ID: dump-1");
+    expect(region.textContent).toContain("Dump ID: dump-2");
+  });
+
+  it("a too-large file burns its slot and the batch continues", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 2;
+    const user = userEvent.setup();
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    await user.upload(await batchInput(), [makeFile("huge.dmp", 64), makeFile("fine.dmp", 64)]);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Upload 2 dumps" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(screen.getByRole("button", { name: "Upload 2 dumps" }));
+
+    await waitFor(() => expect(fake.uploads).toHaveLength(1));
+    await fake.failWith(httpError("upload_too_large", 413, false, "The upload is too large."));
+    await waitFor(() => expect(fake.uploads).toHaveLength(2));
+    await fake.succeed({ kind: "complete", response: completeResponse("available", { dumpId: "dump-2" }) });
+
+    const region = await screen.findByRole("alert");
+    expect(region.textContent).toContain("Batch partially uploaded");
+    expect(region.textContent).toContain("1 of 2 files uploaded");
+    expect(region.textContent).toContain("huge.dmp");
+    expect(region.textContent).toContain("too large for this intake link");
+    expect(region.textContent).toContain("fine.dmp");
+    expect(region.textContent).toContain("Dump ID: dump-2");
+  });
+
+  it("slots-exhausted mid-batch terminates the remaining queue honestly", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 3;
+    const user = userEvent.setup();
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    await user.upload(await batchInput(), [makeFile("one.dmp", 64), makeFile("two.dmp", 64), makeFile("three.dmp", 64)]);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Upload 3 dumps" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(screen.getByRole("button", { name: "Upload 3 dumps" }));
+
+    await waitFor(() => expect(fake.uploads).toHaveLength(1));
+    await fake.succeed({ kind: "complete", response: completeResponse("available", { dumpId: "dump-1" }) });
+    await waitFor(() => expect(fake.uploads).toHaveLength(2));
+    await fake.failWith(httpError("grant_slots_exhausted", 404, false, "This upload link has no remaining upload slots."));
+
+    // The third file is never attempted.
+    await screen.findByRole("alert");
+    expect(fake.uploads).toHaveLength(2);
+    const region = screen.getByRole("alert");
+    expect(region.textContent).toContain("Batch partially uploaded");
+    expect(region.textContent).toContain("1 of 3 files uploaded");
+    expect(region.textContent).toContain("no remaining upload slots");
+    expect(region.textContent).toContain("not attempted");
+  });
+
+  it("cancel aborts the in-flight file and cancels the queued remainder", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 3;
+    const user = userEvent.setup();
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    await user.upload(await batchInput(), [makeFile("one.dmp", 64), makeFile("two.dmp", 64)]);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Upload 2 dumps" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(screen.getByRole("button", { name: "Upload 2 dumps" }));
+    await waitFor(() => expect(fake.uploads).toHaveLength(1));
+
+    await user.click(screen.getByRole("button", { name: "Cancel upload" }));
+    const region = await screen.findByRole("alert");
+    expect(fake.uploads).toHaveLength(1);
+    expect(region.textContent).toContain("No files were uploaded");
+    expect(region.textContent).toContain("0 of 2 files uploaded");
+    expect(region.textContent).toContain("outcome unknown");
+    expect(region.textContent).toContain("not attempted");
+  });
+
+  it("a retryable busy response pauses the queue for a manual retry without consuming slots", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 2;
+    const user = userEvent.setup();
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    await user.upload(await batchInput(), [makeFile("one.dmp", 64), makeFile("two.dmp", 64)]);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Upload 2 dumps" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(screen.getByRole("button", { name: "Upload 2 dumps" }));
+    await waitFor(() => expect(fake.uploads).toHaveLength(1));
+
+    await fake.failWith(httpError("upload_busy", 503, true, "Upload processing is busy; try again shortly."));
+    expect(await screen.findByText("The upload did not start")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(fake.uploads).toHaveLength(2));
+    await fake.succeed({ kind: "complete", response: completeResponse("available", { dumpId: "dump-1" }) });
+    await waitFor(() => expect(fake.uploads).toHaveLength(3));
+    await fake.succeed({ kind: "complete", response: completeResponse("available", { dumpId: "dump-2" }) });
+
+    const region = await screen.findByRole("status");
+    expect(region.textContent).toContain("Batch upload complete");
+    expect(region.textContent).toContain("2 of 2 files uploaded");
+  });
+
+  it("renders the slots-exhausted terminal state when the link has no slots left", async () => {
+    const fake = new UploadFake();
+    fake.quotaMaxUploads = 2;
+    fake.quotaUploadsUsed = 2;
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    const region = await screen.findByRole("alert");
+    expect(region.textContent).toContain("This intake link has no uploads left");
+    // The form is not offered at all, so no upload can start.
+    expect(screen.queryByRole("button", { name: "Upload dump" })).toBeNull();
+    expect(screen.queryByLabelText("Choose a minidump file")).toBeNull();
+    expect(fake.uploads).toHaveLength(0);
+  });
+
+  it("renders the neutral unavailable outcome when the quota answer hides the link", async () => {
+    const fake = new UploadFake();
+    fake.quotaError = httpError("grant_unavailable", 404, false, "The upload grant is unavailable.");
+    renderUpload(fake, { hash: `#grant=${VALID_GRANT}` });
+
+    const region = await screen.findByRole("alert");
+    expect(region.textContent).toContain("This intake link is not available");
+    expect(screen.queryByRole("button", { name: "Upload dump" })).toBeNull();
+    expect(fake.uploads).toHaveLength(0);
   });
 });

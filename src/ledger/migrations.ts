@@ -22,6 +22,12 @@ const migrations: readonly Migration[] = [
     CREATE INDEX audit_case_idx ON audit_events(case_id, occurred_at);
   ` },
   { version: 2, sql: `ALTER TABLE dumps ADD COLUMN purge_at TEXT; CREATE INDEX dumps_purge_due_idx ON dumps(purge_at, phase);` },
+  /* Batch upload (docs/batch-upload-design.md): grants become multi-slot.
+   * Existing rows take the defaults and keep exact one-time semantics. */
+  { version: 3, sql: `
+    ALTER TABLE upload_grants ADD COLUMN max_uploads INTEGER NOT NULL DEFAULT 1 CHECK (max_uploads BETWEEN 1 AND 16);
+    ALTER TABLE upload_grants ADD COLUMN uploads_used INTEGER NOT NULL DEFAULT 0 CHECK (uploads_used BETWEEN 0 AND 16);
+  ` },
 ];
 export function applyMigrations(database: Database.Database): void {
   database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;`);

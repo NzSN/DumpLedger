@@ -19,6 +19,7 @@ import {
   decodeCreateCustomerRequest,
   decodeCreateCustomerResponse,
   decodeCreateGrantRequest,
+  decodeGrantQuotaResponse,
   decodeCreateGrantResponse,
   decodeDashboardResponse,
   decodeDumpDetailResponse,
@@ -46,6 +47,7 @@ import {
   encodeCreateCustomerRequest,
   encodeCreateCustomerResponse,
   encodeCreateGrantRequest,
+  encodeGrantQuotaResponse,
   encodeCreateGrantResponse,
   encodeDashboardResponse,
   encodeDumpDetailResponse,
@@ -139,6 +141,7 @@ describe("wire vocabularies", () => {
       "not_found",
       "invalid_transition",
       "grant_unavailable",
+      "grant_slots_exhausted",
       "upload_too_large",
       "upload_busy",
       "rate_limited",
@@ -273,6 +276,8 @@ describe("cases (7.3/7.4)", () => {
     createdAt: NOW,
     expiresAt: LATER,
     maxBytes: 1024n * 1024n * 1024n,
+    maxUploads: 4,
+    uploadsUsed: 2,
   };
   const dumpRow: CaseDumpSummary = {
     dumpId: ID_DUMP,
@@ -400,6 +405,8 @@ describe("grants (7.5)", () => {
     createdAt: NOW,
     expiresAt: LATER,
     maxBytes: 268_435_456n,
+    maxUploads: 3,
+    uploadsUsed: 1,
   };
   const created = { grant, uploadPath: `/upload#grant=${secret}` };
   const revoked = { grant: { ...grant, state: "revoked" as const } };
@@ -408,6 +415,36 @@ describe("grants (7.5)", () => {
     assert.deepEqual(roundTripJson(request, encodeCreateGrantRequest, decodeCreateGrantRequest), request);
     const json = toJsonText(encodeCreateGrantRequest(request));
     assert.match(json, /"maxBytes":"268435456"/);
+  });
+  it("round-trips a batch grant request and omits maxUploads for one-time grants", () => {
+    const batch = { validForHours: 72, maxBytes: 268_435_456n, maxUploads: 5 };
+    assert.deepEqual(roundTripJson(batch, encodeCreateGrantRequest, decodeCreateGrantRequest), batch);
+    // A one-time grant encodes byte-identically to the pre-batch contract.
+    const oneTime = { validForHours: 72, maxBytes: 268_435_456n };
+    assert.deepEqual(roundTripJson(oneTime, encodeCreateGrantRequest, decodeCreateGrantRequest), oneTime);
+    assert.deepEqual(encodeCreateGrantRequest({ ...oneTime, maxUploads: 1 }), encodeCreateGrantRequest(oneTime));
+    assert.ok(!("maxUploads" in encodeCreateGrantRequest(oneTime)));
+  });
+  it("bounds maxUploads to 1..16", () => {
+    expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 0 }, "$"), /below the minimum/);
+    expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 17 }, "$"), /exceeds the maximum/);
+    expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 2.5 }, "$"), /safe integer/);
+  });
+  it("defaults grant record slot fields for a pre-batch server", () => {
+    const decoded = decodeGrantRecord(
+      { grantId: ID_GRANT, caseId: ID_CASE, state: "issued", createdAt: NOW, expiresAt: LATER, maxBytes: "268435456" },
+      "$",
+    );
+    assert.equal(decoded.maxUploads, 1);
+    assert.equal(decoded.uploadsUsed, 0);
+  });
+  it("round-trips the grant quota response", () => {
+    const quota = { maxUploads: 5, uploadsUsed: 2, maxBytes: 268_435_456n, expiresAt: LATER };
+    assert.deepEqual(roundTripJson(quota, encodeGrantQuotaResponse, decodeGrantQuotaResponse), quota);
+    expectDecodeError(
+      () => decodeGrantQuotaResponse({ maxUploads: 0, uploadsUsed: 0, maxBytes: "1", expiresAt: LATER }, "$"),
+      /below the minimum/,
+    );
   });
   it("rejects non-string and non-canonical maxBytes", () => {
     expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: 268435456 }, "$"), /must be a string/);

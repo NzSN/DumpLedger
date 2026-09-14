@@ -10,6 +10,7 @@
  *   201 available / sealed / rejected  -> complete
  *   202 retry-queued / recovery-required -> queued
  *   404 grant_unavailable (never reveals why) -> grant-unavailable
+ *   404 grant_slots_exhausted (valid link, no slots left) -> slots-exhausted
  *   413 upload_too_large -> too-large
  *   retryable errors (503 upload_busy / storage_unavailable, 429) -> retryable
  *   abort / transport failure / unknown -> uncertain (request a new link)
@@ -25,6 +26,7 @@ export type UploadOutcome =
   | { readonly kind: "complete"; readonly response: UploadCompleteResponse }
   | { readonly kind: "queued"; readonly response: UploadQueuedResponse }
   | { readonly kind: "grant-unavailable" }
+  | { readonly kind: "slots-exhausted" }
   | { readonly kind: "too-large" }
   | { readonly kind: "retryable"; readonly message: string }
   | {
@@ -54,8 +56,11 @@ export function outcomeFromError(error: unknown): UploadOutcome {
     switch (error.code) {
       case "grant_unavailable":
         // 404 — the backend deliberately does not reveal whether the grant
-        // was unknown, expired, revoked, consumed, or blocked by a closed case.
+        // was unknown, expired, revoked, or blocked by a closed case.
         return { kind: "grant-unavailable" };
+      case "grant_slots_exhausted":
+        // 404 — the link is valid but every upload slot is already consumed.
+        return { kind: "slots-exhausted" };
       case "upload_too_large":
         return { kind: "too-large" };
       default:

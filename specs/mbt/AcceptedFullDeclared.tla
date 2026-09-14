@@ -2,6 +2,6 @@
 EXTENDS DumpLedger
 
 WitnessNotReached ==
-  ~(dumpPhase[1] = "deleted" /\ coverage[1] = "full-memory-declared" /\ tokenDump[1] = 1)
+  ~(dumpPhase[1] = "deleted" /\ coverage[1] = "full-memory-declared" /\ dumpToken[1] = 1)
 
 =============================================================================

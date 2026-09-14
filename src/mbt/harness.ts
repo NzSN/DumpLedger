@@ -39,6 +39,9 @@ import { MemoryVault } from "../vault/memory-vault.js";
 import type { Vault } from "../vault/vault.js";
 
 const MODEL_SLOTS = [1n, 2n] as const;
+/* Mirrors TokenMaxUploads == <<1, 2>> in specs/DumpLedger.tla: token slot 1
+ * models a one-time grant, slot 2 a two-slot batch grant. */
+const MODEL_TOKEN_MAX_UPLOADS = new Map<bigint, number>([[1n, 1], [2n, 2]]);
 const DEFAULT_UPLOAD_BYTES = new TextEncoder().encode("DumpLedger model-based test payload");
 
 export interface MbtProbe {
@@ -265,6 +268,7 @@ export class MbtHarness {
       caseId: session.cases[Number(token - 1n)]!,
       expiresAt: "2099-01-01T00:00:00.000Z",
       maxBytes: 1024n,
+      maxUploads: MODEL_TOKEN_MAX_UPLOADS.get(token) ?? 1,
     });
     session.grants.set(token, {
       grantId: requireResult(receipt.grantId, "grantId"),
@@ -404,6 +408,18 @@ export class MbtHarness {
       session.cases.map((realId, index) => [realId, BigInt(index + 1)]),
     );
 
+    // Batch upload design: a grant may begin several dumps, so the dump ->
+    // grant-slot association is recovered from BeginUpload audit events.
+    const grantSlotByGrantId = new Map<string, bigint>(
+      [...session.grants].map(([slot, grant]) => [grant.grantId as string, slot]),
+    );
+    const grantIdByDumpId = new Map<string, string>();
+    for (const event of projection.auditEvents) {
+      if (event.action !== "BeginUpload" || event.dumpId === null) continue;
+      const grantId = event.detail["grantId"];
+      if (typeof grantId === "string") grantIdByDumpId.set(event.dumpId, grantId);
+    }
+
     const observation: DumpLedgerObservation = {
       caseStatus: session.cases.map((caseId) => {
         const found = projection.cases.find(
@@ -417,14 +433,21 @@ export class MbtHarness {
       tokenState: MODEL_SLOTS.map(
         (modelSlot) => grantBySlot(modelSlot)?.state ?? "unused",
       ),
-      tokenDump: MODEL_SLOTS.map((modelSlot) => {
-        const consumed = grantBySlot(modelSlot)?.consumedByDumpId;
-        if (consumed === null || consumed === undefined) return 0n;
-        const mapped = reverseDump.get(consumed);
-        if (mapped === undefined) {
-          throw new Error(`consumed dump ${consumed} has no model slot`);
+      tokenUploads: MODEL_SLOTS.map(
+        (modelSlot) => BigInt(grantBySlot(modelSlot)?.uploadsUsed ?? 0),
+      ),
+      dumpToken: MODEL_SLOTS.map((modelSlot) => {
+        const dump = dumpBySlot(modelSlot);
+        if (dump === undefined) return 0n;
+        const grantId = grantIdByDumpId.get(dump.dumpId);
+        if (grantId === undefined) {
+          throw new Error(`dump ${dump.dumpId} has no BeginUpload grant association`);
         }
-        return mapped;
+        const slot = grantSlotByGrantId.get(grantId);
+        if (slot === undefined) {
+          throw new Error(`dump grant ${grantId} has no model slot`);
+        }
+        return slot;
       }),
       dumpPhase: MODEL_SLOTS.map(
         (modelSlot) => dumpBySlot(modelSlot)?.phase ?? "absent",

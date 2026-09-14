@@ -5,10 +5,13 @@ import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseT
 import type { AuditEventProjection, DumpLedgerProjection, DumpProjection, GrantProjection } from "../engine/projection.js";
 import { applyMigrations } from "./migrations.js";
 
+/** Mirrors the contract cap; kept local so the ledger imports no HTTP module. */
+export const MAX_GRANT_UPLOAD_SLOTS = 16;
+
 export interface GrantRecord extends GrantProjection { readonly secretDigest: string }
 export interface ImportCustomerInsert { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string }
 export interface ImportCaseInsert { readonly caseId: CaseId; readonly customerId: CustomerId; readonly title: string; readonly status: CaseStatus; readonly createdAt: string }
-export interface ImportGrantInsert { readonly grantId: GrantId; readonly caseId: CaseId; readonly secretDigest: string; readonly state: TokenState; readonly expiresAt: string; readonly maxBytes: bigint; readonly consumedByDumpId: DumpId | null; readonly createdAt: string }
+export interface ImportGrantInsert { readonly grantId: GrantId; readonly caseId: CaseId; readonly secretDigest: string; readonly state: TokenState; readonly expiresAt: string; readonly maxBytes: bigint; readonly maxUploads: number; readonly uploadsUsed: number; readonly consumedByDumpId: DumpId | null; readonly createdAt: string }
 export interface ImportDumpStagedInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly originalName: string; readonly byteSize: bigint; readonly sha256: string; readonly receivedAt: string; readonly purgeAt: string | null }
 export interface ImportDumpTombstoneInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly phase: "rejected" | "deleted"; readonly originalName: string; readonly byteSize: bigint | null; readonly sha256: string | null; readonly validation: ValidationState; readonly coverage: CoverageKind | null; readonly inspectionError: string | null; readonly inspectionFacts: Readonly<Record<string, unknown>> | null; readonly receivedAt: string; readonly availableAt: string | null; readonly purgeAt: string | null; readonly purgedAt: string | null }
 export interface ImportAuditEventInsert { readonly eventId: AuditEventId; readonly occurredAt: string; readonly action: string; readonly customerId: CustomerId | null; readonly caseId: CaseId | null; readonly dumpId: DumpId | null; readonly detail: Readonly<Record<string, unknown>> }
@@ -18,6 +21,11 @@ function requiredString(row: Row, key: string): string { const value = row[key];
 function nullableString(row: Row, key: string): string | null { const value = row[key]; if (value === null) return null; if (typeof value !== "string") throw new DumpLedgerError("integrity_failure", `invalid database ${key}`); return value; }
 function nullableIsoTimestamp(row: Row, key: string): string | null { const value = nullableString(row, key); if (value !== null && (!Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value)) throw new DumpLedgerError("integrity_failure", `invalid database ${key}`); return value; }
 function booleanInteger(row: Row, key: string): boolean { const value = row[key]; if (value === 0 || value === 0n) return false; if (value === 1 || value === 1n) return true; throw new DumpLedgerError("integrity_failure", `invalid database ${key}`); }
+function boundedInteger(row: Row, key: string, min: number, max: number): number {
+  const value = row[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new DumpLedgerError("integrity_failure", `invalid database ${key}`);
+  return value;
+}
 function parseJsonObject(value: string): Readonly<Record<string, unknown>> { const parsed: unknown = JSON.parse(value); if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new DumpLedgerError("integrity_failure", "invalid database detail_json"); return parsed as Readonly<Record<string, unknown>>; }
 function stringifyJson(value: Readonly<Record<string, unknown>>): string { return JSON.stringify(value, (_key, item: unknown) => typeof item === "bigint" ? item.toString() : item); }
 function databaseValue<T>(label: string, parse: (value: unknown) => T, value: unknown): T { try { return parse(value); } catch (error) { throw new DumpLedgerError("integrity_failure", `invalid database ${label}`, { cause: error }); } }
@@ -41,6 +49,7 @@ function grantFromRow(row: Row): GrantRecord {
     grantId: databaseValue("grant_id", parseGrantId, row.grant_id), caseId: databaseValue("case_id", parseCaseId, row.case_id),
     secretDigest: requiredString(row, "secret_digest"), state: databaseValue("grant state", parseTokenState, row.state),
     expiresAt: requiredString(row, "expires_at"), maxBytes: BigInt(requiredString(row, "max_bytes")),
+    maxUploads: boundedInteger(row, "max_uploads", 1, MAX_GRANT_UPLOAD_SLOTS), uploadsUsed: boundedInteger(row, "uploads_used", 0, MAX_GRANT_UPLOAD_SLOTS),
     consumedByDumpId: consumed === null ? null : databaseValue("consumed_by_dump_id", parseDumpId, consumed), createdAt: requiredString(row, "created_at"),
   };
 }
@@ -72,12 +81,12 @@ export class SqliteLedger {
       return revokedGrantIds;
     })();
   }
-  issueGrant(grantId: GrantId, caseId: CaseId, secretDigest: string, expiresAt: string, maxBytes: bigint, event: EventIdentity): void {
+  issueGrant(grantId: GrantId, caseId: CaseId, secretDigest: string, expiresAt: string, maxBytes: bigint, maxUploads: number, event: EventIdentity): void {
     this.database.transaction(() => {
       if (this.caseStatusFor(caseId) === "closed") throw new DumpLedgerError("invalid_transition", "cannot IssueGrant on a closed case");
       const customerId = this.customerForCase(caseId);
-      this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at) VALUES (?, ?, ?, 'issued', ?, ?, NULL, ?)").run(grantId, caseId, secretDigest, expiresAt, maxBytes.toString(), event.occurredAt);
-      this.insertAudit(event, "IssueGrant", customerId, caseId, null, { grantId });
+      this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, max_uploads, uploads_used, consumed_by_dump_id, created_at) VALUES (?, ?, ?, 'issued', ?, ?, ?, 0, NULL, ?)").run(grantId, caseId, secretDigest, expiresAt, maxBytes.toString(), maxUploads, event.occurredAt);
+      this.insertAudit(event, "IssueGrant", customerId, caseId, null, { grantId, maxUploads });
     })();
   }
   findGrantByDigest(secretDigest: string): GrantRecord | null { const row = this.prepare("SELECT * FROM upload_grants WHERE secret_digest = ?").get(secretDigest) as Row | undefined; return row === undefined ? null : grantFromRow(row); }
@@ -95,7 +104,14 @@ export class SqliteLedger {
       if (row === undefined) throw new DumpLedgerError("grant_invalid", "upload grant is invalid");
       if (row.case_status === "closed") throw new DumpLedgerError("invalid_transition", "cannot BeginUpload on a closed case");
       const caseId = parseCaseId(row.case_id);
-      if (this.prepare("UPDATE upload_grants SET state = 'consumed', consumed_by_dump_id = ? WHERE grant_id = ? AND state = 'issued' AND consumed_by_dump_id IS NULL").run(dumpId, grantId).changes !== 1) throw new DumpLedgerError("grant_consumed", "upload grant has already been used");
+      /* One atomic statement enforces the slot bound: issued stays issued until
+       * the last slot is taken, and two races for the final slot have exactly
+       * one winner. consumed_by_dump_id keeps its audit meaning (first dump). */
+      if (this.prepare(`UPDATE upload_grants
+        SET uploads_used = uploads_used + 1,
+            state = CASE WHEN uploads_used + 1 >= max_uploads THEN 'consumed' ELSE 'issued' END,
+            consumed_by_dump_id = COALESCE(consumed_by_dump_id, ?)
+        WHERE grant_id = ? AND state = 'issued' AND uploads_used < max_uploads`).run(dumpId, grantId).changes !== 1) throw new DumpLedgerError("grant_consumed", "upload grant has no remaining upload slots");
       this.prepare("INSERT INTO dumps(dump_id, case_id, phase, blob_state, original_name, byte_size, sha256, validation, coverage, downloadable, inspection_error, inspection_facts_json, received_at, available_at, purged_at) VALUES (?, ?, 'receiving', 'staging', ?, NULL, NULL, 'not-checked', NULL, 0, NULL, NULL, ?, NULL, NULL)").run(dumpId, caseId, originalName, event.occurredAt);
       this.insertAudit(event, "BeginUpload", parseCustomerId(row.customer_id), caseId, dumpId, { grantId });
     })();
@@ -160,7 +176,7 @@ export class SqliteLedger {
       if (this.grantExists(record.grantId)) throw new DumpLedgerError("invalid_input", "import grant already exists");
       if (this.findGrantByDigest(record.secretDigest) !== null) throw new DumpLedgerError("invalid_input", "import grant secret digest already exists");
       const state = record.state === "issued" && forcedState === "revoked" ? "revoked" : record.state;
-      this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(record.grantId, record.caseId, record.secretDigest, state, record.expiresAt, record.maxBytes.toString(), record.consumedByDumpId, record.createdAt);
+      this.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, max_uploads, uploads_used, consumed_by_dump_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(record.grantId, record.caseId, record.secretDigest, state, record.expiresAt, record.maxBytes.toString(), record.maxUploads, record.uploadsUsed, record.consumedByDumpId, record.createdAt);
       this.insertAudit(event, "ImportGrant", this.customerForCase(record.caseId), record.caseId, null, { grantId: record.grantId, state, forced: state !== record.state });
     })();
   }

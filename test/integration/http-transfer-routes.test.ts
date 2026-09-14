@@ -235,6 +235,7 @@ test("a second transfer job conflicts (409) while one is running", async t => {
   const { server, cleanup } = await makeFixture(engine => ({
     execute: command => engine.execute(command),
     grantKeyFingerprint: () => engine.grantKeyFingerprint(),
+    grantQuota: secret => engine.grantQuota(secret),
     snapshot: () => engine.snapshot(),
     dueForPurge: at => engine.dueForPurge(at),
     pendingPurgeCompletion: () => engine.pendingPurgeCompletion(),

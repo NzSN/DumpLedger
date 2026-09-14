@@ -8,6 +8,7 @@ import {
   decodeCaseSummary,
   decodeCreateCustomerResponse,
   decodeCreateGrantResponse,
+  decodeGrantQuotaResponse,
   decodeDashboardResponse,
   decodeDumpDetailResponse,
   decodeErrorResponse,
@@ -379,14 +380,15 @@ test("grant creation, header-grant upload, filename fallback, dump content, serv
   assert.equal(uploadC.statusCode, 201);
   const dumpIdC = decodeUploadCompleteResponse(uploadC.json(), "$").dumpId;
 
-  // Replay of a consumed grant fails closed with 404 grant_unavailable.
+  // Replay of an exhausted grant earns the distinct 404 grant_slots_exhausted
+  // (batch upload design, decision 3); unknown/revoked/expired stay opaque.
   const replay = await server.inject({
     method: "POST", url: "/api/v1/uploads",
     headers: { "content-type": "application/octet-stream", "x-upload-grant": grantA.secret },
     payload: Buffer.from("MDMP"),
   });
   assert.equal(replay.statusCode, 404);
-  assert.deepEqual(decodeError(replay), { code: "grant_unavailable", retryable: false });
+  assert.deepEqual(decodeError(replay), { code: "grant_slots_exhausted", retryable: false });
 
   // Dump detail reports the decoded filename, lifecycle, coverage and activity.
   const detailA = await server.inject({ method: "GET", url: `/api/v1/dumps/${dumpIdA}`, headers: { cookie: auth.cookie } });
@@ -697,4 +699,106 @@ test("upload oversize returns 413 without sealing bytes", async t => {
   assert.equal(afterOversize.dumps[0]?.phase, "rejected");
   assert.equal(afterOversize.dumps[0]?.byteSize, null);
   assert.ok(afterOversize.auditEvents.some(event => event.action === "FailUpload"));
+});
+
+test("batch grant: quota progression, sequential uploads, exhaustion, and revoke opacity", async t => {
+  const { server, engine, secretOf } = await makeFixture();
+  t.after(async () => { await server.close(); engine.close(); });
+  const auth = await loginJson(server);
+  const customer = decodeCreateCustomerResponse(
+    (await postJson(server, "/api/v1/customers", auth.cookie, auth.csrf, { displayName: "Acme" })).json(), "$",
+  ).customer;
+  const caseId = decodeCaseSummary(
+    (await postJson(server, `/api/v1/customers/${customer.customerId}/cases`, auth.cookie, auth.csrf, { title: "Batch intake" })).json(), "$",
+  ).caseId;
+
+  const created = await postJson(server, `/api/v1/cases/${caseId}/grants`, auth.cookie, auth.csrf, {
+    validForHours: 24,
+    maxBytes: "2048",
+    maxUploads: 2,
+  });
+  assert.equal(created.statusCode, 201);
+  const grant = decodeCreateGrantResponse(created.json(), "$");
+  assert.equal(grant.grant.maxUploads, 2);
+  assert.equal(grant.grant.uploadsUsed, 0);
+  const secret = secretOf(grant.uploadPath);
+
+  const quotaAt = async (expectedUsed: number) => {
+    const response = await server.inject({ method: "GET", url: "/api/v1/uploads/quota", headers: { "x-upload-grant": secret } });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(decodeGrantQuotaResponse(response.json(), "$"), {
+      maxUploads: 2,
+      uploadsUsed: expectedUsed,
+      maxBytes: 2048n,
+      expiresAt: grant.grant.expiresAt,
+    });
+  };
+  await quotaAt(0);
+
+  // First upload consumes one slot; the grant stays usable.
+  const first = await server.inject({
+    method: "POST", url: "/api/v1/uploads",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-upload-grant": secret,
+      "x-dump-filename-base64url": encodeFilenameBase64url("first.dmp"),
+    },
+    payload: syntheticMinidump({ memoryListSizes: [8] }),
+  });
+  assert.equal(first.statusCode, 201);
+  await quotaAt(1);
+
+  // Second upload takes the last slot.
+  const second = await server.inject({
+    method: "POST", url: "/api/v1/uploads",
+    headers: { "content-type": "application/octet-stream", "x-upload-grant": secret },
+    payload: syntheticMinidump({ memoryListSizes: [8] }),
+  });
+  assert.equal(second.statusCode, 201);
+  await quotaAt(2);
+
+  // Exhaustion is the distinct, non-retryable grant_slots_exhausted.
+  const third = await server.inject({
+    method: "POST", url: "/api/v1/uploads",
+    headers: { "content-type": "application/octet-stream", "x-upload-grant": secret },
+    payload: Buffer.from("MDMP"),
+  });
+  assert.equal(third.statusCode, 404);
+  assert.deepEqual(decodeError(third), { code: "grant_slots_exhausted", retryable: false });
+
+  // Unknown secrets stay opaque on the quota route.
+  const unknown = await server.inject({ method: "GET", url: "/api/v1/uploads/quota", headers: { "x-upload-grant": "Z".repeat(40) } });
+  assert.equal(unknown.statusCode, 404);
+  assert.deepEqual(decodeError(unknown), { code: "grant_unavailable", retryable: false });
+
+  // Revocation hides the grant from both routes (never slots_exhausted).
+  const secondGrantResponse = await postJson(server, `/api/v1/cases/${caseId}/grants`, auth.cookie, auth.csrf, {
+    validForHours: 24,
+    maxBytes: "2048",
+    maxUploads: 4,
+  });
+  assert.equal(secondGrantResponse.statusCode, 201);
+  const secondGrant = decodeCreateGrantResponse(secondGrantResponse.json(), "$");
+  const revokedSecret = secretOf(secondGrant.uploadPath);
+  const revoked = await postJson(server, `/api/v1/grants/${secondGrant.grant.grantId}/revoke`, auth.cookie, auth.csrf, {});
+  assert.equal(revoked.statusCode, 200);
+  const quotaRevoked = await server.inject({ method: "GET", url: "/api/v1/uploads/quota", headers: { "x-upload-grant": revokedSecret } });
+  assert.equal(quotaRevoked.statusCode, 404);
+  assert.deepEqual(decodeError(quotaRevoked), { code: "grant_unavailable", retryable: false });
+  const uploadRevoked = await server.inject({
+    method: "POST", url: "/api/v1/uploads",
+    headers: { "content-type": "application/octet-stream", "x-upload-grant": revokedSecret },
+    payload: Buffer.from("MDMP"),
+  });
+  assert.equal(uploadRevoked.statusCode, 404);
+  assert.deepEqual(decodeError(uploadRevoked), { code: "grant_unavailable", retryable: false });
+
+  // maxUploads outside 1..16 is rejected at grant creation.
+  const tooMany = await postJson(server, `/api/v1/cases/${caseId}/grants`, auth.cookie, auth.csrf, {
+    validForHours: 24,
+    maxBytes: "2048",
+    maxUploads: 17,
+  });
+  assert.equal(tooMany.statusCode, 400);
+  assert.deepEqual(decodeError(tooMany), { code: "invalid_request", retryable: false });
 });

@@ -157,22 +157,66 @@ test("(b) public fragment upload streams the synthetic minidump to a terminal st
   }
 });
 
-test("(c) grant replay fails closed with the neutral unavailable state", async ({ browser }: { browser: Browser }) => {
+test("(c) grant replay earns the distinct exhausted state (batch design, decision 3)", async ({ browser }: { browser: Browser }) => {
   expect(shareUrl).not.toBe("");
   const replayContext = await browser.newContext();
   const page = await replayContext.newPage();
   try {
     await page.goto(shareUrl);
-    await expect(page.getByText("One-time intake link", { exact: true })).toBeVisible();
-    await page.getByLabel("Choose a minidump file").setInputFiles({
-      name: "renderer.dmp",
-      mimeType: "application/octet-stream",
-      buffer: minidumpBytes,
-    });
-    await page.getByRole("button", { name: "Upload dump", exact: true }).click();
-    await expect(page.getByText("This intake link is not available", { exact: true })).toBeVisible();
+    // The quota answer reports zero remaining slots, so the page renders the
+    // distinct exhaustion outcome before a byte is offered.
+    await expect(page.getByText("This intake link has no uploads left", { exact: true })).toBeVisible();
   } finally {
     await replayContext.close();
+  }
+});
+
+test("(b2) one batch grant uploads three dumps through a single link", async ({ browser }: { browser: Browser }) => {
+  const page = operatorPage as Page;
+  expect(caseId).not.toBe("");
+  await page.goto(`/cases/${encodeURIComponent(caseId)}`);
+  await expect(page.getByRole("heading", { name: "Case detail" })).toBeVisible();
+  await page.getByLabel("Dumps allowed").fill("3");
+  await page.getByRole("button", { name: "Generate secure link", exact: true }).click();
+  const shareInput = page.getByLabel("Shareable upload URL", { exact: true });
+  await expect(shareInput).toBeVisible();
+  const batchUrl = await shareInput.inputValue();
+  expect(batchUrl.startsWith(`${state.baseURL}/upload#grant=`)).toBe(true);
+
+  const publicContext = await browser.newContext();
+  const publicPage = await publicContext.newPage();
+  try {
+    await publicPage.goto(batchUrl);
+    await expect(publicPage.getByText("Case intake link", { exact: true })).toBeVisible();
+    await publicPage.getByLabel("Choose minidump files").setInputFiles([
+      { name: "one.dmp", mimeType: "application/octet-stream", buffer: minidumpBytes },
+      { name: "two.dmp", mimeType: "application/octet-stream", buffer: minidumpBytes },
+      { name: "three.dmp", mimeType: "application/octet-stream", buffer: minidumpBytes },
+    ]);
+    await expect(publicPage.getByText("3 files selected", { exact: true })).toBeVisible();
+    await publicPage.getByRole("button", { name: "Upload 3 dumps", exact: true }).click();
+
+    // Sequential streaming settles in the batch summary with per-file outcomes.
+    const result = publicPage.locator(".upload-result");
+    await expect(result.getByText("Batch upload complete", { exact: true })).toBeVisible();
+    await expect(result).toContainText("3 of 3 files uploaded");
+    const text = await result.innerText();
+    expect(text).toContain("one.dmp");
+    expect(text).toContain("two.dmp");
+    expect(text).toContain("three.dmp");
+    expect(text.match(/Dump ID: \S+/g)?.length).toBe(3);
+  } finally {
+    await publicContext.close();
+  }
+
+  // A fresh visit to the now-exhausted link renders the distinct terminal state.
+  const revisit = await browser.newContext();
+  const revisitPage = await revisit.newPage();
+  try {
+    await revisitPage.goto(batchUrl);
+    await expect(revisitPage.getByText("This intake link has no uploads left", { exact: true })).toBeVisible();
+  } finally {
+    await revisit.close();
   }
 });
 

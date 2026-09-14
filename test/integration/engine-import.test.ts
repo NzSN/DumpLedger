@@ -57,7 +57,7 @@ function succeeded(receipt: TransitionReceipt): TransitionSuccess { assert.ok(re
 function failed(receipt: TransitionReceipt, code: string): void { assert.ok(!receipt.ok, show(receipt)); assert.equal(receipt.error.code, code); }
 function grantDigest(secret: string): string { return createHmac("sha256", GRANT_KEY).update(secret, "utf8").digest("hex"); }
 function grantRecord(grant: GrantProjection, secret: string): ImportGrantRecord {
-  return { grantId: grant.grantId, caseId: grant.caseId, secretDigest: grantDigest(secret), state: grant.state, expiresAt: grant.expiresAt, maxBytes: grant.maxBytes, consumedByDumpId: grant.consumedByDumpId, createdAt: grant.createdAt };
+  return { grantId: grant.grantId, caseId: grant.caseId, secretDigest: grantDigest(secret), state: grant.state, expiresAt: grant.expiresAt, maxBytes: grant.maxBytes, maxUploads: grant.maxUploads, uploadsUsed: grant.uploadsUsed, consumedByDumpId: grant.consumedByDumpId, createdAt: grant.createdAt };
 }
 function dumpRecord(dump: DumpProjection, phase: "available" | "rejected" | "deleted"): ImportDumpRecord {
   return { dumpId: dump.dumpId, caseId: dump.caseId, phase, originalName: dump.originalName, byteSize: dump.byteSize, sha256: dump.sha256, validation: dump.validation, coverage: dump.coverage, inspectionError: dump.inspectionError, receivedAt: dump.receivedAt, availableAt: dump.availableAt, purgeAt: dump.purgeAt, purgedAt: dump.purgedAt };

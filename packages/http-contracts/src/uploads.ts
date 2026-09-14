@@ -18,18 +18,23 @@
 
 import {
   canonicalDecimal,
+  canonicalTimestamp,
   DecodeError,
   fail,
   field,
   identifierField,
+  integerField,
   object,
   oneOf,
   sha256Hex,
   text,
   type Decoder,
 } from "./decode.js";
+import { MAX_GRANT_MAX_UPLOADS } from "./grants.js";
 
 export const X_UPLOAD_GRANT_HEADER = "x-upload-grant";
+/** Public grant-quota query (batch upload design): `GET /api/v1/uploads/quota`. */
+export const GRANT_QUOTA_PATH = "/api/v1/uploads/quota";
 export const X_DUMP_FILENAME_HEADER = "x-dump-filename-base64url";
 export const UPLOAD_FALLBACK_FILENAME = "upload.dmp";
 
@@ -305,5 +310,45 @@ export function encodeUploadQueuedResponse(response: UploadQueuedResponse): Reco
     byteSize: response.byteSize.toString(),
     sha256: response.sha256,
     processing: response.processing,
+  };
+}
+
+/**
+ * `GET /api/v1/uploads/quota` success body (batch upload design). Answers
+ * what the holder of a valid grant secret may still upload; the secret itself
+ * is the credential, so this reveals nothing its holder could not learn by
+ * attempting uploads.
+ */
+export interface GrantQuotaResponse {
+  readonly maxUploads: number;
+  readonly uploadsUsed: number;
+  readonly maxBytes: bigint;
+  readonly expiresAt: string;
+}
+
+export const decodeGrantQuotaResponse: Decoder<GrantQuotaResponse> = (value, path) => {
+  const decoded = object(
+    {
+      maxUploads: field(integerField({ min: 1, max: MAX_GRANT_MAX_UPLOADS, label: "maxUploads" })),
+      uploadsUsed: field(integerField({ min: 0, max: MAX_GRANT_MAX_UPLOADS, label: "uploadsUsed" })),
+      maxBytes: field(canonicalDecimal({ label: "maxBytes", positive: true })),
+      expiresAt: field(canonicalTimestamp("expiresAt")),
+    },
+    "grant quota response",
+  )(value, path);
+  return {
+    maxUploads: decoded.maxUploads,
+    uploadsUsed: decoded.uploadsUsed,
+    maxBytes: decoded.maxBytes,
+    expiresAt: decoded.expiresAt,
+  };
+};
+
+export function encodeGrantQuotaResponse(response: GrantQuotaResponse): Record<string, unknown> {
+  return {
+    maxUploads: response.maxUploads,
+    uploadsUsed: response.uploadsUsed,
+    maxBytes: response.maxBytes.toString(),
+    expiresAt: response.expiresAt,
   };
 }

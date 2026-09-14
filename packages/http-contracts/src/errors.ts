@@ -27,6 +27,7 @@ export const HTTP_ERROR_CODES = [
   "not_found",
   "invalid_transition",
   "grant_unavailable",
+  "grant_slots_exhausted",
   "upload_too_large",
   "upload_busy",
   "rate_limited",

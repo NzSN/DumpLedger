@@ -38,6 +38,8 @@ export interface QueryRequest<T> {
   readonly path: string;
   /** Runtime decoder for the success body (queries always return JSON). */
   readonly decoder: Decoder<T>;
+  /** Extra request headers (e.g. the upload-grant secret on the quota query). */
+  readonly headers?: Record<string, string>;
   readonly signal?: AbortSignal;
 }
 
@@ -219,7 +221,7 @@ class FetchHttpClient implements SessionAwareHttpClient {
     const queryInit: RequestInit = {
       method: "GET",
       credentials: "same-origin",
-      headers: { accept: "application/json" },
+      headers: { accept: "application/json", ...request.headers },
     };
     if (request.signal !== undefined) queryInit.signal = request.signal;
     let response: Response;

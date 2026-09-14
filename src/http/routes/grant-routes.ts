@@ -27,7 +27,7 @@ export function registerGrantRoutes(server: FastifyInstance, ctx: RouteContext):
     if (!Number.isSafeInteger(serverTime) || serverTime < 0) return sendError(reply, "internal_error");
     const expiresAt = serverTime + decoded.value.validForHours * 3_600_000;
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= serverTime) return sendError(reply, "invalid_request");
-    const result = options.application.issueGrant(request.params.caseId, expiresAt, decoded.value.maxBytes);
+    const result = options.application.issueGrant(request.params.caseId, expiresAt, decoded.value.maxBytes, decoded.value.maxUploads);
     if (!result.ok || result.id === undefined || result.secret === undefined) {
       return sendError(reply, result.ok ? "internal_error" : contractErrorFor(result.code));
     }

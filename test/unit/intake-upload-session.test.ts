@@ -71,3 +71,16 @@ test("invalid grants fail before reading the request body", async () => {
   await assert.rejects(session.receive({ grantSecret: "invalid", originalName: "x.dmp", bytes: body }), error => error instanceof IntakeError && error.code === "grant_invalid");
   assert.equal(read, false);
 });
+
+test("slot exhaustion maps to the distinct intake error; other begin failures stay opaque", async () => {
+  const exhausted = fixture({ begin: () => ({ ok: false as const, code: "grant_consumed" }) });
+  await assert.rejects(
+    exhausted.session.receive({ grantSecret: "secret", originalName: "x.dmp", bytes: Readable.from([Buffer.from("abc")]) }),
+    error => error instanceof IntakeError && error.code === "grant_slots_exhausted",
+  );
+  const expired = fixture({ begin: () => ({ ok: false as const, code: "grant_expired" }) });
+  await assert.rejects(
+    expired.session.receive({ grantSecret: "secret", originalName: "x.dmp", bytes: Readable.from([Buffer.from("abc")]) }),
+    error => error instanceof IntakeError && error.code === "grant_invalid",
+  );
+});

@@ -2,7 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
 import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
-import { SqliteLedger } from "../ledger/sqlite-ledger.js";
+import { MAX_GRANT_UPLOAD_SLOTS, SqliteLedger } from "../ledger/sqlite-ledger.js";
 import type { Vault } from "../vault/vault.js";
 import type { ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
 import { CryptoEntropy, NoFailpoints, RandomIds, SystemClock, type Clock, type EntropySource, type FailpointPort } from "./dependencies.js";
@@ -16,9 +16,19 @@ export type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCust
 export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, TransitionReceipt } from "./projection.js";
 
 export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
+/** Public grant-quota answer (batch upload design): what the holder of a valid secret may still upload. */
+export interface GrantQuota {
+  readonly maxUploads: number;
+  readonly uploadsUsed: number;
+  readonly maxBytes: bigint;
+  readonly expiresAt: string;
+}
+
 export interface DumpLedgerEngine {
   execute(command: LifecycleCommand): TransitionReceipt;
   grantKeyFingerprint(): string;
+  /** Returns quota for issued or consumed grants; undefined for unknown, revoked, or expired secrets. */
+  grantQuota(grantSecret: string): GrantQuota | undefined;
   snapshot(): DumpLedgerProjection;
   dueForPurge(at?: string): readonly DumpId[];
   pendingPurgeCompletion(): readonly DumpId[];
@@ -43,6 +53,15 @@ function assertPlainObject(value: unknown, name: string, maxSerializedBytes: num
   const serialized = JSON.stringify(value);
   if (serialized === undefined || Buffer.byteLength(serialized, "utf8") > maxSerializedBytes) throw new DumpLedgerError("invalid_input", `${name} exceeds its serialized size bound`);
   return value as Readonly<Record<string, unknown>>;
+}
+function assertMaxUploads(value: unknown): number {
+  if (value === undefined) return 1;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_GRANT_UPLOAD_SLOTS) throw new DumpLedgerError("invalid_input", "maxUploads must be an integer between 1 and 16");
+  return value;
+}
+function assertUploadsUsed(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > MAX_GRANT_UPLOAD_SLOTS) throw new DumpLedgerError("invalid_input", "uploadsUsed must be an integer between 0 and 16");
+  return value;
 }
 function assertCount(value: unknown, name: string): number { if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new DumpLedgerError("invalid_input", `${name} must be a nonnegative integer`); return value; }
 function assertImportCounts(value: unknown, name: string): ImportCounts {
@@ -83,6 +102,11 @@ class Engine implements DumpLedgerEngine {
   }
   snapshot(): DumpLedgerProjection { return this.ledger.snapshot(); }
   grantKeyFingerprint(): string { return createHash("sha256").update(this.grantSecretKey).digest("base64url"); }
+  grantQuota(grantSecret: string): GrantQuota | undefined {
+    const grant = this.ledger.findGrantByDigest(digestSecret(assertText(grantSecret, "grantSecret", 1024), this.grantSecretKey));
+    if (grant === null || (grant.state !== "issued" && grant.state !== "consumed")) return undefined;
+    return { maxUploads: grant.maxUploads, uploadsUsed: grant.uploadsUsed, maxBytes: grant.maxBytes, expiresAt: grant.expiresAt };
+  }
   dueForPurge(at?: string): readonly DumpId[] { return this.ledger.dueForPurge(assertIsoTimestamp(at ?? this.clock.now(), "retention time")); }
   pendingPurgeCompletion(): readonly DumpId[] { return this.snapshot().dumps.filter(dump => dump.phase === "deleting").map(dump => dump.dumpId); }
   backupInventory(): BackupInventory {
@@ -107,8 +131,9 @@ class Engine implements DumpLedgerEngine {
       case "IssueGrant": {
         const caseId=parseCaseId(command.caseId), expiresAt=assertIsoTimestamp(command.expiresAt,"expiresAt"), maxBytes=assertPositiveBigint(command.maxBytes,"maxBytes");
         if (expiresAt <= occurredAt) throw new DumpLedgerError("invalid_input","grant expiry must be in the future");
+        const maxUploads=assertMaxUploads(command.maxUploads);
         const grantId=this.ids.next("grant"), grantSecret=this.entropy.secret(); if (grantSecret.length < 24) throw new DumpLedgerError("integrity_failure","entropy source returned a short secret");
-        this.ledger.issueGrant(grantId,caseId,digestSecret(grantSecret,this.grantSecretKey),expiresAt,maxBytes,event()); return {ok:true,action:command.type,occurredAt,grantId,grantSecret,caseId,maxBytes};
+        this.ledger.issueGrant(grantId,caseId,digestSecret(grantSecret,this.grantSecretKey),expiresAt,maxBytes,maxUploads,event()); return {ok:true,action:command.type,occurredAt,grantId,grantSecret,caseId,maxBytes,maxUploads};
       }
       case "RevokeGrant": { const grantId=parseGrantId(command.grantId); this.ledger.transitionGrant(grantId,"revoked",event()); return {ok:true,action:command.type,occurredAt,grantId}; }
       case "ExpireGrant": { const grantId=parseGrantId(command.grantId); this.ledger.transitionGrant(grantId,"expired",event()); return {ok:true,action:command.type,occurredAt,grantId}; }
@@ -154,7 +179,8 @@ class Engine implements DumpLedgerEngine {
         const grantId=parseGrantId(record.grantId), caseId=parseCaseId(record.caseId), secretDigest=assertText(record.secretDigest,"secretDigest",128), state=parseTokenState(record.state);
         const expiresAt=assertIsoTimestamp(record.expiresAt,"expiresAt"), maxBytes=assertPositiveBigint(record.maxBytes,"maxBytes"), createdAt=assertIsoTimestamp(record.createdAt,"createdAt");
         const consumedByDumpId=record.consumedByDumpId===null?null:parseDumpId(record.consumedByDumpId);
-        this.ledger.importGrant({grantId,caseId,secretDigest,state,expiresAt,maxBytes,consumedByDumpId,createdAt},command.forcedState,event());
+        const maxUploads=assertMaxUploads(record.maxUploads), uploadsUsed=record.uploadsUsed===undefined?0:assertUploadsUsed(record.uploadsUsed);
+        this.ledger.importGrant({grantId,caseId,secretDigest,state,expiresAt,maxBytes,maxUploads,uploadsUsed,consumedByDumpId,createdAt},command.forcedState,event());
         return {ok:true,action:command.type,occurredAt,grantId,caseId};
       }
       case "ImportDumpStaged": {

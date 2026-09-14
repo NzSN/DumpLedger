@@ -133,13 +133,13 @@ async function positiveTraces(): Promise<string[]> {
 const EXPECTED_COVERAGE = {
   AcceptDump: 3,
   BeginPurge: 5,
-  BeginUpload: 5,
+  BeginUpload: 7,
   CloseCase: 1,
   ExpireToken: 1,
   FailUpload: 1,
   FinishPurge: 5,
-  Initialize: 7,
-  IssueToken: 8,
+  Initialize: 8,
+  IssueToken: 9,
   MarkQuarantined: 4,
   PromoteObject: 4,
   RejectDump: 1,
@@ -169,14 +169,14 @@ test("checked-in corpus reaches all_steps_done through negotiated generated bind
   assert.equal(recording.closeCalls(), 1);
   assert.equal(
     probe.sessionCreates,
-    7,
+    8,
     "each trace must receive a fresh engine and SQLite ledger",
   );
-  assert.equal(probe.sessionCloses, 7);
-  assert.equal(probe.portCalls, 54);
+  assert.equal(probe.sessionCloses, 8);
+  assert.equal(probe.portCalls, 58);
   assert.equal(
     probe.observationCalls,
-    54,
+    58,
     "each replayed action must be observed exactly once",
   );
   assert.deepEqual(probe.generatedBinding?.coverage(), EXPECTED_COVERAGE);

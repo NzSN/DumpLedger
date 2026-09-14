@@ -59,13 +59,23 @@ export class EngineHttpApplication implements HttpApplicationPort {
       : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
   }
 
-  issueGrant(caseIdText: string, expiresAt: number, maxBytes: bigint) {
+  issueGrant(caseIdText: string, expiresAt: number, maxBytes: bigint, maxUploads?: number) {
     let caseId;
     try { caseId = parseCaseId(caseIdText); } catch { return { ok: false as const, code: "case_not_found" }; }
-    const receipt = this.engine.execute({ type: "IssueGrant", caseId, expiresAt: new Date(expiresAt).toISOString(), maxBytes });
+    const receipt = this.engine.execute({
+      type: "IssueGrant",
+      caseId,
+      expiresAt: new Date(expiresAt).toISOString(),
+      maxBytes,
+      ...(maxUploads === undefined ? {} : { maxUploads }),
+    });
     return receipt.ok && receipt.grantId !== undefined && receipt.grantSecret !== undefined
       ? { ok: true as const, id: receipt.grantId, secret: receipt.grantSecret }
       : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
+  }
+
+  grantQuota(grantSecret: string) {
+    return this.engine.grantQuota(grantSecret);
   }
 
   revokeGrant(grantIdText: string) {
@@ -218,6 +228,8 @@ export class EngineHttpApplication implements HttpApplicationPort {
         createdAt: grant.createdAt,
         expiresAt: grant.expiresAt,
         maxBytes: grant.maxBytes,
+        maxUploads: grant.maxUploads,
+        uploadsUsed: grant.uploadsUsed,
       }));
     const dumps = projection.dumps.filter(candidate => candidate.caseId === caseId)
       .slice(-MAX_CASE_LIST_ITEMS)
@@ -314,6 +326,8 @@ export class EngineHttpApplication implements HttpApplicationPort {
       createdAt: grant.createdAt,
       expiresAt: grant.expiresAt,
       maxBytes: grant.maxBytes,
+      maxUploads: grant.maxUploads,
+      uploadsUsed: grant.uploadsUsed,
     };
   }
 }

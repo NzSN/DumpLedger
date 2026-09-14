@@ -27,6 +27,10 @@ CoverageKinds    == {"partial", "full-memory-declared", "unknown"}
 CaseCustomer == <<1, 2>>
 \* @type: Seq(Int);
 TokenCase    == <<1, 2>>
+\* Upload slots per grant (docs/batch-upload-design.md): token 1 models a
+\* one-time grant, token 2 a two-slot batch grant.
+\* @type: Seq(Int);
+TokenMaxUploads == <<1, 2>>
 
 VARIABLES
   \* @type: Seq(Str);
@@ -34,7 +38,9 @@ VARIABLES
   \* @type: Seq(Str);
   tokenState,       \* token slot -> TokenStates
   \* @type: Seq(Int);
-  tokenDump,        \* token slot -> dump slot or 0
+  dumpToken,        \* dump slot -> token slot or 0
+  \* @type: Seq(Int);
+  tokenUploads,     \* token slot -> upload slots consumed
   \* @type: Seq(Str);
   dumpPhase,        \* dump slot -> DumpPhases
   \* @type: Seq(Int);
@@ -54,14 +60,15 @@ VARIABLES
   \* @type: { case: Int, token: Int, dump: Int, kind: Str };
   parameters        \* complete inputs of the last transition
 
-vars == <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase, blobState,
+vars == <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
           digestRecorded, validation, coverage, downloadable, action_taken,
           parameters>>
 
 Init ==
   /\ caseStatus = <<"new", "new">>
   /\ tokenState = <<"unused", "unused">>
-  /\ tokenDump = <<NoDump, NoDump>>
+  /\ dumpToken = <<NoDump, NoDump>>
+  /\ tokenUploads = <<0, 0>>
   /\ dumpPhase = <<"absent", "absent">>
   /\ dumpCase = <<NoCase, NoCase>>
   /\ blobState = <<"none", "none">>
@@ -82,7 +89,7 @@ StartInvestigation(c) ==
   /\ action_taken' = "StartInvestigation"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenState, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 WaitForCustomer(c) ==
@@ -92,7 +99,7 @@ WaitForCustomer(c) ==
   /\ action_taken' = "WaitForCustomer"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenState, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 \* Waiting, resolved, and closed cases reopen explicitly. Reopening a closed
@@ -104,7 +111,7 @@ ResumeInvestigation(c) ==
   /\ action_taken' = "ResumeInvestigation"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenState, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 ResolveCase(c) ==
@@ -114,7 +121,7 @@ ResolveCase(c) ==
   /\ action_taken' = "ResolveCase"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenState, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 \* Closing is administrative: dump bytes, downloadability, and retention are
@@ -135,7 +142,7 @@ CloseCase(c) ==
   /\ action_taken' = "CloseCase"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenDump, dumpPhase, dumpCase, blobState, digestRecorded,
+  /\ UNCHANGED <<dumpToken, tokenUploads, dumpPhase, dumpCase, blobState, digestRecorded,
                  validation, coverage, downloadable>>
 
 \* Mint a one-time upload grant for its statically modeled case.
@@ -147,7 +154,7 @@ IssueToken(t) ==
   /\ action_taken' = "IssueToken"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 RevokeToken(t) ==
@@ -157,7 +164,7 @@ RevokeToken(t) ==
   /\ action_taken' = "RevokeToken"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 ExpireToken(t) ==
@@ -167,21 +174,25 @@ ExpireToken(t) ==
   /\ action_taken' = "ExpireToken"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
-\* Allocation consumes the grant and fixes the dump-to-case association before
-\* customer bytes are trusted. A dump slot never returns to "absent".
+\* Allocation consumes one grant slot and fixes the dump-to-case association
+\* before customer bytes are trusted. A dump slot never returns to "absent".
+\* The grant stays issued until its last slot is taken (batch upload design).
 BeginUpload(t, d) ==
   /\ t \in Tokens
   /\ d \in Dumps
   /\ tokenState[t] = "issued"
   /\ caseStatus[TokenCase[t]] /= "closed"
-  /\ tokenDump[t] = NoDump
+  /\ tokenUploads[t] < TokenMaxUploads[t]
   /\ dumpPhase[d] = "absent"
   /\ dumpCase[d] = NoCase
-  /\ tokenState' = [tokenState EXCEPT ![t] = "consumed"]
-  /\ tokenDump' = [tokenDump EXCEPT ![t] = d]
+  /\ tokenUploads' = [tokenUploads EXCEPT ![t] = @ + 1]
+  /\ tokenState' = [tokenState EXCEPT ![t] =
+                     IF tokenUploads[t] + 1 >= TokenMaxUploads[t]
+                     THEN "consumed" ELSE "issued"]
+  /\ dumpToken' = [dumpToken EXCEPT ![d] = t]
   /\ dumpPhase' = [dumpPhase EXCEPT ![d] = "receiving"]
   /\ dumpCase' = [dumpCase EXCEPT ![d] = TokenCase[t]]
   /\ blobState' = [blobState EXCEPT ![d] = "staging"]
@@ -202,7 +213,7 @@ SealUpload(d) ==
   /\ action_taken' = "SealUpload"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
                  validation, coverage, downloadable>>
 
 \* A failed stream consumes the grant and dump slot but publishes no bytes.
@@ -215,7 +226,7 @@ FailUpload(d) ==
   /\ action_taken' = "FailUpload"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, digestRecorded,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, digestRecorded,
                  coverage, downloadable>>
 
 \* Promotion is a filesystem rename. It is deliberately separate from the
@@ -228,7 +239,7 @@ PromoteObject(d) ==
   /\ action_taken' = "PromoteObject"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase,
                  digestRecorded, validation, coverage, downloadable>>
 
 \* This action is also the recovery step after a crash following promotion.
@@ -241,7 +252,7 @@ MarkQuarantined(d) ==
   /\ action_taken' = "MarkQuarantined"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable>>
 
 AcceptDump(d, kind) ==
@@ -257,7 +268,7 @@ AcceptDump(d, kind) ==
   /\ action_taken' = "AcceptDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> kind]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
                  digestRecorded>>
 
 \* Structurally invalid input can remain in the vault until retention purges
@@ -271,7 +282,7 @@ RejectDump(d) ==
   /\ action_taken' = "RejectDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
                  digestRecorded, coverage, downloadable>>
 
 \* Disable download before touching the filesystem. A crash in this phase is
@@ -284,7 +295,7 @@ BeginPurge(d) ==
   /\ action_taken' = "BeginPurge"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
                  digestRecorded, validation, coverage>>
 
 \* Finish purge after byte removal. Association, digest, validation, and
@@ -297,7 +308,7 @@ FinishPurge(d) ==
   /\ action_taken' = "FinishPurge"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase,
                  digestRecorded, validation, coverage, downloadable>>
 
 Next ==
@@ -330,8 +341,10 @@ TypeOK ==
   /\ \A c \in Cases: caseStatus[c] \in CaseStatuses
   /\ Len(tokenState) = Cardinality(Tokens)
   /\ \A t \in Tokens: tokenState[t] \in TokenStates
-  /\ Len(tokenDump) = Cardinality(Tokens)
-  /\ \A t \in Tokens: tokenDump[t] \in Dumps \cup {NoDump}
+  /\ Len(dumpToken) = Cardinality(Dumps)
+  /\ \A d \in Dumps: dumpToken[d] \in Tokens \cup {NoDump}
+  /\ Len(tokenUploads) = Cardinality(Tokens)
+  /\ \A t \in Tokens: tokenUploads[t] \in 0..TokenMaxUploads[t]
   /\ Len(dumpPhase) = Cardinality(Dumps)
   /\ \A d \in Dumps: dumpPhase[d] \in DumpPhases
   /\ Len(dumpCase) = Cardinality(Dumps)
@@ -364,13 +377,26 @@ AssociationIntegrity ==
   /\ \A d \in Dumps:
        (dumpPhase[d] = "absent") <=> (dumpCase[d] = NoCase)
 
+\* Dumps begun under a grant, enumerated over the fixed 1..2 model slots so
+\* the invariant stays cheap arithmetic for Apalache (no set comprehensions).
+DumpsUnderToken(t) ==
+  (IF dumpToken[1] = t THEN 1 ELSE 0) + (IF dumpToken[2] = t THEN 1 ELSE 0)
+
 TokenIntegrity ==
   /\ \A t \in Tokens:
-       (tokenState[t] = "consumed") <=> (tokenDump[t] \in Dumps)
+       (tokenState[t] = "consumed") <=> (tokenUploads[t] = TokenMaxUploads[t])
   /\ \A t \in Tokens:
-       tokenDump[t] \in Dumps => dumpCase[tokenDump[t]] = TokenCase[t]
-  /\ \A t1, t2 \in Tokens:
-       (tokenDump[t1] = tokenDump[t2] /\ tokenDump[t1] \in Dumps) => t1 = t2
+       tokenUploads[t] = DumpsUnderToken(t)
+  /\ \A d \in Dumps:
+       dumpToken[d] \in Tokens => dumpCase[d] = TokenCase[dumpToken[d]]
+  /\ \A d \in Dumps:
+       (dumpPhase[d] = "absent") <=> (dumpToken[d] = NoDump)
+
+\* Slot bounds (docs/batch-upload-design.md): no grant delivers more dumps
+\* than its slots, and no dump outlives its grant association.
+TokenSlotBounds ==
+  /\ \A t \in Tokens: tokenUploads[t] <= TokenMaxUploads[t]
+  /\ \A t \in Tokens: DumpsUnderToken(t) <= TokenMaxUploads[t]
 
 \* Closing revokes every still-usable grant for that case. Consumed grants and
 \* their already-started dumps remain intact, and reopening mints no grant.
@@ -425,6 +451,7 @@ SafetyInvariant ==
   /\ TypeOK
   /\ AssociationIntegrity
   /\ TokenIntegrity
+  /\ TokenSlotBounds
   /\ ClosedCaseHasNoIssuedGrant
   /\ AvailableHasEvidence
   /\ SealedAndQuarantinedHaveEvidence

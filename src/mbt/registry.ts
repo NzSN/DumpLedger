@@ -37,7 +37,12 @@ export function dumpLedgerMbtConfig(repoRoot: string): ApalacheConfig {
     initPredicate: "Init",
     nextPredicate: "Next",
     invariant: "SafetyInvariant",
-    lengthBound: 8,
+    /* Live-Apalache budget (batch upload design): the multi-slot grant model
+     * takes ~105s at bound 6 vs ~260s at bound 8, and the tier caps at 180s
+     * including negotiation and replay. Depth is covered by the exhaustive
+     * TLC run (depth 24) and the checked-in 8-trace corpus; this bound only
+     * drives the live source pipeline smoke. */
+    lengthBound: 6,
     paramVars: "parameters",
   };
 }

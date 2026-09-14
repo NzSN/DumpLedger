@@ -46,7 +46,7 @@ export function caseGrant(
   expiresAt = "2026-09-08T10:00:00.000Z",
   maxBytes = 10737418240n,
 ): CaseGrantSummary {
-  return { grantId, state, createdAt: "2026-09-01T09:00:00.000Z", expiresAt, maxBytes };
+  return { grantId, state, createdAt: "2026-09-01T09:00:00.000Z", expiresAt, maxBytes, maxUploads: 1, uploadsUsed: 0 };
 }
 
 export function caseDump(
@@ -105,6 +105,8 @@ export function issuedGrantRecord(
   caseId = "case-1001",
   expiresAt = "2026-09-08T10:00:00.000Z",
   maxBytes = 10737418240n,
+  maxUploads = 1,
+  uploadsUsed = 0,
 ): IssuedGrant {
   return {
     grantId,
@@ -113,6 +115,8 @@ export function issuedGrantRecord(
     createdAt: "2026-09-01T09:00:00.000Z",
     expiresAt,
     maxBytes,
+    maxUploads,
+    uploadsUsed,
   };
 }
 

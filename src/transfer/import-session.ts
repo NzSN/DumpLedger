@@ -241,6 +241,11 @@ function rowNullableDecimal(row: Row, key: string): bigint | null {
   return BigInt(value);
 }
 
+function rowSlotCount(row: Row, key: string): number {
+  const value = row[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 16) throw corrupt(`bundle ledger column ${key} is not a valid slot count`);
+  return value;
+}
 function rowId<T>(row: Row, key: string, parse: (value: unknown) => T): T {
   try {
     return parse(rowString(row, key));
@@ -316,7 +321,10 @@ export interface BundleRows {
 function readBundleLedger(copyPath: string, currentVersion: number): BundleRows {
   let database: BetterSqlite3.Database | undefined;
   try {
-    database = new BetterSqlite3(copyPath, { readonly: true });
+    // Writable on purpose: the copy is a per-import scratch extraction, and a
+    // bundle older than this instance's schema is migrated up in place before
+    // reading (a readonly handle would make that path throw).
+    database = new BetterSqlite3(copyPath);
     const bundleVersion = (database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number | bigint }).version;
     for (const table of REQUIRED_TABLES) {
       const present = database.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
@@ -337,13 +345,15 @@ function readBundleLedger(copyPath: string, currentVersion: number): BundleRows 
       status: rowEnum(row, "status", parseCaseStatus),
       createdAt: rowIso(row, "created_at"),
     }));
-    const grants = (database.prepare("SELECT grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at FROM upload_grants ORDER BY grant_id").all() as Row[]).map((row): ImportGrantRecord => ({
+    const grants = (database.prepare("SELECT grant_id, case_id, secret_digest, state, expires_at, max_bytes, max_uploads, uploads_used, consumed_by_dump_id, created_at FROM upload_grants ORDER BY grant_id").all() as Row[]).map((row): ImportGrantRecord => ({
       grantId: rowId(row, "grant_id", parseGrantId),
       caseId: rowId(row, "case_id", parseCaseId),
       secretDigest: rowString(row, "secret_digest"),
       state: rowEnum(row, "state", parseTokenState),
       expiresAt: rowIso(row, "expires_at"),
       maxBytes: rowDecimal(row, "max_bytes"),
+      maxUploads: rowSlotCount(row, "max_uploads"),
+      uploadsUsed: rowSlotCount(row, "uploads_used"),
       consumedByDumpId: rowNullableId(row, "consumed_by_dump_id", parseDumpId),
       createdAt: rowIso(row, "created_at"),
     }));

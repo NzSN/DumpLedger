@@ -6,6 +6,7 @@ import {
   DeterministicEntropy,
   DeterministicIds,
   type DumpLedgerEngine,
+  type DumpLedgerProjection,
 } from "../../src/engine/dump-ledger-engine.js";
 import type { CaseId, CustomerId } from "../../src/domain/ids.js";
 import type { LifecycleAction } from "../../src/engine/commands.js";
@@ -384,6 +385,92 @@ describe("lifecycle engine", () => {
     const purged = engine.snapshot().dumps.find((candidate) => candidate.dumpId === dumpId);
     assert.equal(purged?.phase, "deleted");
     assert.equal(purged?.downloadable, false);
+    engine.close();
+  });
+});
+
+describe("batch upload grants (docs/batch-upload-design.md)", () => {
+  it("keeps a multi-slot grant issued until the last slot is taken", () => {
+    const { engine } = withEntropy(manySecrets);
+    const customer = engine.execute({ type: "CreateCustomer", displayName: "Acme" });
+    assert(customer.ok && customer.customerId);
+    const c = engine.execute({ type: "CreateCase", customerId: customer.customerId, title: "x" });
+    assert(c.ok && c.caseId);
+    const g = engine.execute({ type: "IssueGrant", caseId: c.caseId, expiresAt: "2026-09-05T00:00:00.000Z", maxBytes: 8n, maxUploads: 3 });
+    assert(g.ok && g.grantSecret);
+
+    const quota = () => {
+      const q = engine.grantQuota(g.grantSecret as string);
+      assert.ok(q, "quota must answer for an issued grant");
+      return q;
+    };
+    assert.deepEqual(quota(), { maxUploads: 3, uploadsUsed: 0, maxBytes: 8n, expiresAt: "2026-09-05T00:00:00.000Z" });
+
+    for (const [index, expectedUsed, expectedState] of [[1, 1, "issued"], [2, 2, "issued"], [3, 3, "consumed"]] as const) {
+      const begun = engine.execute({ type: "BeginUpload", grantSecret: g.grantSecret, originalName: `f${index}.dmp` });
+      assert(begun.ok);
+      assert.equal(quota().uploadsUsed, expectedUsed);
+      const record: DumpLedgerProjection["grants"][number] | undefined = engine.snapshot().grants.find(candidate => candidate.grantId === g.grantId);
+      assert.equal(record?.state, expectedState);
+      assert.equal(record?.uploadsUsed, expectedUsed);
+      assert.equal(record?.maxUploads, 3);
+    }
+    const fourth = engine.execute({ type: "BeginUpload", grantSecret: g.grantSecret, originalName: "f4.dmp" });
+    assert(!fourth.ok);
+    assert.equal(fourth.error.code, "grant_consumed");
+    assert.equal(engine.snapshot().dumps.length, 3);
+    // Exhausted (consumed) grants still answer quota: 0 remaining.
+    assert.equal(quota().uploadsUsed, 3);
+    engine.close();
+  });
+
+  it("consumes a slot even when the upload fails", () => {
+    const { engine } = withEntropy(manySecrets);
+    const customer = engine.execute({ type: "CreateCustomer", displayName: "Acme" });
+    assert(customer.ok && customer.customerId);
+    const c = engine.execute({ type: "CreateCase", customerId: customer.customerId, title: "x" });
+    assert(c.ok && c.caseId);
+    const g = engine.execute({ type: "IssueGrant", caseId: c.caseId, expiresAt: "2026-09-05T00:00:00.000Z", maxBytes: 8n, maxUploads: 2 });
+    assert(g.ok && g.grantSecret);
+
+    const first = engine.execute({ type: "BeginUpload", grantSecret: g.grantSecret, originalName: "lost.dmp" });
+    assert(first.ok && first.dumpId);
+    assert(engine.execute({ type: "FailUpload", dumpId: first.dumpId }).ok);
+    // One slot burned by the failure; exactly one upload remains.
+    const second = engine.execute({ type: "BeginUpload", grantSecret: g.grantSecret, originalName: "retry.dmp" });
+    assert(second.ok);
+    const third = engine.execute({ type: "BeginUpload", grantSecret: g.grantSecret, originalName: "third.dmp" });
+    assert(!third.ok);
+    assert.equal(third.error.code, "grant_consumed");
+    engine.close();
+  });
+
+  it("rejects out-of-range maxUploads at issuance", () => {
+    const { engine } = fixture();
+    const customer = engine.execute({ type: "CreateCustomer", displayName: "Acme" });
+    assert(customer.ok && customer.customerId);
+    const c = engine.execute({ type: "CreateCase", customerId: customer.customerId, title: "x" });
+    assert(c.ok && c.caseId);
+    for (const bad of [0, 17, 2.5]) {
+      const receipt = engine.execute({ type: "IssueGrant", caseId: c.caseId, expiresAt: "2026-09-05T00:00:00.000Z", maxBytes: 8n, maxUploads: bad });
+      assert(!receipt.ok);
+      assert.equal(receipt.error.code, "invalid_input");
+    }
+    engine.close();
+  });
+
+  it("answers quota only for issued and consumed grants", () => {
+    const { engine } = fixture();
+    assert.equal(engine.grantQuota("upload-secret-000000000000000000000099"), undefined);
+    const customer = engine.execute({ type: "CreateCustomer", displayName: "Acme" });
+    assert(customer.ok && customer.customerId);
+    const c = engine.execute({ type: "CreateCase", customerId: customer.customerId, title: "x" });
+    assert(c.ok && c.caseId);
+    const g = engine.execute({ type: "IssueGrant", caseId: c.caseId, expiresAt: "2026-09-05T00:00:00.000Z", maxBytes: 8n, maxUploads: 2 });
+    assert(g.ok && g.grantSecret && g.grantId);
+    assert.ok(engine.grantQuota(g.grantSecret));
+    assert(engine.execute({ type: "RevokeGrant", grantId: g.grantId }).ok);
+    assert.equal(engine.grantQuota(g.grantSecret), undefined);
     engine.close();
   });
 });

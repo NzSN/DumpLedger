@@ -20,6 +20,7 @@ import {
   identifierField,
   integerField,
   object,
+  optional,
   text,
   type Decoder,
 } from "./decode.js";
@@ -27,6 +28,8 @@ import { grantStateDecoder, type GrantState } from "./vocab.js";
 
 /** Longest grant validity accepted from an operator (365 days). */
 export const MAX_GRANT_VALID_FOR_HOURS = 24 * 366;
+/** Most dumps one grant may authorize (batch upload design, decision 1). */
+export const MAX_GRANT_MAX_UPLOADS = 16;
 export const MAX_UPLOAD_PATH_LENGTH = 512;
 export const MIN_GRANT_SECRET_BASE64URL_LENGTH = 16;
 
@@ -36,6 +39,8 @@ export interface CreateGrantRequest {
   readonly validForHours: number;
   /** Original-byte ceiling for the upload, in canonical decimal form on the wire. */
   readonly maxBytes: bigint;
+  /** Dumps the grant authorizes (1..16); omitted means a one-time grant. */
+  readonly maxUploads?: number;
 }
 
 export const decodeCreateGrantRequest: Decoder<CreateGrantRequest> = (value, path) => {
@@ -43,14 +48,25 @@ export const decodeCreateGrantRequest: Decoder<CreateGrantRequest> = (value, pat
     {
       validForHours: field(integerField({ min: 1, max: MAX_GRANT_VALID_FOR_HOURS, label: "validForHours" })),
       maxBytes: field(canonicalDecimal({ label: "maxBytes", positive: true })),
+      maxUploads: optional(integerField({ min: 1, max: MAX_GRANT_MAX_UPLOADS, label: "maxUploads" })),
     },
     "create grant request",
   )(value, path);
-  return { validForHours: decoded.validForHours, maxBytes: decoded.maxBytes };
+  return {
+    validForHours: decoded.validForHours,
+    maxBytes: decoded.maxBytes,
+    ...(decoded.maxUploads === undefined ? {} : { maxUploads: decoded.maxUploads }),
+  };
 };
 
 export function encodeCreateGrantRequest(request: CreateGrantRequest): Record<string, unknown> {
-  return { validForHours: request.validForHours, maxBytes: request.maxBytes.toString() };
+  // A one-time grant encodes exactly as before the batch-upload change, so a
+  // pre-batch server never sees the new field.
+  return {
+    validForHours: request.validForHours,
+    maxBytes: request.maxBytes.toString(),
+    ...(request.maxUploads === undefined || request.maxUploads === 1 ? {} : { maxUploads: request.maxUploads }),
+  };
 }
 
 /** One grant row with its owning case, as returned by grant mutations. */
@@ -61,6 +77,10 @@ export interface GrantRecord {
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly maxBytes: bigint;
+  /** Dumps the grant authorizes; 1 on records from a pre-batch server. */
+  readonly maxUploads: number;
+  /** Slots already consumed; 0 on records from a pre-batch server. */
+  readonly uploadsUsed: number;
 }
 
 export type IssuedGrant = GrantRecord & { readonly state: "issued" };
@@ -75,6 +95,8 @@ export const decodeGrantRecord: Decoder<GrantRecord> = (value, path) => {
       createdAt: field(canonicalTimestamp("createdAt")),
       expiresAt: field(canonicalTimestamp("expiresAt")),
       maxBytes: field(canonicalDecimal({ label: "maxBytes" })),
+      maxUploads: optional(integerField({ min: 1, max: MAX_GRANT_MAX_UPLOADS, label: "maxUploads" })),
+      uploadsUsed: optional(integerField({ min: 0, max: MAX_GRANT_MAX_UPLOADS, label: "uploadsUsed" })),
     },
     "grant record",
   )(value, path);
@@ -85,6 +107,8 @@ export const decodeGrantRecord: Decoder<GrantRecord> = (value, path) => {
     createdAt: decoded.createdAt,
     expiresAt: decoded.expiresAt,
     maxBytes: decoded.maxBytes,
+    maxUploads: decoded.maxUploads ?? 1,
+    uploadsUsed: decoded.uploadsUsed ?? 0,
   };
 };
 
@@ -96,6 +120,8 @@ export function encodeGrantRecord(grant: GrantRecord): Record<string, unknown> {
     createdAt: grant.createdAt,
     expiresAt: grant.expiresAt,
     maxBytes: grant.maxBytes.toString(),
+    maxUploads: grant.maxUploads,
+    uploadsUsed: grant.uploadsUsed,
   };
 }
 
