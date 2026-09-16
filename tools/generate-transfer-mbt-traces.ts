@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -11,7 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runClientGenTraces, specFromFiles } from "mirrorecma";
+import { runClientGenTraces } from "mirrorecma";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -163,8 +164,10 @@ const traceCases: readonly TraceCase[] = [
     terminalDescription: "ImportFinish with a dangling consumed grant and the skipped dump absent",
     terminalMatches: (state) =>
       importFinished(state) &&
-      isEncodedInt(sequenceSlot(state, "tokenDump", 1), "1") &&
-      isEncodedInt(sequenceSlot(state, "tokenDump", 2), "2") &&
+      isEncodedInt(sequenceSlot(state, "tokFirstDump", 1), "1") &&
+      isEncodedInt(sequenceSlot(state, "tokFirstDump", 2), "2") &&
+      isEncodedInt(sequenceSlot(state, "dumpToken", 1), "0") &&
+      isEncodedInt(sequenceSlot(state, "dumpToken", 2), "2") &&
       sequenceSlot(state, "dumpPhase", 1) === "absent" &&
       sequenceSlot(state, "dumpPhase", 2) === "available",
   },
@@ -175,7 +178,11 @@ function usage(): string {
     "usage: node dist/tools/generate-transfer-mbt-traces.js [--replace] [--mirror-bin FILE]",
     "",
     "Generates the DumpLedgerTransfer MBT trace corpus from the witness modules",
-    "in specs/mbt/ through Mirrors runClientGenTraces.",
+    "in specs/mbt/ through Mirrors runClientGenTraces. The spec closure is",
+    "flattened next to each witness copy and sent by path (never inlined): the",
+    "stdio protocol caps JSON lines at 64 KiB, which the 20-variable closure",
+    "exceeds when carried inline (post-0.0.2 mirrors deliver oversized traces",
+    "via itfTracePaths, so replies no longer need an inline-spec workaround).",
     "Without --replace, generate into a temporary directory and compare each",
     "selected trace semantically with its reviewed fixture. No fixture is written.",
     "MIRROR_BIN or MIRRORS_ROOT may supply the Mirrors executable path.",
@@ -218,6 +225,40 @@ function parseArguments(argv: readonly string[]): CliOptions | "help" {
     throw new Error("set MIRROR_BIN, set MIRRORS_ROOT, or pass --mirror-bin FILE");
   }
   return { mirrorBin: resolve(configuredMirror), replace };
+}
+
+/**
+ * Runs one witness through the mirror with the spec closure flattened next to
+ * the witness copy and passed BY PATH (no inline spec): the stdio protocol
+ * caps lines at 64 KiB and the 20-variable closure exceeds that when inlined.
+ */
+async function generateWithMirror(
+  mirrorBin: string,
+  testCase: TraceCase,
+  caseDirectory: string,
+): Promise<{ readonly itfTraces: readonly unknown[]; readonly itfTracePaths: readonly string[] }> {
+  const witnessFile = `${testCase.witnessModule}.tla`;
+  for (const moduleFile of ["DumpLedger.tla", "DumpLedgerTransfer.tla"]) {
+    await copyFile(join(specsRoot, moduleFile), join(caseDirectory, moduleFile));
+  }
+  await copyFile(join(specsRoot, "mbt", witnessFile), join(caseDirectory, witnessFile));
+  const result = await runClientGenTraces(
+    mirrorBin,
+    {
+      specPath: join(caseDirectory, witnessFile),
+      initPredicate: "WitnessInit",
+      nextPredicate: "WitnessNext",
+      invariant: "WitnessNotReached",
+      lengthBound: testCase.lengthBound,
+      paramVars: "parameters",
+    },
+    join(caseDirectory, "out"),
+    { numTraces: 1 },
+  );
+  return {
+    itfTraces: (result.itfTraces ?? []) as readonly unknown[],
+    itfTracePaths: (result.itfTracePaths ?? []) as readonly string[],
+  };
 }
 
 function normalizeJson(value: unknown, path = "$"): Json {
@@ -417,22 +458,8 @@ async function run(): Promise<void> {
       const witnessPath = join(specsRoot, "mbt", `${testCase.witnessModule}.tla`);
       const generationDirectory = join(generationRoot, testCase.witnessModule);
       await mkdir(generationDirectory, { recursive: true });
-      const spec = await specFromFiles(witnessPath, [specsRoot]);
-      const result = await runClientGenTraces(
-        options.mirrorBin,
-        {
-          specPath: witnessPath,
-          initPredicate: "WitnessInit",
-          nextPredicate: "WitnessNext",
-          invariant: "WitnessNotReached",
-          lengthBound: testCase.lengthBound,
-          paramVars: "parameters",
-        },
-        generationDirectory,
-        { numTraces: 1 },
-        { spec },
-      );
-      const traces = await generatedTraces(result.itfTraces, result.itfTracePaths);
+      const generated = await generateWithMirror(options.mirrorBin, testCase, generationDirectory);
+      const traces = await generatedTraces(generated.itfTraces, generated.itfTracePaths);
       const selected = selectUniqueTrace(testCase, traces);
       allCurrent = await compareOrReplace(testCase, selected, options.replace) && allCurrent;
     }

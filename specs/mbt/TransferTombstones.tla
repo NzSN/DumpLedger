@@ -14,7 +14,7 @@ WitnessNext ==
      /\ tokenState = <<"issued", "unused">>
      /\ BeginUploadI(1, 1)
   \/ /\ action_taken = "BeginUpload"
-     /\ tokenDump = <<1, 0>>
+     /\ dumpToken = <<1, 0>>
      /\ SealUploadI(1)
   \/ /\ action_taken = "SealUpload"
      /\ dumpPhase = <<"sealed", "absent">>
@@ -35,7 +35,7 @@ WitnessNext ==
      /\ tokenState = <<"consumed", "issued">>
      /\ BeginUploadI(2, 2)
   \/ /\ action_taken = "BeginUpload"
-     /\ tokenDump = <<1, 2>>
+     /\ dumpToken = <<1, 2>>
      /\ SealUploadI(2)
   \/ /\ action_taken = "SealUpload"
      /\ dumpPhase = <<"deleted", "sealed">>

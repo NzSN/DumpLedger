@@ -57,6 +57,9 @@ import type { Vault } from "../vault/vault.js";
 
 const MODEL_SLOTS = [1n, 2n] as const;
 const CASE_SLOTS = [1n, 2n] as const;
+/* Mirrors TokenMaxUploads == <<1, 2>> in specs/DumpLedger.tla: token slot 1
+ * models a one-time grant, slot 2 a two-slot batch grant. */
+const MODEL_TOKEN_MAX_UPLOADS = new Map<bigint, number>([[1n, 1], [2n, 2]]);
 const NO_COVERAGE = "unclassified";
 const DEFAULT_UPLOAD_BYTES = new TextEncoder().encode("DumpLedger model-based test payload");
 const EXPORT_KEY = new Uint8Array(32).fill(0x44);
@@ -310,6 +313,7 @@ export class TransferMbtHarness {
       caseId: this.cases![Number(token - 1n)]!,
       expiresAt: "2099-01-01T00:00:00.000Z",
       maxBytes: 1024n,
+      maxUploads: MODEL_TOKEN_MAX_UPLOADS.get(token) ?? 1,
     });
     const grantId = requireResult(receipt.grantId, "grantId");
     this.grants.set(token, {
@@ -550,6 +554,35 @@ export class TransferMbtHarness {
       return projection.cases.find((candidate) => candidate.caseId === caseId);
     };
 
+    // Batch-aware link model (specs/DumpLedgerTransfer.tla): dumpToken
+    // links every dump begun under a grant here (BeginUpload audit events),
+    // and a materialized import re-takes its consumed-by link (identity
+    // preservation). tokFirstDump is the raw consumed_by_dump_id column.
+    const slotByGrantId = new Map<string, bigint>(
+      [...this.grants].map(([slot, grant]) => [grant.grantId as string, slot]),
+    );
+    const liveLinkByDumpId = new Map<string, bigint>();
+    for (const event of projection.auditEvents) {
+      if (event.action !== "BeginUpload" || event.dumpId === null) continue;
+      const grantId = event.detail["grantId"];
+      if (typeof grantId !== "string") continue;
+      const slot = slotByGrantId.get(grantId);
+      if (slot === undefined) throw new Error(`BeginUpload grant ${grantId} has no model slot`);
+      liveLinkByDumpId.set(event.dumpId, slot);
+    }
+    for (const [slot, grant] of this.grants) {
+      const row = projection.grants.find((candidate) => candidate.grantId === grant.grantId);
+      const consumed = row?.consumedByDumpId;
+      if (consumed === null || consumed === undefined) continue;
+      // Import re-link: only once the dump is materialized on THIS instance
+      // (present in the projection), not merely known to the slot map, and
+      // not already linked by a local BeginUpload.
+      const materialized = projection.dumps.some((candidate) => candidate.dumpId === consumed);
+      if (materialized && !liveLinkByDumpId.has(consumed)) {
+        liveLinkByDumpId.set(consumed, slot);
+      }
+    }
+
     const state: State = {
       caseStatus: vSeqStr(CASE_SLOTS.map((modelSlot) => {
         const found = caseBySlot(modelSlot);
@@ -557,7 +590,14 @@ export class TransferMbtHarness {
         return found.status;
       })),
       tokenState: vSeqStr(MODEL_SLOTS.map((modelSlot) => grantBySlot(modelSlot)?.state ?? "unused")),
-      tokenDump: vSeqInt(MODEL_SLOTS.map((modelSlot) => {
+      tokenUploads: vSeqInt(MODEL_SLOTS.map((modelSlot) => BigInt(grantBySlot(modelSlot)?.uploadsUsed ?? 0))),
+      dumpToken: vSeqInt(MODEL_SLOTS.map((modelSlot) => {
+        const dumpId = this.dumps.get(modelSlot);
+        if (dumpId === undefined) return 0n;
+        // Unlinked dumps (imported rows carry no grant link) map to NoDump.
+        return liveLinkByDumpId.get(dumpId) ?? 0n;
+      })),
+      tokFirstDump: vSeqInt(MODEL_SLOTS.map((modelSlot) => {
         const consumed = grantBySlot(modelSlot)?.consumedByDumpId;
         if (consumed === null || consumed === undefined) return 0n;
         const mapped = this.dumpToSlot.get(consumed);
@@ -658,6 +698,7 @@ export class TransferMbtHarness {
           }
           return mapped;
         })),
+        guploads: vSeqInt(MODEL_SLOTS.map((modelSlot) => BigInt(grantRow(modelSlot)?.uploadsUsed ?? 0))),
         dcase: vSeqInt(MODEL_SLOTS.map((modelSlot) => {
           const row = dumpRow(modelSlot);
           if (row === undefined) return 0n;
@@ -688,6 +729,7 @@ export class TransferMbtHarness {
         cstat: vSeqStr(["new", "new"]),
         gstate: vSeqStr(["unused", "unused"]),
         gdump: vSeqInt([0n, 0n]),
+        guploads: vSeqInt([0n, 0n]),
         dcase: vSeqInt([0n, 0n]),
         dcov: vSeqStr([NO_COVERAGE, NO_COVERAGE]),
       },

@@ -39,7 +39,7 @@ async function positiveTraces(): Promise<string[]> {
 const EXPECTED_COVERAGE = {
   AcceptDump: 10,
   BeginPurge: 1,
-  BeginUpload: 9,
+  BeginUpload: 10,
   DeleteBundle: 1,
   ExportFail: 1,
   ExportSeal: 6,
@@ -79,8 +79,8 @@ test("transfer corpus replays to all_steps_done through the handwritten low-leve
   }
 
   assert.equal(probe.initializeCalls, 7, "each trace gets a fresh engine, vault, and exports directory");
-  assert.equal(probe.actionCalls, 137);
-  assert.equal(probe.observeCalls, 144, "one observation per model state across all seven traces");
+  assert.equal(probe.actionCalls, 138);
+  assert.equal(probe.observeCalls, 145, "one observation per model state across all seven traces");
   assert.equal(probe.sessionCreates, 13, "7 initial instances plus 6 wiped target instances");
   assert.equal(probe.sessionCloses, 13, "every instance generation is closed exactly once");
   assert.equal(probe.disposeCalls, 1);

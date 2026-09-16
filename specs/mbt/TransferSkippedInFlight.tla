@@ -1,7 +1,8 @@
 ----------------------- MODULE TransferSkippedInFlight ----------------------
 (* Pinned skip path: dump 1 is still receiving at export (left behind), so
-   its consumed grant imports with the consumed-by link dangling, while the
-   available dump 2 restores normally. *)
+   its consumed grant imports with the consumed-by link dangling
+   (tokFirstDump[1] = 1, no live dumpToken link), while the available dump 2
+   restores normally and re-takes its grant link. *)
 EXTENDS DumpLedgerTransfer
 
 WitnessInit == TransferInit /\ fingerprintMatches
@@ -18,7 +19,7 @@ WitnessNext ==
      /\ tokenState = <<"consumed", "issued">>
      /\ BeginUploadI(2, 2)
   \/ /\ action_taken = "BeginUpload"
-     /\ tokenDump = <<1, 2>>
+     /\ dumpToken = <<1, 2>>
      /\ SealUploadI(2)
   \/ /\ action_taken = "SealUpload"
      /\ PromoteI(2)
@@ -67,7 +68,8 @@ WitnessNext ==
      /\ ImportFinish
 
 WitnessNotReached ==
-  ~(bundle.status = "finished" /\ tokenDump = <<1, 2>>
+  ~(bundle.status = "finished" /\ dumpToken = <<0, 2>>
+    /\ tokFirstDump = <<1, 2>>
     /\ dumpPhase = <<"absent", "available">>
     /\ action_taken = "ImportFinish")
 

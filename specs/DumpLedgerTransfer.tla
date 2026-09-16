@@ -16,11 +16,14 @@
    be unreachable.
 
    Scope and abstractions (read before extending):
-   - DumpLedger.tla is NOT modified. The base TypeOK freezes the base wire
-     label universe and the base TokenIntegrity requires every consumed
-     grant's dump to stay associated, so this module checks
-     TransferTypeOK/TransferTokenIntegrity (below) instead; every other base
-     invariant is checked unchanged.
+   - The base spec is batch-aware (docs/batch-upload-design.md): grants are
+     multi-slot, so this module tracks tokFirstDump -- the COALESCE semantics
+     of the real consumed_by_dump_id column -- and replays per-grant upload
+     counts (guploads) through the bundle. The base TypeOK freezes the base
+     wire label universe and the base token invariants assume no dangling
+     consumed-by links, so this module checks TransferTypeOK/
+     TransferTokenIntegrity (below) instead; every other base invariant is
+     checked unchanged.
    - One bundle slot models the exports directory. Bundle "bytes" are
      abstract: integrity is represented by `bad`, at most one tampered dump,
      matching the e2e evidence (a single flipped byte) and the pipeline's
@@ -76,12 +79,13 @@ VARIABLES
                           importing instance's key? chosen once per behavior;
                           FALSE is the policy case (issued grants import as
                           revoked; grants in any other state are preserved) *)
-  \* @type: { status: Str, promised: Set(Int), rejected: Set(Int), deleted: Set(Int), bad: Int, cstat: Seq(Str), gstate: Seq(Str), gdump: Seq(Int), dcase: Seq(Int), dcov: Seq(Str) };
+  \* @type: { status: Str, promised: Set(Int), rejected: Set(Int), deleted: Set(Int), bad: Int, cstat: Seq(Str), gstate: Seq(Str), gdump: Seq(Int), guploads: Seq(Int), dcase: Seq(Int), dcov: Seq(Str) };
   bundle,    (* the single abstract bundle: promised dumps carry vault-byte
                 entries; rejected/deleted dumps are metadata-only tombstones;
                 bad is the (at most one) tampered promised dump, 0 = none;
-                cstat/gstate/gdump/dcase/dcov are the export-time snapshots of
-                caseStatus/tokenState/tokenDump/dumpCase/deleted coverage *)
+                cstat/gstate/gdump/guploads/dcase/dcov are the export-time
+                snapshots of caseStatus/tokenState/tokFirstDump/tokenUploads/
+                dumpCase/deleted coverage *)
   \* @type: Set(Int);
   custDone,  (* customer slots whose import action has run *)
   \* @type: Set(Int);
@@ -89,15 +93,21 @@ VARIABLES
   \* @type: Set(Int);
   done,      (* dump slots whose import disposition action has run *)
   \* @type: Set(Int);
-  tokDone    (* token slots whose grant-import action has run *)
+  tokDone,   (* token slots whose grant-import action has run *)
+  \* @type: Seq(Int);
+  tokFirstDump  (* token slot -> first dump begun under the grant, or 0: the
+                   consumed-by link (the real COALESCE(consumed_by_dump_id)),
+                   exported as bundle.gdump and replayed verbatim at import *)
 
-tvars == <<wiped, fingerprintMatches, bundle, custDone, caseDone, done, tokDone>>
+tvars == <<wiped, fingerprintMatches, bundle, custDone, caseDone, done, tokDone,
+           tokFirstDump>>
 
-\* @type: { status: Str, promised: Set(Int), rejected: Set(Int), deleted: Set(Int), bad: Int, cstat: Seq(Str), gstate: Seq(Str), gdump: Seq(Int), dcase: Seq(Int), dcov: Seq(Str) };
+\* @type: { status: Str, promised: Set(Int), rejected: Set(Int), deleted: Set(Int), bad: Int, cstat: Seq(Str), gstate: Seq(Str), gdump: Seq(Int), guploads: Seq(Int), dcase: Seq(Int), dcov: Seq(Str) };
 NoBundle == [status |-> "absent", promised |-> {}, rejected |-> {},
              deleted |-> {}, bad |-> 0,
              cstat |-> <<"new", "new">>, gstate |-> <<"unused", "unused">>,
-             gdump |-> <<NoDump, NoDump>>, dcase |-> <<NoCase, NoCase>>,
+             gdump |-> <<NoDump, NoDump>>, guploads |-> <<0, 0>>,
+             dcase |-> <<NoCase, NoCase>>,
              dcov |-> <<NoCoverage, NoCoverage>>]
 
 TransferInit ==
@@ -109,6 +119,7 @@ TransferInit ==
   /\ caseDone = {}
   /\ done = {}
   /\ tokDone = {}
+  /\ tokFirstDump = <<NoDump, NoDump>>
 
 (* Fresh ledger: the import precondition. BeginImport requires every table
    empty; in this abstraction that is exactly the base Init shape, and no
@@ -129,11 +140,16 @@ IssueTokenI(t) ==
   /\ caseStatus[TokenCase[t]] /= "closed"
      (* on the wiped target the case row must exist: it was imported *)
   /\ ~wiped \/ TokenCase[t] \in caseDone
+     (* slot-aliasing discipline: a token slot the bundle still carries
+        pending import may not be re-issued on the target (real grant ids
+        never collide like model slots do) *)
+  /\ bundle.status = "importing" =>
+       (t \in tokDone \/ bundle.gstate[t] = "unused")
   /\ tokenState' = [tokenState EXCEPT ![t] = "issued"]
   /\ action_taken' = "IssueToken"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
@@ -143,22 +159,29 @@ BeginUploadI(t, d) ==
   /\ d \in Dumps
   /\ tokenState[t] = "issued"
   /\ caseStatus[TokenCase[t]] /= "closed"
-  /\ tokenDump[t] = NoDump
+  /\ tokenUploads[t] < TokenMaxUploads[t]
   /\ dumpPhase[d] = "absent"
   /\ dumpCase[d] = NoCase
      (* a consumed grant's consumed-by link owns its dump slot forever:
         post-wipe that link may dangle onto a skipped dump, and the slot
         must never host a different live dump (reality: different real id).
-        Neither an installed link (tokenDump) nor a link the sealed bundle
+        Neither an installed link (dumpToken) nor a link the sealed bundle
         still carries pending import (gdump of a grant not yet imported)
         may be displaced; and while an import is running, a slot the bundle
         will materialize is equally off-limits. *)
-  /\ \A x \in Tokens: tokenDump[x] /= d
+  /\ dumpToken[d] = NoDump
+     (* every consumed-by link -- begun locally or imported, dangling or
+        not -- owns its dump slot forever and may never be displaced *)
+  /\ \A x \in Tokens: tokFirstDump[x] /= d
   /\ \A x \in Tokens: x \notin tokDone => bundle.gdump[x] /= d
   /\ bundle.status = "importing" =>
        d \notin (bundle.promised \cup bundle.rejected \cup bundle.deleted)
-  /\ tokenState' = [tokenState EXCEPT ![t] = "consumed"]
-  /\ tokenDump' = [tokenDump EXCEPT ![t] = d]
+  /\ tokenUploads' = [tokenUploads EXCEPT ![t] = @ + 1]
+  /\ tokenState' = [tokenState EXCEPT ![t] =
+                     IF tokenUploads[t] + 1 >= TokenMaxUploads[t]
+                     THEN "consumed" ELSE "issued"]
+  /\ dumpToken' = [dumpToken EXCEPT ![d] = t]
+  /\ tokFirstDump' = [tokFirstDump EXCEPT ![t] = IF @ = NoDump THEN d ELSE @]
   /\ dumpPhase' = [dumpPhase EXCEPT ![d] = "receiving"]
   /\ dumpCase' = [dumpCase EXCEPT ![d] = TokenCase[t]]
   /\ blobState' = [blobState EXCEPT ![d] = "staging"]
@@ -178,7 +201,7 @@ SealUploadI(d) ==
   /\ action_taken' = "SealUpload"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  validation, coverage, downloadable, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
 
@@ -190,7 +213,7 @@ PromoteI(d) ==
   /\ action_taken' = "PromoteObject"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  digestRecorded, validation, coverage, downloadable, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
@@ -204,7 +227,7 @@ QuarantineI(d) ==
   /\ action_taken' = "MarkQuarantined"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
@@ -221,7 +244,7 @@ AcceptI(d, kind) ==
   /\ downloadable' = downloadable \cup {d}
   /\ action_taken' = "AcceptDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d, kind |-> kind]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, bundle, done, tokDone, fingerprintMatches,
                  custDone, caseDone, wiped>>
 
@@ -234,7 +257,7 @@ RejectI(d) ==
   /\ action_taken' = "RejectDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, coverage, downloadable, bundle, done,
                  tokDone, fingerprintMatches, custDone, caseDone, wiped>>
 
@@ -249,7 +272,7 @@ BeginPurgeI(d) ==
   /\ action_taken' = "BeginPurge"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase, blobState,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, validation, coverage, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
 
@@ -261,7 +284,7 @@ FinishPurgeI(d) ==
   /\ action_taken' = "FinishPurge"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase,
                  digestRecorded, validation, coverage, downloadable, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
@@ -284,7 +307,8 @@ ExportStart ==
                 bad |-> 0,
                 cstat |-> <<caseStatus[1], caseStatus[2]>>,
                 gstate |-> <<tokenState[1], tokenState[2]>>,
-                gdump |-> <<tokenDump[1], tokenDump[2]>>,
+                gdump |-> <<tokFirstDump[1], tokFirstDump[2]>>,
+                guploads |-> <<tokenUploads[1], tokenUploads[2]>>,
                 dcase |-> <<dumpCase[1], dumpCase[2]>>,
                 dcov |-> <<IF dumpPhase[1] = "deleted" THEN coverage[1]
                              ELSE NoCoverage,
@@ -297,7 +321,7 @@ ExportStart ==
   /\ action_taken' = "ExportStart"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, fingerprintMatches, wiped>>
 
@@ -307,7 +331,7 @@ ExportSeal ==
   /\ action_taken' = "ExportSeal"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
@@ -318,7 +342,7 @@ ExportFail ==
   /\ action_taken' = "ExportFail"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
@@ -332,7 +356,7 @@ TamperBundle(d) ==
   /\ action_taken' = "TamperBundle"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
@@ -346,7 +370,7 @@ DeleteBundle ==
   /\ action_taken' = "DeleteBundle"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, fingerprintMatches, done, tokDone, custDone,
                  caseDone, wiped>>
@@ -361,7 +385,9 @@ WipeInstance ==
   /\ ~FreshLedger
   /\ caseStatus' = <<"new", "new">>        (* tuple literals: the vars are *)
   /\ tokenState' = <<"unused", "unused">>  (* typed Seq(..) in the base    *)
-  /\ tokenDump' = <<NoDump, NoDump>>       (* spec; [x \in 1..2 |-> v]     *)
+  /\ tokenUploads' = <<0, 0>>               (* spec; [x \in 1..2 |-> v]     *)
+  /\ dumpToken' = <<NoDump, NoDump>>
+  /\ tokFirstDump' = <<NoDump, NoDump>>
   /\ dumpPhase' = <<"absent", "absent">>   (* would not type-unify under   *)
   /\ dumpCase' = <<NoCase, NoCase>>        (* Apalache's Snowcat           *)
   /\ blobState' = <<"none", "none">>
@@ -393,7 +419,7 @@ ImportStart ==
   /\ action_taken' = "ImportStart"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, fingerprintMatches, wiped>>
 
@@ -409,7 +435,7 @@ ImportCustomer(c) ==
   /\ action_taken' = "ImportCustomer"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, fingerprintMatches, bundle, caseDone, done,
                  tokDone, wiped>>
@@ -426,7 +452,7 @@ ImportCase(c) ==
   /\ action_taken' = "ImportCase"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenState, tokenDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable,
                  fingerprintMatches, bundle, custDone, done, tokDone, wiped>>
 
@@ -446,14 +472,15 @@ ImportTokens(t) ==
   /\ tokenState' = [tokenState EXCEPT ![t] =
        IF ~fingerprintMatches /\ bundle.gstate[t] = "issued"
          THEN "revoked" ELSE bundle.gstate[t]]
-  /\ tokenDump' = [tokenDump EXCEPT ![t] = bundle.gdump[t]]
+  /\ tokFirstDump' = [tokFirstDump EXCEPT ![t] = bundle.gdump[t]]
+  /\ tokenUploads' = [tokenUploads EXCEPT ![t] = bundle.guploads[t]]
   /\ tokDone' = tokDone \cup {t}
   /\ action_taken' = "ImportTokens"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, dumpPhase, dumpCase, blobState, digestRecorded,
-                 validation, coverage, downloadable, bundle, done,
-                 fingerprintMatches, custDone, caseDone, wiped>>
+  /\ UNCHANGED <<caseStatus, dumpToken, dumpPhase, dumpCase, blobState,
+                 digestRecorded, validation, coverage, downloadable, bundle,
+                 done, fingerprintMatches, custDone, caseDone, wiped>>
 
 (* Verified bytes: staged and hashed to match the manifest, the row is
    created sealed/staging exactly like a sealed upload, then the shared
@@ -466,17 +493,25 @@ ImportDumpOk(d, c) ==
   /\ c \in Cases
   /\ c \in caseDone             (* FK: the case row exists *)
   /\ c = bundle.dcase[d]        (* the manifest fixes the association *)
+  /\ {t \in Tokens: bundle.gstate[t] /= "unused"} \subseteq tokDone
+     (* grants import before dumps (the real dependency order): the
+        consumed-by re-link needs the grant row present *)
   /\ dumpPhase[d] = "absent"
   /\ dumpCase[d] = NoCase
   /\ dumpPhase' = [dumpPhase EXCEPT ![d] = "sealed"]
   /\ blobState' = [blobState EXCEPT ![d] = "staging"]
   /\ dumpCase' = [dumpCase EXCEPT ![d] = c]
+    (* identity preservation: a materialized dump re-takes its grant link
+        -- the real consumed_by_dump_id references the preserved dump id *)
+  /\ dumpToken' = [dumpToken EXCEPT ![d] =
+       IF tokFirstDump[1] = d THEN 1
+       ELSE IF tokFirstDump[2] = d THEN 2 ELSE @]
   /\ digestRecorded' = digestRecorded \cup {d}
   /\ done' = done \cup {d}
   /\ action_taken' = "ImportDumpOk"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, validation, coverage,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, validation, coverage,
                  downloadable, bundle, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
@@ -490,6 +525,9 @@ ImportDumpReject(d, c) ==
   /\ c \in Cases
   /\ c \in caseDone             (* FK: the case row exists *)
   /\ c = bundle.dcase[d]
+  /\ {t \in Tokens: bundle.gstate[t] /= "unused"} \subseteq tokDone
+     (* grants import before dumps (the real dependency order): the
+        consumed-by re-link needs the grant row present *)
   /\ dumpPhase[d] = "absent"
   /\ dumpCase[d] = NoCase
   /\ dumpPhase' = [dumpPhase EXCEPT ![d] = "rejected"]
@@ -497,11 +535,16 @@ ImportDumpReject(d, c) ==
   /\ dumpCase' = [dumpCase EXCEPT ![d] = c]
   /\ digestRecorded' = digestRecorded \cup {d}
   /\ validation' = [validation EXCEPT ![d] = "transfer-failed"]
+    (* identity preservation: a materialized dump re-takes its grant link
+        -- the real consumed_by_dump_id references the preserved dump id *)
+  /\ dumpToken' = [dumpToken EXCEPT ![d] =
+       IF tokFirstDump[1] = d THEN 1
+       ELSE IF tokFirstDump[2] = d THEN 2 ELSE @]
   /\ done' = done \cup {d}
   /\ action_taken' = "ImportDumpReject"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, coverage, downloadable,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -517,6 +560,9 @@ ImportDumpTombR(d, c) ==
   /\ c \in Cases
   /\ c \in caseDone             (* FK: the case row exists *)
   /\ c = bundle.dcase[d]
+  /\ {t \in Tokens: bundle.gstate[t] /= "unused"} \subseteq tokDone
+     (* grants import before dumps (the real dependency order): the
+        consumed-by re-link needs the grant row present *)
   /\ dumpPhase[d] = "absent"
   /\ dumpCase[d] = NoCase
   /\ dumpPhase' = [dumpPhase EXCEPT ![d] = "rejected"]
@@ -524,11 +570,16 @@ ImportDumpTombR(d, c) ==
   /\ dumpCase' = [dumpCase EXCEPT ![d] = c]
   /\ digestRecorded' = digestRecorded \cup {d}
   /\ validation' = [validation EXCEPT ![d] = "invalid"]
+    (* identity preservation: a materialized dump re-takes its grant link
+        -- the real consumed_by_dump_id references the preserved dump id *)
+  /\ dumpToken' = [dumpToken EXCEPT ![d] =
+       IF tokFirstDump[1] = d THEN 1
+       ELSE IF tokFirstDump[2] = d THEN 2 ELSE @]
   /\ done' = done \cup {d}
   /\ action_taken' = "ImportDumpTombR"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, coverage, downloadable,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -538,6 +589,9 @@ ImportDumpTombD(d, c) ==
   /\ c \in Cases
   /\ c \in caseDone             (* FK: the case row exists *)
   /\ c = bundle.dcase[d]
+  /\ {t \in Tokens: bundle.gstate[t] /= "unused"} \subseteq tokDone
+     (* grants import before dumps (the real dependency order): the
+        consumed-by re-link needs the grant row present *)
   /\ dumpPhase[d] = "absent"
   /\ dumpCase[d] = NoCase
   /\ dumpPhase' = [dumpPhase EXCEPT ![d] = "deleted"]
@@ -547,11 +601,16 @@ ImportDumpTombD(d, c) ==
   /\ validation' = [validation EXCEPT ![d] =
        IF bundle.dcov[d] = NoCoverage THEN "invalid" ELSE "valid"]
   /\ coverage' = [coverage EXCEPT ![d] = bundle.dcov[d]]
+    (* identity preservation: a materialized dump re-takes its grant link
+        -- the real consumed_by_dump_id references the preserved dump id *)
+  /\ dumpToken' = [dumpToken EXCEPT ![d] =
+       IF tokFirstDump[1] = d THEN 1
+       ELSE IF tokFirstDump[2] = d THEN 2 ELSE @]
   /\ done' = done \cup {d}
   /\ action_taken' = "ImportDumpTombD"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, downloadable, bundle,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, downloadable, bundle,
                  tokDone, fingerprintMatches, custDone, caseDone, wiped>>
 
 (* FinishImport requires every declared dump disposed of and every exported
@@ -566,7 +625,7 @@ ImportFinish ==
   /\ action_taken' = "ImportFinish"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
@@ -579,7 +638,7 @@ ImportHardFail ==
   /\ action_taken' = "ImportHardFail"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
@@ -611,10 +670,11 @@ TransferNext ==
   \/ ImportFinish
   \/ ImportHardFail
 
-allVars == <<caseStatus, tokenState, tokenDump, dumpPhase, dumpCase,
-             blobState, digestRecorded, validation, coverage, downloadable,
-             action_taken, parameters, wiped, fingerprintMatches, bundle,
-             custDone, caseDone, done, tokDone>>
+allVars == <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase,
+             dumpCase, blobState, digestRecorded, validation, coverage,
+             downloadable, action_taken, parameters, wiped,
+             fingerprintMatches, bundle, custDone, caseDone, done, tokDone,
+             tokFirstDump>>
 
 TransferSpec == TransferInit /\ [][TransferNext]_allVars
 
@@ -635,6 +695,7 @@ BundleTypeOK ==
   /\ \A c \in Cases: bundle.cstat[c] \in CaseStatuses
   /\ \A t \in Tokens: bundle.gstate[t] \in TokenStates
   /\ \A t \in Tokens: bundle.gdump[t] \in Dumps \cup {NoDump}
+  /\ \A t \in Tokens: bundle.guploads[t] \in 0..TokenMaxUploads[t]
   /\ \A d \in Dumps: bundle.dcase[d] \in Cases \cup {NoCase}
   /\ \A d \in Dumps: bundle.dcov[d] \in CoverageKinds \cup {NoCoverage}
   /\ custDone \subseteq Customers
@@ -681,6 +742,8 @@ EntityOrder ==
   /\ \A c \in caseDone: CaseCustomer[c] \in custDone
   /\ \A t \in tokDone: TokenCase[t] \in caseDone
   /\ \A d \in done: dumpCase[d] \in caseDone
+  /\ \A d \in done:
+       {t \in Tokens: bundle.gstate[t] /= "unused"} \subseteq tokDone
 
 TransferSafety ==
   /\ BundleTypeOK
@@ -715,8 +778,12 @@ TransferTypeOK ==
   /\ \A c \in Cases: caseStatus[c] \in CaseStatuses
   /\ Len(tokenState) = Cardinality(Tokens)
   /\ \A t \in Tokens: tokenState[t] \in TokenStates
-  /\ Len(tokenDump) = Cardinality(Tokens)
-  /\ \A t \in Tokens: tokenDump[t] \in Dumps \cup {NoDump}
+  /\ Len(dumpToken) = Cardinality(Dumps)
+  /\ \A d \in Dumps: dumpToken[d] \in Tokens \cup {NoDump}
+  /\ Len(tokenUploads) = Cardinality(Tokens)
+  /\ \A t \in Tokens: tokenUploads[t] \in 0..TokenMaxUploads[t]
+  /\ Len(tokFirstDump) = Cardinality(Tokens)
+  /\ \A t \in Tokens: tokFirstDump[t] \in Dumps \cup {NoDump}
   /\ Len(dumpPhase) = Cardinality(Dumps)
   /\ \A d \in Dumps: dumpPhase[d] \in DumpPhases
   /\ Len(dumpCase) = Cardinality(Dumps)
@@ -731,18 +798,25 @@ TransferTypeOK ==
   /\ downloadable \subseteq Dumps
   /\ TransferAnnotationOK
 
-(* The base TokenIntegrity with one transfer-aware relaxation: a consumed
-   grant may reference a dump that was skipped at export (left in-flight);
-   that dump never materializes on the target, so the association clause only
-   applies when the dump is present. Uniqueness is unchanged. *)
+(* The batch-aware token invariants with one transfer-aware relaxation: an
+   imported grant may out-count its live dump links (exported-but-skipped
+   dumps dangle; imported dumps carry no grant link), so the count clause is
+   a lower bound and the consumed-by association only applies when the
+   referenced dump is present. Dump uniqueness is inherent in dumpToken. *)
 TransferTokenIntegrity ==
   /\ \A t \in Tokens:
-       (tokenState[t] = "consumed") <=> (tokenDump[t] \in Dumps)
+       (tokenState[t] = "consumed") <=> (tokenUploads[t] = TokenMaxUploads[t])
   /\ \A t \in Tokens:
-       (tokenDump[t] \in Dumps /\ dumpPhase[tokenDump[t]] /= "absent") =>
-         dumpCase[tokenDump[t]] = TokenCase[t]
-  /\ \A t1, t2 \in Tokens:
-       (tokenDump[t1] = tokenDump[t2] /\ tokenDump[t1] \in Dumps) => t1 = t2
+       tokenUploads[t] <= TokenMaxUploads[t]
+  /\ \A t \in Tokens:
+       tokenUploads[t] >=
+         (IF dumpToken[1] = t THEN 1 ELSE 0) + (IF dumpToken[2] = t THEN 1 ELSE 0)
+  /\ \A d \in Dumps:
+       (dumpToken[d] \in Tokens /\ dumpPhase[d] /= "absent") =>
+         dumpCase[d] = TokenCase[dumpToken[d]]
+  /\ \A t \in Tokens:
+       (tokFirstDump[t] \in Dumps /\ dumpPhase[tokFirstDump[t]] /= "absent") =>
+         dumpToken[tokFirstDump[t]] = t
 
 (* Combined check target: the base lifecycle invariants (with the
    transfer-aware type/token replacements) must hold for dumps and grants

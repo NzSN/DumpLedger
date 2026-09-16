@@ -1,0 +1,620 @@
+{
+  "schema": "mirrors.model-interface/v1",
+  "interfaceVersion": "1.0.0",
+  "model": {
+    "module": "DumpLedgerTransfer",
+    "source": "specs/DumpLedgerTransfer.tla"
+  },
+  "wire": {
+    "actionVariable": "action_taken",
+    "parameterVariable": "parameters"
+  },
+  "actions": [
+    {
+      "id": "AcceptDump",
+      "wireAction": "AcceptDump",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        },
+        {
+          "id": "Kind",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "kind"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "BeginPurge",
+      "wireAction": "BeginPurge",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "BeginUpload",
+      "wireAction": "BeginUpload",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Token",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
+          }
+        },
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "DeleteBundle",
+      "wireAction": "DeleteBundle",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "ExportFail",
+      "wireAction": "ExportFail",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "ExportSeal",
+      "wireAction": "ExportSeal",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "ExportStart",
+      "wireAction": "ExportStart",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "FinishPurge",
+      "wireAction": "FinishPurge",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportCase",
+      "wireAction": "ImportCase",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportCustomer",
+      "wireAction": "ImportCustomer",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportDumpOk",
+      "wireAction": "ImportDumpOk",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        },
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportDumpReject",
+      "wireAction": "ImportDumpReject",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        },
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportDumpTombD",
+      "wireAction": "ImportDumpTombD",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        },
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportDumpTombR",
+      "wireAction": "ImportDumpTombR",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        },
+        {
+          "id": "Case",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "case"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ImportFinish",
+      "wireAction": "ImportFinish",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "ImportHardFail",
+      "wireAction": "ImportHardFail",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "ImportStart",
+      "wireAction": "ImportStart",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
+      "id": "ImportTokens",
+      "wireAction": "ImportTokens",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Token",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "IssueToken",
+      "wireAction": "IssueToken",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Token",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "token"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "MarkQuarantined",
+      "wireAction": "MarkQuarantined",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PromoteObject",
+      "wireAction": "PromoteObject",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "RejectDump",
+      "wireAction": "RejectDump",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "SealUpload",
+      "wireAction": "SealUpload",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "TamperBundle",
+      "wireAction": "TamperBundle",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "WipeInstance",
+      "wireAction": "WipeInstance",
+      "wireAliases": [],
+      "inputs": []
+    }
+  ],
+  "initializers": [
+    {
+      "id": "Initialize",
+      "wireAction": "Init",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "FingerprintMatches",
+          "from": {
+            "root": "initialState",
+            "path": [
+              {
+                "field": "fingerprintMatches"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "id": "CaseStatus",
+      "wireName": "caseStatus",
+      "provenance": "implementation"
+    },
+    {
+      "id": "TokenState",
+      "wireName": "tokenState",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DumpToken",
+      "wireName": "dumpToken",
+      "provenance": "implementation"
+    },
+    {
+      "id": "TokenUploads",
+      "wireName": "tokenUploads",
+      "provenance": "implementation"
+    },
+    {
+      "id": "TokFirstDump",
+      "wireName": "tokFirstDump",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DumpPhase",
+      "wireName": "dumpPhase",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DumpCase",
+      "wireName": "dumpCase",
+      "provenance": "implementation"
+    },
+    {
+      "id": "BlobState",
+      "wireName": "blobState",
+      "provenance": "implementation"
+    },
+    {
+      "id": "DigestRecorded",
+      "wireName": "digestRecorded",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Validation",
+      "wireName": "validation",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Coverage",
+      "wireName": "coverage",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Downloadable",
+      "wireName": "downloadable",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Wiped",
+      "wireName": "wiped",
+      "provenance": "implementation"
+    },
+    {
+      "id": "FingerprintMatches",
+      "wireName": "fingerprintMatches",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Bundle",
+      "wireName": "bundle",
+      "provenance": "implementation"
+    },
+    {
+      "id": "CustDone",
+      "wireName": "custDone",
+      "provenance": "implementation"
+    },
+    {
+      "id": "CaseDone",
+      "wireName": "caseDone",
+      "provenance": "implementation"
+    },
+    {
+      "id": "Done",
+      "wireName": "done",
+      "provenance": "implementation"
+    },
+    {
+      "id": "TokDone",
+      "wireName": "tokDone",
+      "provenance": "implementation"
+    }
+  ]
+}

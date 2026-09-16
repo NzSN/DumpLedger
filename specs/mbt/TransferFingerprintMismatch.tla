@@ -1,7 +1,9 @@
 --------------------- MODULE TransferFingerprintMismatch --------------------
 (* Pinned policy path: the importing instance's grant key differs from the
    bundle's fingerprint, so a grant that was still "issued" at export lands
-   revoked, while the consumed grant (and its dump) is preserved. *)
+   revoked, while the consumed grant (and its dump) is preserved. Batch-aware
+   shape: grant 2 is a two-slot grant, so it takes BOTH dumps to reach
+   "consumed"; its second upload stays in-flight and is skipped at export. *)
 EXTENDS DumpLedgerTransfer
 
 WitnessInit == TransferInit /\ ~fingerprintMatches
@@ -24,6 +26,10 @@ WitnessNext ==
   \/ /\ action_taken = "MarkQuarantined"
      /\ AcceptI(2, "unknown")
   \/ /\ action_taken = "AcceptDump"
+     /\ BeginUploadI(2, 1)
+  \/ /\ action_taken = "BeginUpload"
+     /\ dumpToken = <<2, 2>>
+     /\ tokenUploads = <<0, 2>>
      /\ ExportStart
   \/ /\ action_taken = "ExportStart"
      /\ ExportSeal

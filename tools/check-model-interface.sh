@@ -53,9 +53,35 @@ if ! cmp -s "$coverage" "$actual_coverage"; then
   exit 1
 fi
 
+# DumpLedgerTransfer (batch-aware, 20 variables): async adapter check + coverage.
+transfer_evidence="$repo_root/test/fixtures/mbt/transfer-traces/01-round-trip-available.itf.json"
+transfer_coverage="$repo_root/model-interface/DumpLedgerTransfer.mirror-interface.coverage.json"
+actual_transfer_coverage="$check_tmp/transfer-coverage.json"
+
+"$compiler" check \
+  --spec "$repo_root/specs/DumpLedgerTransfer.tla" \
+  --contract "$repo_root/model-interface/DumpLedgerTransfer.mirror-interface.json" \
+  --evidence "$transfer_evidence" \
+  --param-var parameters \
+  --lock "$repo_root/model-interface/DumpLedgerTransfer.mirror-interface.lock.json" \
+  --target mirrorecma-async-v1 \
+  --out "$repo_root/src/generated/dump-ledger-transfer" \
+  --diagnostics json
+
+"$compiler" preflight \
+  --lock "$repo_root/model-interface/DumpLedgerTransfer.mirror-interface.lock.json" \
+  --trace "$repo_root/test/fixtures/mbt/transfer-traces" \
+  --require-all-actions >"$actual_transfer_coverage"
+
+if ! cmp -s "$transfer_coverage" "$actual_transfer_coverage"; then
+  echo "DumpLedgerTransfer model-interface coverage report is stale" >&2
+  diff -u "$transfer_coverage" "$actual_transfer_coverage" >&2 || true
+  exit 1
+fi
+
 expect_preflight_failure mismatched-types.itf.json MIC-C-EVIDENCE-001 mismatched-types
 expect_preflight_failure missing-observation.itf.json MIC-P-TRACE-001 missing-observation
 expect_preflight_failure unknown-action.itf.json MIC-P-ACTION-001 unknown-action
 expect_preflight_failure wrong-kind-type.itf.json MIC-P-VALUE-001 wrong-kind-type
 
-echo "DumpLedger model interface, exhaustive action coverage, and negative diagnostics are current"
+echo "DumpLedger and DumpLedgerTransfer model interfaces, exhaustive action coverage, and negative diagnostics are current"
