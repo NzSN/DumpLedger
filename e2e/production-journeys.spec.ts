@@ -168,6 +168,19 @@ test("(a) operator login, dashboard, customer, case, workflow, and grant issue",
   expect(shareUrl.startsWith(`${state.baseURL}/upload#grant=`)).toBe(true);
 });
 
+test("(a2) the individual customer panel lists its cases and links through", async () => {
+  const page = operatorPage as Page;
+  await page.goto("/");
+  const acmeCard = page.locator(".customer-card", { hasText: "Acme E2E" });
+  await acmeCard.getByRole("link", { name: "Open customer", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Acme E2E" })).toBeVisible();
+  const caseRow = page.getByRole("link", { name: /Renderer crash on startup/ });
+  await expect(caseRow).toBeVisible();
+  await caseRow.click();
+  await expect(page.getByRole("heading", { name: "Case detail" })).toBeVisible();
+  await expect(page.getByText("Renderer crash on startup", { exact: true })).toBeVisible();
+});
+
 test("(b) public fragment upload streams the synthetic minidump to a terminal state", async ({ browser }: { browser: Browser }) => {
   expect(shareUrl).not.toBe("");
   const publicContext = await browser.newContext();

@@ -23,6 +23,7 @@ import {
   decodeCreateCaseResponse,
   decodeCreateCustomerRequest,
   decodeCreateCustomerResponse,
+  decodeCustomerDetailResponse,
   decodeCreateGrantRequest,
   decodeGrantQuotaResponse,
   decodeCreateGrantResponse,
@@ -54,6 +55,7 @@ import {
   encodeCreateCaseRequest,
   encodeCreateCaseResponse,
   encodeCreateCustomerRequest,
+  encodeCustomerDetailResponse,
   encodeCreateCustomerResponse,
   encodeCreateGrantRequest,
   encodeGrantQuotaResponse,
@@ -83,6 +85,7 @@ import {
   toJsonText,
   type Decoder,
   type CaseDetailResponse,
+  type CustomerDetailResponse,
   type CaseDumpSummary,
   type CaseGrantSummary,
   type CaseSearchResponse,
@@ -411,6 +414,33 @@ describe("case transitions (7.4)", () => {
           "$",
         ),
       /count must match/,
+    );
+  });
+});
+
+describe("customer detail panel", () => {
+  const detail: CustomerDetailResponse = {
+    customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp", createdAt: NOW },
+    cases: [
+      {
+        caseId: ID_CASE,
+        customerId: ID_CUSTOMER,
+        title: "Crash on 1.4.2",
+        status: "investigating",
+        createdAt: NOW,
+      },
+    ],
+  };
+  it("round-trips the customer detail response", () => {
+    assert.deepEqual(roundTripJson(detail, encodeCustomerDetailResponse, decodeCustomerDetailResponse), detail);
+  });
+  it("rejects a non-canonical createdAt on the customer record", () => {
+    expectDecodeError(
+      () => decodeCustomerDetailResponse(
+        { customer: { ...detail.customer, createdAt: "yesterday" }, cases: [] },
+        "$",
+      ),
+      /canonical/,
     );
   });
 });

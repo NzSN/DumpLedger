@@ -7,6 +7,7 @@ import type {
   CaseSearchParams,
   CaseSearchResponse,
   CaseSummary,
+  CustomerDetailResponse,
   DashboardResponse,
   DumpDetailResponse,
   GrantQuotaResponse,
@@ -48,6 +49,7 @@ export type CaseTransitionOutcome =
  */
 export interface HttpApplicationPort {
   createCustomer(displayName: string): MutationResult;
+  customerDetail(customerId: string): CustomerDetailResponse | undefined;
   createCase(customerId: string, title: string): MutationResult;
   issueGrant(caseId: string, expiresAt: number, maxBytes: bigint, maxUploads?: number): MutationResult;
   /** Public grant-quota query (batch upload design); undefined hides unknown/revoked/expired secrets. */

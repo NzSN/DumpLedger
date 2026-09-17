@@ -14,6 +14,7 @@ import { LoginPage } from "../features/auth/LoginPage";
 import { UploadPage } from "../features/uploads/UploadPage";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { CustomersPage } from "../features/customers/CustomersPage";
+import { CustomerDetailPage } from "../features/customers/CustomerDetailPage";
 import { CasesPage } from "../features/cases/CasesPage";
 import { CaseDetailPage } from "../features/cases/CaseDetailPage";
 import { DumpsPage } from "../features/dumps/DumpsPage";
@@ -37,6 +38,7 @@ export const appRouteObjects: readonly RouteObject[] = [
         children: [
           { index: true, element: <DashboardPage /> },
           { path: "customers", element: <CustomersPage /> },
+          { path: "customers/:customerId", element: <CustomerDetailPage /> },
           { path: "cases", element: <CasesPage /> },
           { path: "cases/:caseId", element: <CaseDetailPage /> },
           { path: "dumps", element: <DumpsPage /> },

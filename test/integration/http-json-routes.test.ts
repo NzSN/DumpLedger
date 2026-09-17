@@ -8,6 +8,7 @@ import {
   decodeCaseSummary,
   decodeCreateCustomerResponse,
   decodeCreateGrantResponse,
+  decodeCustomerDetailResponse,
   decodeGrantQuotaResponse,
   decodeDashboardResponse,
   decodeDumpDetailResponse,
@@ -801,4 +802,38 @@ test("batch grant: quota progression, sequential uploads, exhaustion, and revoke
   });
   assert.equal(tooMany.statusCode, 400);
   assert.deepEqual(decodeError(tooMany), { code: "invalid_request", retryable: false });
+});
+
+test("customer detail panel: 200 with bounded cases, 404 unknown, 401 unauthenticated", async t => {
+  const { server, engine } = await makeFixture();
+  t.after(async () => { await server.close(); engine.close(); });
+  const auth = await loginJson(server);
+
+  const customer = decodeCreateCustomerResponse(
+    (await postJson(server, "/api/v1/customers", auth.cookie, auth.csrf, { displayName: "Acme" })).json(), "$",
+  ).customer;
+  const other = decodeCreateCustomerResponse(
+    (await postJson(server, "/api/v1/customers", auth.cookie, auth.csrf, { displayName: "Globex" })).json(), "$",
+  ).customer;
+  const caseA = decodeCaseSummary(
+    (await postJson(server, `/api/v1/customers/${customer.customerId}/cases`, auth.cookie, auth.csrf, { title: "Crash A" })).json(), "$",
+  );
+  const caseB = decodeCaseSummary(
+    (await postJson(server, `/api/v1/customers/${customer.customerId}/cases`, auth.cookie, auth.csrf, { title: "Crash B" })).json(), "$",
+  );
+  await postJson(server, `/api/v1/customers/${other.customerId}/cases`, auth.cookie, auth.csrf, { title: "Not theirs" });
+
+  const detail = await server.inject({ method: "GET", url: `/api/v1/customers/${customer.customerId}`, headers: { cookie: auth.cookie } });
+  assert.equal(detail.statusCode, 200);
+  const decoded = decodeCustomerDetailResponse(detail.json(), "$");
+  assert.equal(decoded.customer.displayName, "Acme");
+  assert.equal(decoded.customer.createdAt, "2026-09-04T12:00:00.000Z");
+  assert.deepEqual(decoded.cases.map(item => item.caseId), [caseA.caseId, caseB.caseId]);
+
+  const unknown = await server.inject({ method: "GET", url: "/api/v1/customers/customer_01JTEST0000000000000000ZZZ", headers: { cookie: auth.cookie } });
+  assert.equal(unknown.statusCode, 404);
+  assert.deepEqual(decodeError(unknown), { code: "not_found", retryable: false });
+
+  const anon = await server.inject({ method: "GET", url: `/api/v1/customers/${customer.customerId}` });
+  assert.equal(anon.statusCode, 401);
 });

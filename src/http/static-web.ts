@@ -32,6 +32,7 @@ const INDEX_ROUTES: readonly string[] = [
   "/upload",
   "/customers",
   "/cases",
+  "/customers/:customerId",
   "/cases/:caseId",
   "/dumps",
   "/dumps/:dumpId",

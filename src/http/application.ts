@@ -7,6 +7,7 @@ import {
   type CaseSearchParams,
   type CaseSearchResponse,
   type CaseSummary,
+  type CustomerDetailResponse,
   type DashboardResponse,
   type DumpDetailResponse,
   type GrantRecord,
@@ -46,6 +47,28 @@ export class EngineHttpApplication implements HttpApplicationPort {
   ) {
     const candidate = vault as Partial<SymbolVault>;
     this.symbolVault = typeof candidate.openSymbol === "function" ? (candidate as SymbolVault) : undefined;
+  }
+
+  customerDetail(customerIdText: string): CustomerDetailResponse | undefined {
+    let customerId;
+    try { customerId = parseCustomerId(customerIdText); } catch { return undefined; }
+    const projection = this.engine.snapshot();
+    const customer = projection.customers.find(candidate => candidate.customerId === customerId);
+    if (customer === undefined) return undefined;
+    const cases = projection.cases
+      .filter(candidate => candidate.customerId === customerId)
+      .slice(-MAX_CASE_LIST_ITEMS)
+      .map(item => ({
+        caseId: item.caseId,
+        customerId: item.customerId,
+        title: item.title,
+        status: item.status,
+        createdAt: item.createdAt,
+      }));
+    return {
+      customer: { customerId: customer.customerId, displayName: customer.displayName, createdAt: customer.createdAt },
+      cases,
+    };
   }
 
   createCustomer(displayName: string) {

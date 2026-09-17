@@ -118,6 +118,9 @@ export function CustomerCard({ customer, onCaseCreated }: CustomerCardProps): Re
       <div>
         <span className="customer-name">{customer.displayName}</span>
         <div className="mono subtle-id">{customer.customerId}</div>
+        <Link className="button button-secondary button-small" to={`/customers/${encodeURIComponent(customer.customerId)}`}>
+          Open customer
+        </Link>
       </div>
       <CreateCaseForm
         customerId={customer.customerId}

@@ -12,6 +12,7 @@
 
 import {
   arrayOf,
+  canonicalTimestamp,
   counterField,
   field,
   identifierField,
@@ -22,6 +23,7 @@ import {
 import {
   decodeCaseSummary,
   encodeCaseSummary,
+  MAX_CASE_LIST_ITEMS,
   type CaseSummary,
 } from "./cases.js";
 
@@ -147,5 +149,63 @@ export function encodeDashboardResponse(response: DashboardResponse): Record<str
     counts: encodeDashboardCounts(response.counts),
     customers: response.customers.map(encodeCustomerSummary),
     recentCases: response.recentCases.map(encodeCaseSummary),
+  };
+}
+
+/** One customer record with its creation timestamp (detail panel). */
+export interface CustomerDetail {
+  readonly customerId: string;
+  readonly displayName: string;
+  readonly createdAt: string;
+}
+
+export const decodeCustomerDetail: Decoder<CustomerDetail> = (value, path) => {
+  const decoded = object(
+    {
+      customerId: field(identifierField("customerId")),
+      displayName: field(text({ max: MAX_DISPLAY_NAME_LENGTH, label: "displayName" })),
+      createdAt: field(canonicalTimestamp("createdAt")),
+    },
+    "customer detail",
+  )(value, path);
+  return {
+    customerId: decoded.customerId,
+    displayName: decoded.displayName,
+    createdAt: decoded.createdAt,
+  };
+};
+
+export function encodeCustomerDetail(customer: CustomerDetail): Record<string, unknown> {
+  return {
+    customerId: customer.customerId,
+    displayName: customer.displayName,
+    createdAt: customer.createdAt,
+  };
+}
+
+/**
+ * `GET /api/v1/customers/:customerId` success: the customer record plus their
+ * bounded case list (the individual customer panel).
+ */
+export interface CustomerDetailResponse {
+  readonly customer: CustomerDetail;
+  readonly cases: readonly CaseSummary[];
+}
+
+export const decodeCustomerDetailResponse: Decoder<CustomerDetailResponse> = (value, path) => {
+  const decoded = object(
+    {
+      customer: field(decodeCustomerDetail),
+      cases: field(arrayOf(decodeCaseSummary, { label: "cases", maxLength: MAX_CASE_LIST_ITEMS })),
+    },
+    "customer detail response",
+  )(value, path);
+  return { customer: decoded.customer, cases: decoded.cases };
+};
+
+export function encodeCustomerDetailResponse(response: CustomerDetailResponse): Record<string, unknown> {
+  return {
+    customer: encodeCustomerDetail(response.customer),
+    cases: response.cases.map(encodeCaseSummary),
   };
 }

@@ -5,6 +5,7 @@ import {
   decodeCreateCustomerRequest,
   encodeCaseSummary,
   encodeCreateCustomerResponse,
+  encodeCustomerDetailResponse,
   encodeDashboardResponse,
 } from "@dump-ledger/http-contracts";
 import { contractErrorFor, decodeJsonRequest, jsonRequireMutation, jsonRequireSession, sendError } from "../contracts/json.js";
@@ -25,6 +26,13 @@ export function registerCustomerRoutes(server: FastifyInstance, ctx: RouteContex
     if (jsonRequireSession(request, reply, options.sessions) === undefined) return reply;
     const dashboard = options.application.dashboard();
     return reply.type("application/json; charset=utf-8").send(encodeDashboardResponse(dashboard));
+  });
+
+  server.get<{ Params: { customerId: string } }>("/api/v1/customers/:customerId", async (request, reply) => {
+    if (jsonRequireSession(request, reply, options.sessions) === undefined) return reply;
+    const detail = options.application.customerDetail(request.params.customerId);
+    if (detail === undefined) return sendError(reply, "not_found");
+    return reply.type("application/json; charset=utf-8").send(encodeCustomerDetailResponse(detail));
   });
 
   server.post("/api/v1/customers", async (request, reply) => {

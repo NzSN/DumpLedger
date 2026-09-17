@@ -78,7 +78,7 @@ const FULL_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; conne
 test("the React shell is served at every final browser route with security headers", async t => {
   const { server, cleanup } = await makeFixture();
   t.after(cleanup);
-  const browserRoutes = ["/", "/login", "/upload", "/customers", "/cases", "/dumps", "/operations", "/cases/case-1", "/dumps/dump-1"];
+  const browserRoutes = ["/", "/login", "/upload", "/customers", "/customers/customer-1", "/cases", "/dumps", "/operations", "/symbols", "/cases/case-1", "/dumps/dump-1"];
   for (const route of browserRoutes) {
     const response = await server.inject({ method: "GET", url: route });
     assert.equal(response.statusCode, 200, `${route} should serve the shell`);
@@ -148,7 +148,8 @@ test("deleted legacy HTML routes and path-secret uploader are unreachable", asyn
     { method: "GET", url: "/cases/case-1/manifest.json" },
     { method: "GET", url: "/nonsense" },
     { method: "GET", url: "/cases/case-1/extra-segment" },
-    { method: "GET", url: "/customers/customer-1" },
+    // /customers/:customerId was a deleted legacy page but is now a live SPA
+    // route (the individual customer panel); the shell-coverage test owns it.
   ];
   for (const probe of probes) {
     const options: Record<string, unknown> = { method: probe.method as "GET", url: probe.url };
