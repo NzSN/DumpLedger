@@ -62,6 +62,18 @@ function sequenceSlot(state: JsonObject, name: string, slot: number): Json | und
   return Array.isArray(sequence) ? sequence[slot - 1] : undefined;
 }
 
+function setMembers(value: Json | undefined): readonly Json[] {
+  return isObject(value) && Array.isArray(value["#set"]) ? (value["#set"] as Json[]) : [];
+}
+
+function setHasEncodedInt(value: Json | undefined, expected: string): boolean {
+  return setMembers(value).some((member) => isEncodedInt(member, expected));
+}
+
+function setSize(value: Json | undefined): number {
+  return setMembers(value).length;
+}
+
 function parametersMatch(
   state: JsonObject,
   expected: {
@@ -164,6 +176,18 @@ const traceCases: readonly TraceCase[] = [
       isEncodedInt(sequenceSlot(state, "dumpToken", 2), "2") &&
       sequenceSlot(state, "tokenState", 2) === "consumed" &&
       isEncodedInt(sequenceSlot(state, "tokenUploads", 2), "2"),
+  },
+  {
+    destination: "09-symbol-ingest-purge.itf.json",
+    witnessModule: "SymbolIngestPurge",
+    lengthBound: 4,
+    nextPredicate: "WitnessNext",
+    terminalDescription: "PurgeSymbol after idempotent double-ingest and a second identity",
+    terminalMatches: (state) =>
+      state["action_taken"] === "PurgeSymbol" &&
+      parametersMatch(state, { token: "0", dump: "1", kind: "unclassified" }) &&
+      setHasEncodedInt(state["symbolRegistered"], "2") &&
+      setSize(state["symbolRegistered"]) === 1,
   },
   {
     destination: "07-case-closed-grants-revoked.itf.json",

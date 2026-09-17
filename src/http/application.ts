@@ -14,9 +14,9 @@ import {
   MAX_DASHBOARD_CUSTOMERS,
   MAX_DASHBOARD_RECENT_CASES,
 } from "@dump-ledger/http-contracts";
-import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId } from "../domain/ids.js";
+import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId } from "../domain/ids.js";
 import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
-import type { Vault, VaultReader } from "../vault/vault.js";
+import type { SymbolVault, Vault, VaultReader } from "../vault/vault.js";
 import type { CaseTransitionOutcome, HttpApplicationPort } from "./server.js";
 
 function readerStream(reader: VaultReader): Readable {
@@ -38,10 +38,15 @@ function readerStream(reader: VaultReader): Readable {
 }
 
 export class EngineHttpApplication implements HttpApplicationPort {
+  private readonly symbolVault: SymbolVault | undefined;
+
   constructor(
     private readonly engine: DumpLedgerEngine,
     private readonly vault: Vault,
-  ) {}
+  ) {
+    const candidate = vault as Partial<SymbolVault>;
+    this.symbolVault = typeof candidate.openSymbol === "function" ? (candidate as SymbolVault) : undefined;
+  }
 
   createCustomer(displayName: string) {
     const receipt = this.engine.execute({ type: "CreateCustomer", displayName });
@@ -76,6 +81,87 @@ export class EngineHttpApplication implements HttpApplicationPort {
 
   grantQuota(grantSecret: string) {
     return this.engine.grantQuota(grantSecret);
+  }
+
+  listSymbols() {
+    return {
+      symbols: this.engine.snapshot().symbols.map((artifact) => ({
+        artifactId: artifact.artifactId,
+        debugFile: artifact.debugFile,
+        debugId: artifact.debugId,
+        kind: artifact.kind,
+        byteSize: artifact.byteSize,
+        sha256: artifact.sha256,
+        ...(artifact.product === null ? {} : { product: artifact.product }),
+        ...(artifact.version === null ? {} : { version: artifact.version }),
+        ...(artifact.arch === null ? {} : { arch: artifact.arch }),
+        ingestedAt: artifact.createdAt,
+      })),
+    };
+  }
+
+  beginSymbolIngest() {
+    const receipt = this.engine.execute({ type: "IngestSymbol", kind: "pdb" });
+    return receipt.ok && receipt.artifactId !== undefined
+      ? { ok: true as const, id: receipt.artifactId }
+      : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
+  }
+
+  sealSymbolIngest(input: {
+    readonly artifactId: string;
+    readonly debugFile: string;
+    readonly debugId: string;
+    readonly byteSize: bigint;
+    readonly sha256: string;
+    readonly product?: string;
+    readonly version?: string;
+    readonly arch?: string;
+  }) {
+    const receipt = this.engine.execute({
+      type: "SealSymbol",
+      artifactId: input.artifactId as never,
+      debugFile: input.debugFile,
+      debugId: input.debugId,
+      kind: "pdb",
+      byteSize: input.byteSize,
+      sha256: input.sha256,
+      ...(input.product === undefined ? {} : { product: input.product }),
+      ...(input.version === undefined ? {} : { version: input.version }),
+      ...(input.arch === undefined ? {} : { arch: input.arch }),
+    });
+    return receipt.ok && receipt.artifactId !== undefined
+      ? { ok: true as const, id: receipt.artifactId, deduplicated: receipt.deduplicated === true }
+      : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
+  }
+
+  failSymbolIngest(artifactId: string) {
+    this.engine.execute({ type: "FailSymbol", artifactId: artifactId as never });
+  }
+
+  appendSymbolBytes(artifactIdText: string, chunk: Uint8Array): void {
+    if (this.symbolVault === undefined) throw new Error("symbol storage is not configured");
+    this.symbolVault.appendSymbol(parseSymbolArtifactId(artifactIdText), chunk);
+  }
+
+  syncSymbolStaging(artifactIdText: string): void {
+    if (this.symbolVault === undefined) throw new Error("symbol storage is not configured");
+    this.symbolVault.syncAndCloseSymbol(parseSymbolArtifactId(artifactIdText));
+  }
+
+  purgeSymbol(artifactIdText: string) {
+    let artifactId;
+    try { artifactId = parseSymbolArtifactId(artifactIdText); } catch { return { ok: false as const, code: "not_found" }; }
+    const receipt = this.engine.execute({ type: "PurgeSymbol", artifactId });
+    return receipt.ok ? { ok: true as const } : { ok: false as const, code: receipt.error.code };
+  }
+
+  openSymbolArtifact(debugFile: string, debugId: string) {
+    if (this.symbolVault === undefined) return undefined;
+    const artifact = this.engine.findSymbolArtifact(debugFile, debugId, "pdb");
+    if (artifact === undefined) return undefined;
+    const reader = this.symbolVault.openSymbol(artifact.artifactId);
+    if (reader === undefined) return undefined;
+    return { byteSize: reader.size, stream: readerStream(reader) };
   }
 
   revokeGrant(grantIdText: string) {

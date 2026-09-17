@@ -13,6 +13,7 @@
       "dumpPhase": "Seq(Str)",
       "dumpToken": "Seq(Int)",
       "parameters": "{ case: Int, dump: Int, kind: Str, token: Int }",
+      "symbolRegistered": "Set(Int)",
       "tokenState": "Seq(Str)",
       "tokenUploads": "Seq(Int)",
       "validation": "Seq(Str)"
@@ -73,6 +74,9 @@
         "token": {
           "#bigint": "0"
         }
+      },
+      "symbolRegistered": {
+        "#set": []
       },
       "tokenState": [
         "unused",
@@ -146,6 +150,9 @@
           "#bigint": "1"
         }
       },
+      "symbolRegistered": {
+        "#set": []
+      },
       "tokenState": [
         "issued",
         "unused"
@@ -217,6 +224,9 @@
         "token": {
           "#bigint": "1"
         }
+      },
+      "symbolRegistered": {
+        "#set": []
       },
       "tokenState": [
         "consumed",
@@ -294,6 +304,9 @@
           "#bigint": "0"
         }
       },
+      "symbolRegistered": {
+        "#set": []
+      },
       "tokenState": [
         "consumed",
         "unused"
@@ -369,6 +382,9 @@
         "token": {
           "#bigint": "0"
         }
+      },
+      "symbolRegistered": {
+        "#set": []
       },
       "tokenState": [
         "consumed",
@@ -446,6 +462,9 @@
           "#bigint": "0"
         }
       },
+      "symbolRegistered": {
+        "#set": []
+      },
       "tokenState": [
         "consumed",
         "unused"
@@ -518,6 +537,9 @@
         "token": {
           "#bigint": "0"
         }
+      },
+      "symbolRegistered": {
+        "#set": []
       },
       "tokenState": [
         "consumed",
@@ -595,6 +617,9 @@
           "#bigint": "0"
         }
       },
+      "symbolRegistered": {
+        "#set": []
+      },
       "tokenState": [
         "consumed",
         "unused"
@@ -671,6 +696,9 @@
           "#bigint": "0"
         }
       },
+      "symbolRegistered": {
+        "#set": []
+      },
       "tokenState": [
         "consumed",
         "unused"
@@ -702,6 +730,7 @@
     "tokenState",
     "dumpCase",
     "validation",
-    "dumpPhase"
+    "dumpPhase",
+    "symbolRegistered"
   ]
 }

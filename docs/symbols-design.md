@@ -1,8 +1,9 @@
 # Symbols design
 
-Status: proposal. Manages minidump symbol artifacts (PDB/EXE) inside
-DumpLedger so dumps and their debugging symbols live in one place: one auth
-surface, one audit trail, one backup story, one deployment.
+Status: milestone 1 implemented (2026-09-16; decisions D1–D4 resolved same day).
+Manages minidump symbol artifacts (PDB/EXE) inside DumpLedger so dumps and
+their debugging symbols live in one place: one auth surface, one audit
+trail, one backup story, one deployment.
 
 ## Purpose and scope
 
@@ -217,19 +218,37 @@ boot (migration runs), verify.
 
 1. **Symbols in one place**: entities + migration 4 + vault namespace +
    RSDS/PE parsers + ingest route + Symbols UI + symsrv read route +
-   debugger-evidence test.
+   debugger-evidence test + TLA actions/invariants + transfer-spec repair +
+   dual-spec model-interface regen.
 2. **Linkage**: CvRecord extraction at intake + coverage on dump detail and
    case pages.
 3. **Scale-out**: CI ingest token, EXE artifact kind, transfer-bundle
    `--include-symbols` flag (default off), optional Breakpad `.sym`
    generation.
 
-## Open questions
+## Resolved decisions (2026-09-16)
 
-1. Read-route exposure: LAN-open vs. proxy IP allowlist (symsrv cannot
-   authenticate) — which posture does the deployment want?
-2. EXE artifacts in v1, or PDB-only start (CDB needs PDBs for the normal
-   workflow; EXEs only for image-level debugging)?
-3. Default per-artifact ceiling of 8 GiB acceptable?
-4. Should ingest reject OS-module PDBs (they belong to Microsoft's server),
-   or accept everything and let the operator decide?
+- **D1 Read route exposure: LAN-open on the private interface.** symsrv.dll
+  cannot authenticate; the route is read-only, serves no listing, and exposes
+  nothing but immutable symbol bytes. A proxy IP allowlist can be added later
+  without moving the route.
+- **D2 PDB-only v1.** EXE artifacts ride the same entity later; CDB's normal
+  minidump workflow needs only PDBs.
+- **D3 Per-artifact ceiling: 8 GiB**, enforced mid-stream.
+- **D4 Accept all PDBs, with an OS-module display hint.** Rejecting would
+  guess wrong occasionally; the operator knows their builds.
+
+## Implementation constraints (verified 2026-09-16)
+
+- **Vault layout**: the symbols subtree lives at `<vaultRoot>/symbols/` with
+  its own staging directory, kept OUTSIDE the dump `stagingRoot` — recovery
+  `reconcile` scans only the dump staging root for `*.part`, and
+  retention/purge/export are SQLite-driven by dumpId.
+- **Route ordering**: the 3-segment symsrv route registers BEFORE the
+  static-web fallback; the SPA `/symbols` page is a distinct single-segment
+  path.
+- **Transfer-spec repair is a scheduled step**: adding base actions and
+  variables to `DumpLedger.tla` breaks `DumpLedgerTransfer.tla` (EXTENDS)
+  until its UNCHANGED lists, `allVars`, and `TransferTypeOK` absorb them;
+  both specs' traces/locks/coverage regenerate in the same milestone
+  (precedent: the batch-upload repair).

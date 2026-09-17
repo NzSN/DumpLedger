@@ -120,6 +120,7 @@ TransferInit ==
   /\ done = {}
   /\ tokDone = {}
   /\ tokFirstDump = <<NoDump, NoDump>>
+  /\ symbolRegistered = {}
 
 (* Fresh ledger: the import precondition. BeginImport requires every table
    empty; in this abstraction that is exactly the base Init shape, and no
@@ -150,7 +151,7 @@ IssueTokenI(t) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable, bundle,
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -189,7 +190,7 @@ BeginUploadI(t, d) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, digestRecorded, validation, coverage,
-                 downloadable, bundle, done, tokDone, fingerprintMatches,
+                 downloadable, symbolRegistered, bundle, done, tokDone, fingerprintMatches,
                  custDone, caseDone, wiped>>
 
 SealUploadI(d) ==
@@ -202,7 +203,7 @@ SealUploadI(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
-                 validation, coverage, downloadable, bundle, done, tokDone,
+                 validation, coverage, downloadable, symbolRegistered, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
 
 PromoteI(d) ==
@@ -214,7 +215,7 @@ PromoteI(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
-                 digestRecorded, validation, coverage, downloadable, bundle,
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -228,7 +229,7 @@ QuarantineI(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable, bundle,
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -245,8 +246,8 @@ AcceptI(d, kind) ==
   /\ action_taken' = "AcceptDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d, kind |-> kind]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
-                 digestRecorded, bundle, done, tokDone, fingerprintMatches,
-                 custDone, caseDone, wiped>>
+                 digestRecorded, symbolRegistered, bundle, done, tokDone,
+                 fingerprintMatches, custDone, caseDone, wiped>>
 
 RejectI(d) ==
   /\ d \in Dumps
@@ -258,7 +259,7 @@ RejectI(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
-                 digestRecorded, coverage, downloadable, bundle, done,
+                 digestRecorded, coverage, downloadable, symbolRegistered, bundle, done,
                  tokDone, fingerprintMatches, custDone, caseDone, wiped>>
 
 (* Retention: purging lands a deleted tombstone (association, digest,
@@ -273,7 +274,7 @@ BeginPurgeI(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
-                 digestRecorded, validation, coverage, bundle, done, tokDone,
+                 digestRecorded, validation, coverage, symbolRegistered, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
 
 FinishPurgeI(d) ==
@@ -285,7 +286,7 @@ FinishPurgeI(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase,
-                 digestRecorded, validation, coverage, downloadable, bundle,
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -323,7 +324,7 @@ ExportStart ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, fingerprintMatches, wiped>>
+                 downloadable, symbolRegistered, fingerprintMatches, wiped>>
 
 ExportSeal ==
   /\ bundle.status = "running"
@@ -333,7 +334,7 @@ ExportSeal ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, done, tokDone, fingerprintMatches, custDone,
+                 downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
 ExportFail ==
@@ -344,7 +345,7 @@ ExportFail ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, done, tokDone, fingerprintMatches, custDone,
+                 downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
 (* External tampering between seal and import: exactly one promised dump's
@@ -358,7 +359,7 @@ TamperBundle(d) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, done, tokDone, fingerprintMatches, custDone,
+                 downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
 DeleteBundle ==
@@ -372,7 +373,7 @@ DeleteBundle ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, fingerprintMatches, done, tokDone, custDone,
+                 downloadable, symbolRegistered, fingerprintMatches, done, tokDone, custDone,
                  caseDone, wiped>>
 
 (* A fresh target instance: the operator wipes or starts a new instance
@@ -395,6 +396,7 @@ WipeInstance ==
   /\ validation' = <<"not-checked", "not-checked">>
   /\ coverage' = <<NoCoverage, NoCoverage>>
   /\ downloadable' = {}
+  /\ symbolRegistered' = {}
   /\ custDone' = {}
   /\ caseDone' = {}
   /\ done' = {}
@@ -421,7 +423,7 @@ ImportStart ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, fingerprintMatches, wiped>>
+                 downloadable, symbolRegistered, fingerprintMatches, wiped>>
 
 (* Entity rows travel in dependency order: customers before cases before
    grants before dumps. The guards here are the ledger's FK checks.
@@ -437,7 +439,7 @@ ImportCustomer(c) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, fingerprintMatches, bundle, caseDone, done,
+                 downloadable, symbolRegistered, fingerprintMatches, bundle, caseDone, done,
                  tokDone, wiped>>
 
 (* The imported case lands with its exported status (the real ImportCase
@@ -453,7 +455,7 @@ ImportCase(c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable,
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered,
                  fingerprintMatches, bundle, custDone, done, tokDone, wiped>>
 
 (* Grant import replays the exported row: the bundle only carries grants that
@@ -479,7 +481,7 @@ ImportTokens(t) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, dumpToken, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable, bundle,
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, fingerprintMatches, custDone, caseDone, wiped>>
 
 (* Verified bytes: staged and hashed to match the manifest, the row is
@@ -512,7 +514,7 @@ ImportDumpOk(d, c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, validation, coverage,
-                 downloadable, bundle, tokDone, fingerprintMatches, custDone,
+                 downloadable, symbolRegistered, bundle, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
 (* SHA-256/size mismatch (including the tampered dump): rejected tombstone,
@@ -544,7 +546,7 @@ ImportDumpReject(d, c) ==
   /\ action_taken' = "ImportDumpReject"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -579,7 +581,7 @@ ImportDumpTombR(d, c) ==
   /\ action_taken' = "ImportDumpTombR"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped>>
 
@@ -610,7 +612,7 @@ ImportDumpTombD(d, c) ==
   /\ action_taken' = "ImportDumpTombD"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, downloadable, bundle,
+  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, downloadable, symbolRegistered, bundle,
                  tokDone, fingerprintMatches, custDone, caseDone, wiped>>
 
 (* FinishImport requires every declared dump disposed of and every exported
@@ -627,7 +629,7 @@ ImportFinish ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, done, tokDone, fingerprintMatches, custDone,
+                 downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
 (* Any hard failure after BeginImport: partial state persists, no
@@ -640,7 +642,7 @@ ImportHardFail ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, done, tokDone, fingerprintMatches, custDone,
+                 downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped>>
 
 TransferNext ==
@@ -672,7 +674,7 @@ TransferNext ==
 
 allVars == <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase,
              dumpCase, blobState, digestRecorded, validation, coverage,
-             downloadable, action_taken, parameters, wiped,
+             downloadable, symbolRegistered, action_taken, parameters, wiped,
              fingerprintMatches, bundle, custDone, caseDone, done, tokDone,
              tokFirstDump>>
 
@@ -796,6 +798,7 @@ TransferTypeOK ==
   /\ Len(coverage) = Cardinality(Dumps)
   /\ \A d \in Dumps: coverage[d] \in CoverageKinds \cup {NoCoverage}
   /\ downloadable \subseteq Dumps
+  /\ symbolRegistered \subseteq Symbols
   /\ TransferAnnotationOK
 
 (* The batch-aware token invariants with one transfer-aware relaxation: an

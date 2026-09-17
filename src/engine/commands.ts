@@ -1,4 +1,4 @@
-import type { AuditEventId, CaseId, CustomerId, DumpId, GrantId } from "../domain/ids.js";
+import type { AuditEventId, CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
 import type { CaseStatus, CoverageKind, TokenState, ValidationState } from "../domain/lifecycle.js";
 
 /** Entity counts advertised by an export manifest and reported back at import completion. */
@@ -101,6 +101,10 @@ export type LifecycleCommand =
   | { readonly type: "SetRetention"; readonly dumpId: DumpId; readonly purgeAt: string }
   | { readonly type: "BeginPurge"; readonly dumpId: DumpId }
   | { readonly type: "FinishPurge"; readonly dumpId: DumpId }
+  | { readonly type: "IngestSymbol"; readonly kind: "pdb" }
+  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly debugFile: string; readonly debugId: string; readonly kind: "pdb"; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
+  | { readonly type: "FailSymbol"; readonly artifactId: SymbolArtifactId }
+  | { readonly type: "PurgeSymbol"; readonly artifactId: SymbolArtifactId }
   | { readonly type: "BeginImport"; readonly manifestDigest: string; readonly counts: ImportCounts }
   | { readonly type: "ImportCustomer"; readonly record: ImportCustomerRecord }
   | { readonly type: "ImportCase"; readonly record: ImportCaseRecord }

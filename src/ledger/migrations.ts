@@ -28,6 +28,30 @@ const migrations: readonly Migration[] = [
     ALTER TABLE upload_grants ADD COLUMN max_uploads INTEGER NOT NULL DEFAULT 1 CHECK (max_uploads BETWEEN 1 AND 16);
     ALTER TABLE upload_grants ADD COLUMN uploads_used INTEGER NOT NULL DEFAULT 0 CHECK (uploads_used BETWEEN 0 AND 16);
   ` },
+  /* Symbol store (docs/symbols-design.md): module identities and immutable
+   * symbol artifacts. Purely additive; identity is unique per kind. */
+  { version: 4, sql: `
+    CREATE TABLE modules (
+      module_id TEXT PRIMARY KEY,
+      debug_file TEXT NOT NULL,
+      debug_id TEXT NOT NULL,
+      product TEXT,
+      version TEXT,
+      arch TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (debug_file, debug_id)
+    ) STRICT;
+    CREATE TABLE symbol_artifacts (
+      artifact_id TEXT PRIMARY KEY,
+      module_id TEXT NOT NULL REFERENCES modules(module_id),
+      kind TEXT NOT NULL CHECK (kind IN ('pdb')),
+      byte_size TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (module_id, kind)
+    ) STRICT;
+    CREATE INDEX modules_identity_idx ON modules(debug_file, debug_id);
+  ` },
 ];
 export function applyMigrations(database: Database.Database): void {
   database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;`);

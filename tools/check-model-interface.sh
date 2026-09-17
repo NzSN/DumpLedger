@@ -84,4 +84,25 @@ expect_preflight_failure missing-observation.itf.json MIC-P-TRACE-001 missing-ob
 expect_preflight_failure unknown-action.itf.json MIC-P-ACTION-001 unknown-action
 expect_preflight_failure wrong-kind-type.itf.json MIC-P-VALUE-001 wrong-kind-type
 
-echo "DumpLedger and DumpLedgerTransfer model interfaces, exhaustive action coverage, and negative diagnostics are current"
+# Suite bundles (checked application suites) must match the locks.
+"$compiler" check-bundle \
+  --spec "$repo_root/specs/DumpLedger.tla" \
+  --contract "$repo_root/model-interface/DumpLedger.mirror-interface.json" \
+  --evidence "$evidence" \
+  --param-var parameters \
+  --lock "$repo_root/model-interface/DumpLedger.mirror-interface.lock.json" \
+  --target mirrorecma-async-v1 \
+  --out "$repo_root/src/generated/dump-ledger-suite" \
+  --diagnostics json
+
+"$compiler" check-bundle \
+  --spec "$repo_root/specs/DumpLedgerTransfer.tla" \
+  --contract "$repo_root/model-interface/DumpLedgerTransfer.mirror-interface.json" \
+  --evidence "$transfer_evidence" \
+  --param-var parameters \
+  --lock "$repo_root/model-interface/DumpLedgerTransfer.mirror-interface.lock.json" \
+  --target mirrorecma-async-v1 \
+  --out "$repo_root/src/generated/dump-ledger-transfer-suite" \
+  --diagnostics json
+
+echo "DumpLedger and DumpLedgerTransfer model interfaces, exhaustive action coverage, negative diagnostics, and suite bundles are current"

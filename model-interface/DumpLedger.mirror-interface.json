@@ -299,6 +299,48 @@
       ]
     },
     {
+      "id": "IngestSymbol",
+      "wireAction": "IngestSymbol",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PurgeSymbol",
+      "wireAction": "PurgeSymbol",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": "StartInvestigation",
       "wireAction": "StartInvestigation",
       "wireAliases": [],
@@ -458,6 +500,11 @@
     {
       "id": "CaseStatus",
       "wireName": "caseStatus",
+      "provenance": "implementation"
+    },
+    {
+      "id": "SymbolRegistered",
+      "wireName": "symbolRegistered",
       "provenance": "implementation"
     }
   ]

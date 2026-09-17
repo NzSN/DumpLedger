@@ -23,9 +23,11 @@ import type {
   ExpireTokenInput,
   FailUploadInput,
   FinishPurgeInput,
+  IngestSymbolInput,
   IssueTokenInput,
   MarkQuarantinedInput,
   PromoteObjectInput,
+  PurgeSymbolInput,
   RejectDumpInput,
   ResolveCaseInput,
   ResumeInvestigationInput,
@@ -36,7 +38,7 @@ import type {
 } from "../generated/dump-ledger/DumpLedgerMirror.generated.js";
 import { createVaultMinidumpInspectionPort } from "../inspection/index.js";
 import { MemoryVault } from "../vault/memory-vault.js";
-import type { Vault } from "../vault/vault.js";
+import type { SymbolVault, Vault } from "../vault/vault.js";
 
 const MODEL_SLOTS = [1n, 2n] as const;
 /* Mirrors TokenMaxUploads == <<1, 2>> in specs/DumpLedger.tla: token slot 1
@@ -123,6 +125,7 @@ interface Session {
   readonly inspector: ControlledInspector;
   readonly cases: readonly [CaseId, CaseId];
   readonly grants: Map<bigint, { readonly grantId: GrantId; readonly secret: string }>;
+  readonly symbols: Map<bigint, { readonly artifactId: string }>;
   readonly dumps: Map<bigint, DumpId>;
 }
 
@@ -232,6 +235,7 @@ export class MbtHarness {
         inspector,
         cases: [caseOne, caseTwo],
         grants: new Map(),
+        symbols: new Map(),
         dumps: new Map(),
       };
     } catch (error) {
@@ -376,6 +380,40 @@ export class MbtHarness {
     });
   }
 
+  ingestSymbol(dumpValue: bigint): void {
+    const symbolSlot = slot(dumpValue, "symbol");
+    const session = this.requireSession();
+    // Drive the real ingest lifecycle: allocate staging, append bytes, seal
+    // with a deterministic per-slot identity (idempotent on the server too).
+    const begun = this.execute({ type: "IngestSymbol", kind: "pdb" });
+    const artifactId = requireResult(begun.artifactId, "artifactId");
+    const bytes = new TextEncoder().encode(`symbol-bytes-${symbolSlot}`);
+    const symbolVault = session.vault as unknown as SymbolVault;
+    symbolVault.appendSymbol(artifactId as never, bytes);
+    symbolVault.syncAndCloseSymbol(artifactId as never);
+    const debugId = `${symbolSlot.toString(16).toUpperCase().padStart(2, "0")}${"0".repeat(30)}1`;
+    const sealed = this.execute({
+      type: "SealSymbol",
+      artifactId: artifactId as never,
+      debugFile: `mod${symbolSlot}.pdb`,
+      debugId,
+      kind: "pdb",
+      byteSize: BigInt(bytes.byteLength),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    requireResult(sealed.artifactId, "artifactId");
+    session.symbols.set(symbolSlot, { artifactId });
+  }
+
+  purgeSymbol(dumpValue: bigint): void {
+    const symbolSlot = slot(dumpValue, "symbol");
+    const session = this.requireSession();
+    const symbol = session.symbols.get(symbolSlot);
+    if (symbol === undefined) throw new Error(`symbol slot ${symbolSlot} is not registered`);
+    this.execute({ type: "PurgeSymbol", artifactId: symbol.artifactId as never });
+    session.symbols.delete(symbolSlot);
+  }
+
   observe(): DumpLedgerObservation {
     const session = this.requireSession();
     const projection = session.engine.snapshot();
@@ -474,6 +512,7 @@ export class MbtHarness {
       coverage: MODEL_SLOTS.map(
         (modelSlot) => dumpBySlot(modelSlot)?.coverage ?? "unclassified",
       ),
+      symbolRegistered: MODEL_SLOTS.filter((modelSlot) => session.symbols.has(modelSlot)),
       downloadable: projection.downloadable
         .map((realId) => {
           const mapped = reverseDump.get(realId);
@@ -582,6 +621,12 @@ export class DumpLedgerMbtPort implements DumpLedgerPort {
   finishPurge(input: FinishPurgeInput): void {
     this.call("FinishPurge", () => this.harness.finishPurge(input.dump));
   }
+  ingestSymbol(input: IngestSymbolInput): void {
+    this.call("IngestSymbol", () => this.harness.ingestSymbol(input.dump));
+  }
+  purgeSymbol(input: PurgeSymbolInput): void {
+    this.call("PurgeSymbol", () => this.harness.purgeSymbol(input.dump));
+  }
   issueToken(input: IssueTokenInput): void {
     this.call("IssueToken", () => this.harness.issueToken(input.token));
   }
@@ -656,6 +701,12 @@ type FailUploadReturnsVoid = Assert<
 >;
 type FinishPurgeReturnsVoid = Assert<
   IsExactly<ReturnType<DumpLedgerMbtPort["finishPurge"]>, void>
+>;
+type IngestSymbolReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["ingestSymbol"]>, void>
+>;
+type PurgeSymbolReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["purgeSymbol"]>, void>
 >;
 type IssueTokenReturnsVoid = Assert<
   IsExactly<ReturnType<DumpLedgerMbtPort["issueToken"]>, void>

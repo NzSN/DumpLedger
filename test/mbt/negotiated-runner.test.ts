@@ -138,10 +138,12 @@ const EXPECTED_COVERAGE = {
   ExpireToken: 1,
   FailUpload: 1,
   FinishPurge: 5,
-  Initialize: 8,
+  IngestSymbol: 2,
+  Initialize: 9,
   IssueToken: 9,
   MarkQuarantined: 4,
   PromoteObject: 4,
+  PurgeSymbol: 1,
   RejectDump: 1,
   ResolveCase: 1,
   ResumeInvestigation: 1,
@@ -169,14 +171,14 @@ test("checked-in corpus reaches all_steps_done through negotiated generated bind
   assert.equal(recording.closeCalls(), 1);
   assert.equal(
     probe.sessionCreates,
-    8,
+    9,
     "each trace must receive a fresh engine and SQLite ledger",
   );
-  assert.equal(probe.sessionCloses, 8);
-  assert.equal(probe.portCalls, 58);
+  assert.equal(probe.sessionCloses, 9);
+  assert.equal(probe.portCalls, 62);
   assert.equal(
     probe.observationCalls,
-    58,
+    62,
     "each replayed action must be observed exactly once",
   );
   assert.deepEqual(probe.generatedBinding?.coverage(), EXPECTED_COVERAGE);

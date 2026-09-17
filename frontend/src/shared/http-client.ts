@@ -81,11 +81,33 @@ export interface UploadHandle {
   abort(): void;
 }
 
+/**
+ * Operator raw-upload request (docs/symbols-design.md): raw octet-stream to
+ * an operator mutation endpoint, with the caller-named filename header and a
+ * caller-supplied body decoder. Unlike upload() this sends the session CSRF
+ * header and no grant header.
+ */
+export interface OperatorRawUploadRequest<T> {
+  readonly path: string;
+  readonly file: Blob;
+  readonly filename: string;
+  readonly filenameHeader: string;
+  readonly decoder: Decoder<T>;
+  readonly signal?: AbortSignal;
+}
+
+export interface OperatorRawUploadHandle<T> {
+  readonly result: Promise<T>;
+  abort(): void;
+}
+
 /** The narrow interface feature modules consume (design section 8.1). */
 export interface DumpLedgerHttpClient {
   query<T>(request: QueryRequest<T>): Promise<T>;
   mutate<T>(request: MutationRequest<T>): Promise<T>;
   upload(request: UploadRequest, observer: UploadObserver): UploadHandle;
+  /** Additive operator raw upload (symbol ingest); absent on minimal fakes. */
+  uploadRaw?<T>(request: OperatorRawUploadRequest<T>, observer: UploadObserver): OperatorRawUploadHandle<T>;
 }
 
 /** Session wiring used only by SessionProvider. */
@@ -371,6 +393,104 @@ class FetchHttpClient implements SessionAwareHttpClient {
       });
 
       // The upload streams the File/Blob directly; no ArrayBuffer or base64.
+      xhr.send(request.file);
+    });
+
+    if (request.signal !== undefined) {
+      if (request.signal.aborted) xhr.abort();
+      else {
+        const onAbort = (): void => xhr.abort();
+        request.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    return {
+      result,
+      abort: () => xhr.abort(),
+    };
+  }
+
+  uploadRaw<T>(request: OperatorRawUploadRequest<T>, observer: UploadObserver): OperatorRawUploadHandle<T> {
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+
+    const result = new Promise<T>((resolve, reject) => {
+      xhr.open("POST", request.path);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("accept", "application/json");
+      xhr.setRequestHeader("content-type", "application/octet-stream");
+      const csrfToken = this.csrfTokenSource?.();
+      if (csrfToken !== undefined) xhr.setRequestHeader(CSRF_HEADER, csrfToken);
+      xhr.setRequestHeader(request.filenameHeader, encodeFilenameBase64url(request.filename));
+
+      const settle = (error: Error | undefined, value?: T): void => {
+        if (settled) return;
+        settled = true;
+        if (error === undefined) {
+          if (value === undefined) reject(new Error("upload settled without a value"));
+          else resolve(value);
+        } else {
+          reject(error);
+        }
+      };
+
+      xhr.upload.addEventListener("progress", (event: ProgressEvent) => {
+        if (!event.lengthComputable || event.total === 0) return;
+        try {
+          observer.onProgress?.(event.loaded / event.total);
+        } catch {
+          // Observer callbacks must never break the upload transport.
+        }
+      });
+
+      xhr.addEventListener("abort", () => {
+        settle(new DOMException("The upload was aborted.", "AbortError"));
+      });
+
+      xhr.addEventListener("error", () => {
+        settle(
+          new HttpRequestError("The upload connection failed.", {
+            code: "internal_error",
+            status: 0,
+            retryable: false,
+            path: request.path,
+          }),
+        );
+      });
+
+      xhr.addEventListener("load", () => {
+        const status = xhr.status;
+        try {
+          if (status === 201) {
+            settle(undefined, decodeJsonText(xhr.responseText, request.decoder));
+            return;
+          }
+          const text = xhr.responseText;
+          const error = ((): HttpRequestError => {
+            try {
+              const envelope = decodeJsonText(text, decodeErrorResponse);
+              return new HttpRequestError(envelope.error.message, {
+                code: envelope.error.code,
+                status,
+                retryable: envelope.error.retryable,
+                path: request.path,
+              });
+            } catch {
+              const code = statusToCode(status);
+              return new HttpRequestError(fallbackMessage(code), {
+                code,
+                status,
+                retryable: code === "rate_limited" || code === "storage_unavailable",
+                path: request.path,
+              });
+            }
+          })();
+          settle(error);
+        } catch (cause) {
+          settle(unreadableResponse(request.path, status, cause));
+        }
+      });
+
       xhr.send(request.file);
     });
 

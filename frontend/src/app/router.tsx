@@ -19,6 +19,7 @@ import { CaseDetailPage } from "../features/cases/CaseDetailPage";
 import { DumpsPage } from "../features/dumps/DumpsPage";
 import { DumpDetailPage } from "../features/dumps/DumpDetailPage";
 import { OperationsPage } from "../features/operations/OperationsPage";
+import { SymbolsPage } from "../features/symbols/SymbolsPage";
 
 export const appRouteObjects: readonly RouteObject[] = [
   {
@@ -41,6 +42,7 @@ export const appRouteObjects: readonly RouteObject[] = [
           { path: "dumps", element: <DumpsPage /> },
           { path: "dumps/:dumpId", element: <DumpDetailPage /> },
           { path: "operations", element: <OperationsPage /> },
+          { path: "symbols", element: <SymbolsPage /> },
         ],
       },
       { path: "*", element: <NotFoundPage /> },

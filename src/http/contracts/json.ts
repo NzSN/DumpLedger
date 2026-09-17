@@ -39,6 +39,9 @@ const HTTP_STATUS: Readonly<Record<HttpErrorCode, number>> = {
   storage_unavailable: 503,
   integrity_failure: 500,
   internal_error: 500,
+  symbol_identity_unreadable: 422,
+  symbol_kind_unsupported: 409,
+  symbol_too_large: 413,
 };
 
 /** Fixed safe operator-facing message per stable code (never derived from inputs). */
@@ -56,6 +59,9 @@ const MESSAGES: Readonly<Record<HttpErrorCode, string>> = {
   storage_unavailable: "Storage is temporarily unavailable.",
   integrity_failure: "An internal integrity check failed.",
   internal_error: "An internal error occurred.",
+  symbol_identity_unreadable: "The file is not a PDB or carries no readable RSDS record.",
+  symbol_kind_unsupported: "That symbol artifact kind is not supported.",
+  symbol_too_large: "The symbol artifact exceeds its allowed byte size.",
 };
 
 const RETRYABLE_CODES: ReadonlySet<HttpErrorCode> = new Set([

@@ -9,7 +9,12 @@ import {
   DUMP_PHASES,
   GRANT_STATES,
   HTTP_ERROR_CODES,
+  MAX_SYMBOL_BYTES,
+  MAX_SYMBOL_FILENAME_LENGTH,
+  SYMBOL_KINDS,
+  SYMBOLS_PATH,
   VALIDATION_STATES,
+  X_SYMBOL_FILENAME_HEADER,
   decodeCaseDetailResponse,
   decodeCaseSearchParams,
   decodeCaseSummary,
@@ -34,6 +39,10 @@ import {
   decodeRetentionResponse,
   decodeRevokeGrantResponse,
   decodeSessionResponse,
+  decodeSymbolFilenameBase64url,
+  decodeSymbolIngestResponse,
+  decodeSymbolListResponse,
+  decodeSymbolRecord,
   decodeTransitionRequest,
   decodeTransitionResponse,
   decodeUploadCompleteResponse,
@@ -61,11 +70,16 @@ import {
   encodeRetentionResponse,
   encodeRevokeGrantResponse,
   encodeSessionResponse,
+  encodeSymbolFilenameBase64url,
+  encodeSymbolIngestResponse,
+  encodeSymbolListResponse,
+  encodeSymbolRecord,
   encodeTransitionRequest,
   encodeTransitionResponse,
   encodeUploadCompleteResponse,
   encodeUploadQueuedResponse,
   parseUploadFragment,
+  symbolPathForArtifact,
   toJsonText,
   type Decoder,
   type CaseDetailResponse,
@@ -82,6 +96,9 @@ import {
   type RetentionRequest,
   type RetentionResponse,
   type SessionResponse,
+  type SymbolIngestResponse,
+  type SymbolListResponse,
+  type SymbolRecord,
   type TransitionRequest,
   type TransitionResponse,
   type UploadCompleteResponse,
@@ -144,6 +161,9 @@ describe("wire vocabularies", () => {
       "grant_slots_exhausted",
       "upload_too_large",
       "upload_busy",
+      "symbol_identity_unreadable",
+      "symbol_kind_unsupported",
+      "symbol_too_large",
       "rate_limited",
       "storage_unavailable",
       "integrity_failure",
@@ -615,6 +635,105 @@ describe("duplicate and malformed JSON text", () => {
   it("rejects oversized payloads", () => {
     const huge = '{"authenticated":' + " ".repeat(1_048_576) + "false}";
     expectDecodeError(() => decodeJsonText(huge, decodeSessionResponse), /size limit/);
+  });
+});
+
+describe("symbols (symbols-design)", () => {
+  const ID_SYMBOL = "symbol_01JTEST0000000000000000000";
+  const DEBUG_ID = "3A9C8E1F9C9B4E4D8F0E1A2B3C4D5E601";
+  const SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const identity = {
+    artifactId: ID_SYMBOL,
+    debugFile: "electron.pdb",
+    debugId: DEBUG_ID,
+    kind: "pdb" as const,
+    byteSize: 8_589_934_592n,
+    sha256: SHA256,
+  } as const;
+  const bare: SymbolRecord = { ...identity, ingestedAt: NOW };
+  const annotated: SymbolRecord = { ...bare, product: "Electron", version: "41.10.6", arch: "x64" };
+
+  it("round-trips the ingest response for new and deduplicated identities", () => {
+    const fresh: SymbolIngestResponse = { ...identity, deduplicated: false };
+    const dedup: SymbolIngestResponse = { ...identity, deduplicated: true };
+    assert.deepEqual(roundTripJson(fresh, encodeSymbolIngestResponse, decodeSymbolIngestResponse), fresh);
+    assert.deepEqual(roundTripJson(dedup, encodeSymbolIngestResponse, decodeSymbolIngestResponse), dedup);
+    const json = toJsonText(encodeSymbolIngestResponse(fresh));
+    assert.match(json, /"byteSize":"8589934592"/);
+    assert.match(json, /"kind":"pdb"/);
+    assert.match(json, /"deduplicated":false/);
+  });
+  it("round-trips symbol records with annotations absent or present", () => {
+    const decodedBare = roundTripJson(bare, encodeSymbolRecord, decodeSymbolRecord);
+    assert.deepEqual(decodedBare, bare);
+    assert.ok(!("product" in decodedBare));
+    assert.ok(!("version" in decodedBare));
+    assert.ok(!("arch" in decodedBare));
+    const wire = encodeSymbolRecord(bare);
+    assert.ok(!("product" in wire));
+    assert.ok(!("arch" in wire));
+    assert.deepEqual(roundTripJson(annotated, encodeSymbolRecord, decodeSymbolRecord), annotated);
+  });
+  it("round-trips the symbol list response", () => {
+    const list: SymbolListResponse = { symbols: [annotated, bare] };
+    assert.deepEqual(roundTripJson(list, encodeSymbolListResponse, decodeSymbolListResponse), list);
+    const empty: SymbolListResponse = { symbols: [] };
+    assert.deepEqual(roundTripJson(empty, encodeSymbolListResponse, decodeSymbolListResponse), empty);
+  });
+  it("validates sha256 hex, byteSize decimals, kind, and deduplicated", () => {
+    const wire = encodeSymbolIngestResponse({ ...identity, deduplicated: false });
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, sha256: SHA256.toUpperCase() }, "$"), /sha256 is malformed/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, sha256: SHA256.slice(0, 63) }, "$"), /sha256 is malformed/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, sha256: 42 }, "$"), /sha256 must be a string/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, byteSize: 8_589_934_592 }, "$"), /byteSize must be a string/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, byteSize: "8589934592.0" }, "$"), /canonical decimal string/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, byteSize: "007" }, "$"), /canonical decimal string/);
+    // v1 ingests PDBs only (design decision D2).
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, kind: "exe" }, "$"), /symbol kind is invalid/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, deduplicated: "no" }, "$"), /must be a boolean/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, extra: 1 }, "$"), /unexpected field/);
+    const missing: Record<string, unknown> = {
+      artifactId: ID_SYMBOL,
+      debugFile: "electron.pdb",
+      debugId: DEBUG_ID,
+      kind: "pdb",
+      byteSize: "8589934592",
+      sha256: SHA256,
+    };
+    expectDecodeError(() => decodeSymbolIngestResponse(missing, "$"), /missing required field/);
+  });
+  it("validates identifiers and annotations on records and lists", () => {
+    const wire = encodeSymbolRecord(annotated);
+    expectDecodeError(() => decodeSymbolRecord({ ...wire, debugId: "has space" }, "$"), /debugId is malformed/);
+    expectDecodeError(() => decodeSymbolRecord({ ...wire, debugFile: "x".repeat(129) }, "$"), /debugFile exceeds 128 characters/);
+    expectDecodeError(() => decodeSymbolRecord({ ...wire, artifactId: 7 }, "$"), /artifactId must be a string/);
+    expectDecodeError(() => decodeSymbolRecord({ ...wire, product: "p".repeat(201) }, "$"), /product exceeds 200 characters/);
+    expectDecodeError(() => decodeSymbolRecord({ ...wire, ingestedAt: "2026-01-15T10:30:00Z" }, "$"), /not a canonical UTC timestamp/);
+    expectDecodeError(() => decodeSymbolListResponse({ symbols: "x" }, "$"), /symbols must be an array/);
+    expectDecodeError(() => decodeSymbolListResponse({ symbols: [{ ...wire, sha256: "not-hex" }] }, "$"), /sha256 is malformed/);
+    expectDecodeError(() => decodeSymbolListResponse({ symbols: [], extra: true }, "$"), /unexpected field/);
+  });
+  it("publishes the ingest surface constants and the purge path builder", () => {
+    assert.equal(X_SYMBOL_FILENAME_HEADER, "x-symbol-filename-base64url");
+    assert.equal(SYMBOLS_PATH, "/api/v1/symbols");
+    assert.equal(symbolPathForArtifact(ID_SYMBOL), `/api/v1/symbols/${ID_SYMBOL}`);
+    assert.deepEqual([...SYMBOL_KINDS], ["pdb"]);
+    assert.equal(MAX_SYMBOL_BYTES, 8_589_934_592n);
+    assert.equal(MAX_SYMBOL_FILENAME_LENGTH, 1024);
+  });
+  it("reuses the dump filename base64url helper for the symbol filename header", () => {
+    assert.equal(decodeSymbolFilenameBase64url(encodeSymbolFilenameBase64url("electron-41.10.6.pdb")), "electron-41.10.6.pdb");
+    assert.equal(decodeSymbolFilenameBase64url(encodeSymbolFilenameBase64url("符号-α.pdb")), "符号-α.pdb");
+    expectDecodeError(() => decodeSymbolFilenameBase64url("not base64url!"), /not base64url/);
+    expectDecodeError(
+      () => decodeSymbolFilenameBase64url(encodeSymbolFilenameBase64url("nested/electron.pdb")),
+      /unsafe characters/,
+    );
+  });
+  it("registers the symbols error codes in HTTP_ERROR_CODES", () => {
+    for (const code of ["symbol_identity_unreadable", "symbol_kind_unsupported", "symbol_too_large"]) {
+      assert.ok((HTTP_ERROR_CODES as readonly string[]).includes(code), `${code} must be a stable HTTP error code`);
+    }
   });
 });
 

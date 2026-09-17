@@ -7,6 +7,9 @@ Customers == 1..2
 Cases     == 1..2
 Tokens    == 1..2
 Dumps     == 1..2
+\* Debug identities modeled abstractly: each slot is one distinct
+\* (debug_file, debug_id, kind) triple (docs/symbols-design.md).
+Symbols   == 1..2
 
 NoCase     == 0
 NoDump     == 0
@@ -55,14 +58,16 @@ VARIABLES
   coverage,         \* dump slot -> CoverageKinds or NoCoverage
   \* @type: Set(Int);
   downloadable,     \* dump slots currently authorized for download
+  \* @type: Set(Int);
+  symbolRegistered, \* symbol identity slots currently registered
   \* @type: Str;
   action_taken,     \* last non-stuttering transition, for traces
   \* @type: { case: Int, token: Int, dump: Int, kind: Str };
   parameters        \* complete inputs of the last transition
 
 vars == <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-          digestRecorded, validation, coverage, downloadable, action_taken,
-          parameters>>
+          digestRecorded, validation, coverage, downloadable, symbolRegistered,
+          action_taken, parameters>>
 
 Init ==
   /\ caseStatus = <<"new", "new">>
@@ -76,6 +81,7 @@ Init ==
   /\ validation = <<"not-checked", "not-checked">>
   /\ coverage = <<NoCoverage, NoCoverage>>
   /\ downloadable = {}
+  /\ symbolRegistered = {}
   /\ action_taken = "Init"
   /\ parameters = [case |-> 0, token |-> 0, dump |-> 0,
                      kind |-> NoCoverage]
@@ -90,7 +96,7 @@ StartInvestigation(c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 WaitForCustomer(c) ==
   /\ c \in Cases
@@ -100,7 +106,7 @@ WaitForCustomer(c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 \* Waiting, resolved, and closed cases reopen explicitly. Reopening a closed
 \* case does not restore grants revoked when it was closed.
@@ -112,7 +118,7 @@ ResumeInvestigation(c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 ResolveCase(c) ==
   /\ c \in Cases
@@ -122,7 +128,7 @@ ResolveCase(c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 \* Closing is administrative: dump bytes, downloadability, and retention are
 \* unchanged. Every issued grant for the case is revoked atomically, while an
@@ -143,7 +149,7 @@ CloseCase(c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<dumpToken, tokenUploads, dumpPhase, dumpCase, blobState, digestRecorded,
-                 validation, coverage, downloadable>>
+                 validation, coverage, downloadable, symbolRegistered>>
 
 \* Mint a one-time upload grant for its statically modeled case.
 IssueToken(t) ==
@@ -155,7 +161,7 @@ IssueToken(t) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 RevokeToken(t) ==
   /\ t \in Tokens
@@ -165,7 +171,7 @@ RevokeToken(t) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 ExpireToken(t) ==
   /\ t \in Tokens
@@ -175,7 +181,7 @@ ExpireToken(t) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, dumpPhase, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 \* Allocation consumes one grant slot and fixes the dump-to-case association
 \* before customer bytes are trusted. A dump slot never returns to "absent".
@@ -200,7 +206,7 @@ BeginUpload(t, d) ==
   /\ parameters' = [case |-> 0, token |-> t, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, digestRecorded, validation, coverage,
-                 downloadable>>
+                 downloadable, symbolRegistered>>
 
 \* Sealing represents a complete, flushed staging file plus durable length and
 \* digest metadata. Bytes are still quarantined from readers.
@@ -214,7 +220,7 @@ SealUpload(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
-                 validation, coverage, downloadable>>
+                 validation, coverage, downloadable, symbolRegistered>>
 
 \* A failed stream consumes the grant and dump slot but publishes no bytes.
 FailUpload(d) ==
@@ -227,7 +233,7 @@ FailUpload(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, digestRecorded,
-                 coverage, downloadable>>
+                 coverage, downloadable, symbolRegistered>>
 
 \* Promotion is a filesystem rename. It is deliberately separate from the
 \* following ledger transition so a crash between the two remains representable.
@@ -240,7 +246,7 @@ PromoteObject(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase, dumpCase,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 \* This action is also the recovery step after a crash following promotion.
 MarkQuarantined(d) ==
@@ -253,7 +259,7 @@ MarkQuarantined(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
 
 AcceptDump(d, kind) ==
   /\ d \in Dumps
@@ -269,7 +275,7 @@ AcceptDump(d, kind) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> kind]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
-                 digestRecorded>>
+                 digestRecorded, symbolRegistered>>
 
 \* Structurally invalid input can remain in the vault until retention purges
 \* it, but it is never downloadable through the normal analyst interface.
@@ -283,7 +289,7 @@ RejectDump(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
-                 digestRecorded, coverage, downloadable>>
+                 digestRecorded, coverage, downloadable, symbolRegistered>>
 
 \* Disable download before touching the filesystem. A crash in this phase is
 \* recoverable and cannot re-authorize the dump.
@@ -296,7 +302,7 @@ BeginPurge(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase, blobState,
-                 digestRecorded, validation, coverage>>
+                 digestRecorded, validation, coverage, symbolRegistered>>
 
 \* Finish purge after byte removal. Association, digest, validation, and
 \* coverage remain as a minimal tombstone.
@@ -309,7 +315,31 @@ FinishPurge(d) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpCase,
-                 digestRecorded, validation, coverage, downloadable>>
+                 digestRecorded, validation, coverage, downloadable, symbolRegistered>>
+
+\* Symbol ingest is idempotent: re-registering an identity leaves the
+\* register unchanged (docs/symbols-design.md). The symbol slot rides the
+\* generic dump wire field (the customer-slot-rides-case precedent).
+IngestSymbol(m) ==
+  /\ m \in Symbols
+  /\ symbolRegistered' = symbolRegistered \cup {m}
+  /\ action_taken' = "IngestSymbol"
+  /\ parameters' = [case |-> 0, token |-> 0, dump |-> m,
+                      kind |-> NoCoverage]
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase,
+                 dumpCase, blobState, digestRecorded, validation, coverage,
+                 downloadable>>
+
+PurgeSymbol(m) ==
+  /\ m \in Symbols
+  /\ m \in symbolRegistered
+  /\ symbolRegistered' = symbolRegistered \ {m}
+  /\ action_taken' = "PurgeSymbol"
+  /\ parameters' = [case |-> 0, token |-> 0, dump |-> m,
+                      kind |-> NoCoverage]
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase,
+                 dumpCase, blobState, digestRecorded, validation, coverage,
+                 downloadable>>
 
 Next ==
   \/ \E c \in Cases: StartInvestigation(c)
@@ -329,6 +359,8 @@ Next ==
   \/ \E d \in Dumps: RejectDump(d)
   \/ \E d \in Dumps: BeginPurge(d)
   \/ \E d \in Dumps: FinishPurge(d)
+  \/ \E m \in Symbols: IngestSymbol(m)
+  \/ \E m \in Symbols: PurgeSymbol(m)
 
 SafetySpec == Init /\ [][Next]_vars
 
@@ -357,12 +389,14 @@ TypeOK ==
   /\ Len(coverage) = Cardinality(Dumps)
   /\ \A d \in Dumps: coverage[d] \in CoverageKinds \cup {NoCoverage}
   /\ downloadable \subseteq Dumps
+  /\ symbolRegistered \subseteq Symbols
   /\ action_taken \in {
        "Init", "StartInvestigation", "WaitForCustomer",
        "ResumeInvestigation", "ResolveCase", "CloseCase", "IssueToken",
        "RevokeToken", "ExpireToken", "BeginUpload",
        "SealUpload", "FailUpload", "PromoteObject", "MarkQuarantined",
-       "AcceptDump", "RejectDump", "BeginPurge", "FinishPurge"
+       "AcceptDump", "RejectDump", "BeginPurge", "FinishPurge",
+       "IngestSymbol", "PurgeSymbol"
      }
   /\ parameters \in [case: Cases \cup {0},
                        token: Tokens \cup {0},
@@ -447,8 +481,15 @@ DeletedHasNoBlob ==
       /\ d \notin downloadable
       /\ dumpCase[d] \in Cases
 
+\* The register holds only modeled identities, and identity uniqueness is
+\* structural (a set). Ingest idempotence is action semantics:
+\* IngestSymbol(m); IngestSymbol(m) leaves the register equal to one ingest.
+SymbolInvariant ==
+  symbolRegistered \subseteq Symbols
+
 SafetyInvariant ==
   /\ TypeOK
+  /\ SymbolInvariant
   /\ AssociationIntegrity
   /\ TokenIntegrity
   /\ TokenSlotBounds

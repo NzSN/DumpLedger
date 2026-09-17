@@ -11,6 +11,7 @@ import type {
   DumpDetailResponse,
   GrantQuotaResponse,
   GrantRecord,
+  SymbolListResponse,
   TransitionResponse,
 } from "@dump-ledger/http-contracts";
 import { FixedWindowRateLimiter } from "../auth/rate-limiter.js";
@@ -30,6 +31,8 @@ import { registerGrantRoutes } from "./routes/grant-routes.js";
 import { registerOperationRoutes } from "./routes/operation-routes.js";
 import { registerTransferRoutes } from "./routes/transfer-routes.js";
 import { registerUploadRoutes } from "./routes/upload-routes.js";
+import { registerSymbolRoutes } from "./routes/symbol-routes.js";
+import { registerSymbolAdminRoutes } from "./routes/symbol-admin-routes.js";
 import { registerStaticWeb } from "./static-web.js";
 
 type MutationResult = { readonly ok: true; readonly id?: string; readonly secret?: string } | { readonly ok: false; readonly code: string };
@@ -61,6 +64,28 @@ export interface HttpApplicationPort {
   transitionCase(caseId: string, action: CaseAction): CaseTransitionOutcome | undefined;
   dumpDetail(dumpId: string): DumpDetailResponse | undefined;
   grantRecord(grantId: string): GrantRecord | undefined;
+
+  /* Symbol store (docs/symbols-design.md): operator list + ingest lifecycle
+   * + purge, and the unauthenticated symsrv read surface. */
+  listSymbols(): SymbolListResponse;
+  beginSymbolIngest(): MutationResult;
+  sealSymbolIngest(input: {
+    readonly artifactId: string;
+    readonly debugFile: string;
+    readonly debugId: string;
+    readonly byteSize: bigint;
+    readonly sha256: string;
+    readonly product?: string;
+    readonly version?: string;
+    readonly arch?: string;
+  }): MutationResult & { readonly deduplicated?: boolean };
+  failSymbolIngest(artifactId: string): void;
+  appendSymbolBytes(artifactId: string, chunk: Uint8Array): void;
+  syncSymbolStaging(artifactId: string): void;
+  purgeSymbol(artifactId: string): MutationResult;
+  openSymbolArtifact(debugFile: string, debugId: string):
+    | { readonly byteSize: bigint; readonly stream: Readable }
+    | undefined;
 }
 
 export interface HttpServerOptions {
@@ -128,7 +153,7 @@ const PRODUCTION_CSP = [
 ].join("; ");
 
 export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
-  const server = Fastify({ logger: false, bodyLimit: 16 * 1024, trustProxy: options.trustProxy ?? false });
+  const server = Fastify({ logger: false, bodyLimit: 16 * 1024, trustProxy: options.trustProxy ?? false, routerOptions: { maxParamLength: 512 } });
   const upload = new UploadSession(options.uploadLifecycle, options.uploadSink);
   const now = options.now ?? Date.now;
   const uploadAdmission = options.uploadAdmission ?? new UploadAdmission(options.maxConcurrentUploads ?? 2);
@@ -152,7 +177,10 @@ export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
     reply.header("Content-Security-Policy", PRODUCTION_CSP);
     // Hashed assets set their own immutable cache header in the static route;
     // every other response (HTML shell, JSON, uploads, downloads) is no-store.
-    if (!request.url.startsWith("/assets/")) reply.header("Cache-Control", "no-store");
+    if (!request.url.startsWith("/assets/") && !request.url.startsWith("/symbols/")) reply.header("Cache-Control", "no-store");
+    // ^ the symsrv store path (/symbols/<name>/<id>/<file>) sets immutable
+    // caching itself; errors there keep sendError's explicit no-store, and the
+    // single-segment SPA page "/symbols" (no trailing slash) stays no-store.
     if (options.secureDeployment === true) reply.header("Strict-Transport-Security", "max-age=31536000");
     return payload;
   });
@@ -169,6 +197,13 @@ export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
   registerOperationRoutes(server, ctx);
   registerTransferRoutes(server, ctx);
   registerUploadRoutes(server, ctx);
+  registerSymbolAdminRoutes(server, ctx);
+  // The symsrv read surface registers BEFORE the static web fallback so its
+  // three-segment paths are never shadowed by the SPA (symbols-design.md,
+  // implementation constraints).
+  registerSymbolRoutes(server, {
+    openArtifact: (debugFile, debugId) => options.application.openSymbolArtifact(debugFile, debugId),
+  });
 
   // The React build is mounted at the final browser routes last; nothing is
   // registered after this that could shadow an /api or /health path.

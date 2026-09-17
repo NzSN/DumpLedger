@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { SimulatedCrash } from "../domain/errors.js";
-import { parseGeneratedId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type IdentifierKind, type IdSource } from "../domain/ids.js";
+import { parseGeneratedId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type IdentifierKind, type IdSource, type SymbolArtifactId } from "../domain/ids.js";
 
 export interface Clock { now(): string }
 export interface EntropySource { secret(): string }
-export type DurableCheckpoint = "after_staging_create" | "after_vault_promote" | "after_vault_remove";
+export type DurableCheckpoint = "after_staging_create" | "after_vault_promote" | "after_vault_remove" | "after_symbol_vault_promote" | "after_symbol_vault_remove";
 export interface FailpointPort { hit(checkpoint: DurableCheckpoint): void }
 
 export class SystemClock implements Clock { now(): string { return new Date().toISOString(); } }
@@ -25,13 +25,14 @@ export class DeterministicEntropy implements EntropySource {
   }
 }
 
-type AnyId = CustomerId | CaseId | GrantId | DumpId | AuditEventId;
+type AnyId = CustomerId | CaseId | GrantId | DumpId | AuditEventId | SymbolArtifactId;
 export class RandomIds implements IdSource {
   next(kind: "customer"): CustomerId;
   next(kind: "case"): CaseId;
   next(kind: "grant"): GrantId;
   next(kind: "dump"): DumpId;
   next(kind: "audit"): AuditEventId;
+  next(kind: "symbol"): SymbolArtifactId;
   next(kind: IdentifierKind): AnyId {
     if (kind === "customer") {
       return parseGeneratedId(kind, `${kind}_${randomUUID()}`) as AnyId;
@@ -48,6 +49,7 @@ export class DeterministicIds implements IdSource {
   next(kind: "grant"): GrantId;
   next(kind: "dump"): DumpId;
   next(kind: "audit"): AuditEventId;
+  next(kind: "symbol"): SymbolArtifactId;
   next(kind: IdentifierKind): AnyId {
     this.sequence += 1;
     const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

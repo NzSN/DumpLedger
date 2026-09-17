@@ -22,7 +22,10 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { sendError } from "./contracts/json.js";
 import type { HttpServerOptions } from "./server.js";
 
-/** Browser routes served by the React app (frontend/src/app/router.tsx). */
+/** Browser routes served by the React app (frontend/src/app/router.tsx).
+ * NOTE: the symsrv store path lives at /symbols/<name>/<id>/<file> and is
+ * registered before this fallback; the single-segment SPA page /symbols is
+ * served here. */
 const INDEX_ROUTES: readonly string[] = [
   "/",
   "/login",
@@ -33,6 +36,7 @@ const INDEX_ROUTES: readonly string[] = [
   "/dumps",
   "/dumps/:dumpId",
   "/operations",
+  "/symbols",
 ];
 
 /**

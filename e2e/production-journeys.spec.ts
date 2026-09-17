@@ -51,6 +51,49 @@ async function collectStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+const SYMBOL_GUID_BYTES = Buffer.from([
+  0x67, 0x45, 0x23, 0x01, 0xab, 0x89, 0xef, 0xcd,
+  0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+]);
+const SYMBOL_DEBUG_ID = "0123456789ABCDEF0123456789ABCDEF1";
+const SYMBOL_DEBUG_FILE = "electron.pdb";
+
+/** Minimal synthetic MSF 7.0 container whose stream 1 is one RSDS record. */
+function syntheticPdb(pdbPath = `C:\\build\\${SYMBOL_DEBUG_FILE}`, age = 1): Buffer {
+  const blockSize = 4096;
+  const rsds = Buffer.alloc(4 + 16 + 4 + pdbPath.length + 1);
+  rsds.write("RSDS", 0, "latin1");
+  SYMBOL_GUID_BYTES.copy(rsds, 4);
+  rsds.writeUInt32LE(age, 20);
+  rsds.write(pdbPath, 24, "latin1");
+  const streams = [Buffer.alloc(0), rsds];
+  const directory = Buffer.alloc(4 + streams.length * 4);
+  directory.writeUInt32LE(streams.length, 0);
+  streams.forEach((stream, index) => directory.writeUInt32LE(stream.length, 4 + index * 4));
+  const streamStartBlocks: number[] = [];
+  let nextBlock = 1;
+  for (const stream of streams) {
+    streamStartBlocks.push(nextBlock);
+    nextBlock += Math.ceil(stream.length / blockSize);
+  }
+  const directoryStartBlock = nextBlock;
+  const blockMapStartBlock = directoryStartBlock + 1;
+  const numBlocks = blockMapStartBlock + 1;
+  const bytes = Buffer.alloc(numBlocks * blockSize);
+  bytes.write("Microsoft C/C++ MSF 7.00\r\n\u001aDS", 0, "latin1");
+  bytes.writeUInt32LE(blockSize, 32);
+  bytes.writeUInt32LE(1, 36);
+  bytes.writeUInt32LE(numBlocks, 40);
+  bytes.writeUInt32LE(directory.length, 44);
+  bytes.writeUInt32LE(0, 48);
+  bytes.writeUInt32LE(blockMapStartBlock, 52);
+  streams.forEach((stream, index) => stream.copy(bytes, streamStartBlocks[index]! * blockSize));
+  directory.copy(bytes, directoryStartBlock * blockSize);
+  bytes.writeUInt32LE(directoryStartBlock, blockMapStartBlock * blockSize);
+  bytes.writeUInt32LE(blockMapStartBlock, blockMapStartBlock * blockSize + 4);
+  return bytes;
+}
+
 let operatorContext: BrowserContext | undefined;
 let operatorPage: Page | undefined;
 let caseId = "";
@@ -250,4 +293,35 @@ test("(e) the original dump downloads and its bytes match the upload", async () 
   const downloadedBytes = await collectStream(stream);
   expect(downloadedBytes.equals(minidumpBytes)).toBe(true);
   expect(sha256Hex(downloadedBytes)).toBe(sha256Hex(minidumpBytes));
+});
+
+test("(f) operator ingests a PDB on the Symbols page and the symsrv route serves it", async () => {
+  const page = operatorPage as Page;
+  const pdb = syntheticPdb();
+  await page.goto("/symbols");
+  await expect(page.getByRole("heading", { name: "Symbols" })).toBeVisible();
+
+  // Ingest through the drop-zone input; the per-file row shows the parsed identity.
+  await page.getByLabel("Choose PDB files", { exact: true }).setInputFiles({
+    name: SYMBOL_DEBUG_FILE,
+    mimeType: "application/octet-stream",
+    buffer: pdb,
+  });
+  await expect(page.getByText(/electron\.pdb .*registered/).first()).toBeVisible();
+  await expect(page.getByText(SYMBOL_DEBUG_ID.slice(0, 4), { exact: false }).first()).toBeVisible();
+
+  // The symsrv route streams byte-identical content with immutable caching.
+  const fetched = await page.request.get(`/symbols/${SYMBOL_DEBUG_FILE}/${SYMBOL_DEBUG_ID}/${SYMBOL_DEBUG_FILE}`);
+  expect(fetched.status()).toBe(200);
+  expect(fetched.headers()["cache-control"]).toContain("immutable");
+  expect(Buffer.from(await fetched.body()).equals(pdb)).toBe(true);
+
+  // Purge via the row + confirmation, then the route 404s.
+  await page.getByRole("button", { name: "Purge", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: /Purge/ }).click();
+  await expect(page.getByRole("heading", { name: "Symbols" })).toBeVisible();
+  const gone = await page.request.get(`/symbols/${SYMBOL_DEBUG_FILE}/${SYMBOL_DEBUG_ID}/${SYMBOL_DEBUG_FILE}`);
+  expect(gone.status()).toBe(404);
 });

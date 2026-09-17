@@ -58,3 +58,18 @@ _Avoid_: Upload credit, attempt
 An upload grant issued with more than one slot, delivered as a single share
 link.
 _Avoid_: Multi-link, shared grant
+
+**Module**:
+One loadable binary image identity (`code_file`/`code_id` plus
+`debug_file`/`debug_id`), annotated with product, version, and architecture.
+_Avoid_: Library, binary, package
+
+**Symbol artifact**:
+One immutable file (kind `pdb`) satisfying one module's debug identity, bytes
+in the vault; re-ingesting the same identity is a no-op.
+_Avoid_: Debug blob, symbol dump
+
+**Symbol store**:
+The symbol-artifact collection plus the symsrv-protocol read surface
+(`GET /symbols/<debug_file>/<debug_id>/<debug_file>`).
+_Avoid_: Symbol server, pdb folder

@@ -623,6 +623,7 @@ export class TransferMbtHarness {
       }))),
       validation: vSeqStr(MODEL_SLOTS.map((modelSlot) => dumpBySlot(modelSlot)?.validation ?? "not-checked")),
       coverage: vSeqStr(MODEL_SLOTS.map((modelSlot) => dumpBySlot(modelSlot)?.coverage ?? NO_COVERAGE)),
+      symbolRegistered: vSetInt(new Set()),
       downloadable: vSetInt(new Set(projection.downloadable.map((realId) => {
         const mapped = this.dumpToSlot.get(realId);
         if (mapped === undefined) {

@@ -45,6 +45,7 @@ export function Brand({ href = "/", label = "DumpLedger home" }: BrandProps): Re
 export const OPERATOR_NAV_LINKS = [
   { to: "/", label: "Cases", end: true },
   { to: "/operations", label: "Operations", end: false },
+  { to: "/symbols", label: "Symbols", end: false },
 ] as const;
 
 export function PrimaryNav(): ReactNode {

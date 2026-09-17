@@ -1,21 +1,21 @@
 import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
-import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
+import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
 import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
 import { MAX_GRANT_UPLOAD_SLOTS, SqliteLedger } from "../ledger/sqlite-ledger.js";
-import type { Vault } from "../vault/vault.js";
+import type { SymbolVault, Vault } from "../vault/vault.js";
 import type { ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
 import { CryptoEntropy, NoFailpoints, RandomIds, SystemClock, type Clock, type EntropySource, type FailpointPort } from "./dependencies.js";
 import type { InspectionPort } from "./inspection-port.js";
-import type { BackupInventory, DumpLedgerProjection, TransitionReceipt, TransitionSuccess } from "./projection.js";
+import type { BackupInventory, DumpLedgerProjection, SymbolArtifactProjection, TransitionReceipt, TransitionSuccess } from "./projection.js";
 
 export { DeterministicClock, DeterministicEntropy, DeterministicIds, ScriptedFailpoints } from "./dependencies.js";
 export type { DurableCheckpoint } from "./dependencies.js";
 export type { InspectionOutcome, InspectionPort } from "./inspection-port.js";
 export type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCustomerRecord, ImportDumpRecord, ImportGrantRecord, ImportSummary, LifecycleCommand } from "./commands.js";
-export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, TransitionReceipt } from "./projection.js";
+export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, SymbolArtifactProjection, TransitionReceipt } from "./projection.js";
 
-export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
+export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly symbolVault?: SymbolVault; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
 /** Public grant-quota answer (batch upload design): what the holder of a valid secret may still upload. */
 export interface GrantQuota {
   readonly maxUploads: number;
@@ -27,6 +27,8 @@ export interface GrantQuota {
 export interface DumpLedgerEngine {
   execute(command: LifecycleCommand): TransitionReceipt;
   grantKeyFingerprint(): string;
+  /** Bounded symbol-artifact lookup by debug identity (docs/symbols-design.md). */
+  findSymbolArtifact(debugFile: string, debugId: string, kind: "pdb"): SymbolArtifactProjection | undefined;
   /** Returns quota for issued or consumed grants; undefined for unknown, revoked, or expired secrets. */
   grantQuota(grantSecret: string): GrantQuota | undefined;
   snapshot(): DumpLedgerProjection;
@@ -80,6 +82,7 @@ function assertImportSummary(value: unknown): ImportSummary {
 
 class Engine implements DumpLedgerEngine {
   private readonly ledger: SqliteLedger;
+  private readonly symbolVault: SymbolVault | undefined;
   private readonly clock: Clock;
   private readonly entropy: EntropySource;
   private readonly ids: IdSource;
@@ -89,6 +92,8 @@ class Engine implements DumpLedgerEngine {
     if (options.grantSecretKey.byteLength < 32) throw new DumpLedgerError("invalid_input", "grantSecretKey must contain at least 32 bytes");
     this.grantSecretKey = Uint8Array.from(options.grantSecretKey);
     this.ledger = new SqliteLedger(options.databasePath);
+    const candidate = options.symbolVault ?? (options.vault as Partial<SymbolVault>);
+    this.symbolVault = typeof candidate.createSymbolStaging === "function" ? (candidate as SymbolVault) : undefined;
     this.clock = options.clock ?? new SystemClock(); this.entropy = options.entropy ?? new CryptoEntropy(); this.ids = options.ids ?? new RandomIds(); this.failpoints = options.failpoints ?? new NoFailpoints();
   }
   execute(command: LifecycleCommand): TransitionReceipt {
@@ -101,6 +106,7 @@ class Engine implements DumpLedgerEngine {
     }
   }
   snapshot(): DumpLedgerProjection { return this.ledger.snapshot(); }
+  findSymbolArtifact(debugFile: string, debugId: string, kind: "pdb"): SymbolArtifactProjection | undefined { return this.ledger.findSymbolArtifact(debugFile, debugId, kind); }
   grantKeyFingerprint(): string { return createHash("sha256").update(this.grantSecretKey).digest("base64url"); }
   grantQuota(grantSecret: string): GrantQuota | undefined {
     const grant = this.ledger.findGrantByDigest(digestSecret(assertText(grantSecret, "grantSecret", 1024), this.grantSecretKey));
@@ -157,6 +163,37 @@ class Engine implements DumpLedgerEngine {
       case "SetRetention": { const dumpId=parseDumpId(command.dumpId), purgeAt=assertIsoTimestamp(command.purgeAt,"purgeAt"); if(purgeAt<=occurredAt) throw new DumpLedgerError("invalid_input","purgeAt must be in the future"); this.ledger.setRetention(dumpId,purgeAt,event()); return {ok:true,action:command.type,occurredAt,dumpId,purgeAt}; }
       case "BeginPurge": { const dumpId=parseDumpId(command.dumpId), dump=this.requireOneOfPhases(dumpId,["available","rejected"]); this.ledger.beginPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,phase:"deleting"}; }
       case "FinishPurge": { const dumpId=parseDumpId(command.dumpId); this.requirePhase(dumpId,"deleting"); this.options.vault.remove(dumpId); this.failpoints.hit("after_vault_remove"); this.ledger.finishPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,phase:"deleted"}; }
+      case "IngestSymbol": {
+        const vault=this.requireSymbolVault();
+        const artifactId=this.ids.next("symbol");
+        vault.createSymbolStaging(artifactId);
+        return {ok:true,action:command.type,occurredAt,artifactId};
+      }
+      case "SealSymbol": {
+        const vault=this.requireSymbolVault();
+        const artifactId=parseSymbolArtifactId(command.artifactId), debugFile=assertText(command.debugFile,"debugFile",255), debugId=assertText(command.debugId,"debugId",64), sha256=assertSha256(command.sha256);
+        const byteSize=assertPositiveBigint(command.byteSize,"byteSize");
+        const product=command.product===undefined?null:assertText(command.product,"product",200), version=command.version===undefined?null:assertText(command.version,"version",200), arch=command.arch===undefined?null:assertText(command.arch,"arch",64);
+        const existing=this.ledger.findSymbolArtifact(debugFile,debugId,"pdb");
+        if (existing!==undefined) {
+          vault.removeSymbolStaging(artifactId);
+          return {ok:true,action:command.type,occurredAt,artifactId:existing.artifactId,deduplicated:true};
+        }
+        vault.promoteSymbol(artifactId); this.failpoints.hit("after_symbol_vault_promote");
+        const sealed=this.ledger.sealSymbolArtifact({artifactId,debugFile,debugId,kind:"pdb",byteSize,sha256,product,version,arch},event());
+        return {ok:true,action:command.type,occurredAt,artifactId:sealed.artifact.artifactId,deduplicated:sealed.deduplicated};
+      }
+      case "FailSymbol": {
+        this.requireSymbolVault().removeSymbolStaging(parseSymbolArtifactId(command.artifactId));
+        return {ok:true,action:command.type,occurredAt};
+      }
+      case "PurgeSymbol": {
+        const vault=this.requireSymbolVault(), artifactId=parseSymbolArtifactId(command.artifactId);
+        if (this.ledger.findSymbolArtifactById(artifactId)===undefined) throw new DumpLedgerError("not_found","symbol artifact was not found");
+        vault.removeSymbol(artifactId); this.failpoints.hit("after_symbol_vault_remove");
+        this.ledger.purgeSymbolArtifact(artifactId,event());
+        return {ok:true,action:command.type,occurredAt,artifactId};
+      }
       case "BeginImport": {
         const manifestDigest=assertText(command.manifestDigest,"manifestDigest",128), counts=assertImportCounts(command.counts,"counts");
         const marker=event();
@@ -217,6 +254,10 @@ class Engine implements DumpLedgerEngine {
     }
   }
   private requirePhase(dumpId: DumpId, phase: DumpPhase): DumpLedgerProjection["dumps"][number] { return this.requireOneOfPhases(dumpId,[phase]); }
+  private requireSymbolVault(): SymbolVault {
+    if (this.symbolVault === undefined) throw new DumpLedgerError("storage_unavailable", "symbol storage is not configured");
+    return this.symbolVault;
+  }
   private requireOneOfPhases(dumpId: DumpId, phases: readonly DumpPhase[]): DumpLedgerProjection["dumps"][number] { const dump=this.ledger.getDump(dumpId); if(dump===null) throw new DumpLedgerError("not_found","dump was not found"); if(!phases.includes(dump.phase)) throw new DumpLedgerError("invalid_transition",`dump phase ${dump.phase} is not valid for this action`); return dump; }
 }
 export function createDumpLedgerEngine(options: DumpLedgerEngineOptions): DumpLedgerEngine { return new Engine(options); }

@@ -615,6 +615,11 @@
       "id": "TokDone",
       "wireName": "tokDone",
       "provenance": "implementation"
+    },
+    {
+      "id": "SymbolRegistered",
+      "wireName": "symbolRegistered",
+      "provenance": "implementation"
     }
   ]
 }

@@ -236,6 +236,7 @@ test("a second transfer job conflicts (409) while one is running", async t => {
     execute: command => engine.execute(command),
     grantKeyFingerprint: () => engine.grantKeyFingerprint(),
     grantQuota: secret => engine.grantQuota(secret),
+    findSymbolArtifact: (debugFile, debugId, kind) => engine.findSymbolArtifact(debugFile, debugId, kind),
     snapshot: () => engine.snapshot(),
     dueForPurge: at => engine.dueForPurge(at),
     pendingPurgeCompletion: () => engine.pendingPurgeCompletion(),

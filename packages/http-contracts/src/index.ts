@@ -18,3 +18,4 @@ export * from "./dumps.js";
 export * from "./operations.js";
 export * from "./uploads.js";
 export * from "./transfer.js";
+export * from "./symbols.js";
