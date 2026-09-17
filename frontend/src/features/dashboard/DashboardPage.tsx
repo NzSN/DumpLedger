@@ -116,11 +116,11 @@ export function CustomerCard({ customer, onCaseCreated }: CustomerCardProps): Re
   return (
     <section className="customer-card">
       <div>
-        <span className="customer-name">{customer.displayName}</span>
-        <div className="mono subtle-id">{customer.customerId}</div>
-        <Link className="button button-secondary button-small" to={`/customers/${encodeURIComponent(customer.customerId)}`}>
-          Open customer
+        {/* Each customer widget switches to its individual panel. */}
+        <Link className="customer-name" to={`/customers/${encodeURIComponent(customer.customerId)}`}>
+          {customer.displayName}
         </Link>
+        <div className="mono subtle-id">{customer.customerId}</div>
       </div>
       <CreateCaseForm
         customerId={customer.customerId}

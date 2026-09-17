@@ -44,13 +44,16 @@ describe("keyboard navigation", () => {
     expect(order[2]).toBe("Cases");
     await user.tab();
     capture();
-    expect(order[3]).toBe("Operations");
+    expect(order[3]).toBe("Customers");
     await user.tab();
     capture();
-    expect(order[4]).toBe("Symbols");
+    expect(order[4]).toBe("Operations");
     await user.tab();
     capture();
-    expect(order[5]).toBe("Sign out");
+    expect(order[5]).toBe("Symbols");
+    await user.tab();
+    capture();
+    expect(order[6]).toBe("Sign out");
   });
 
   it("signs in entirely from the keyboard (auto-focused field, Enter submits)", async () => {

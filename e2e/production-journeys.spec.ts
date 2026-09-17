@@ -171,8 +171,13 @@ test("(a) operator login, dashboard, customer, case, workflow, and grant issue",
 test("(a2) the individual customer panel lists its cases and links through", async () => {
   const page = operatorPage as Page;
   await page.goto("/");
+  // Top navigation switches to the customers area (directory of panels).
+  await page.getByRole("link", { name: "Customers", exact: true }).click();
+  await expect(page).toHaveURL(/\/customers$/);
+  await expect(page.getByRole("heading", { name: "Customers", exact: true })).toBeVisible();
+  // Each customer is an individual widget that switches to its panel.
   const acmeCard = page.locator(".customer-card", { hasText: "Acme E2E" });
-  await acmeCard.getByRole("link", { name: "Open customer", exact: true }).click();
+  await acmeCard.getByRole("link", { name: "Acme E2E", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Acme E2E" })).toBeVisible();
   const caseRow = page.getByRole("link", { name: /Renderer crash on startup/ });
   await expect(caseRow).toBeVisible();
