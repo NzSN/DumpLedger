@@ -317,6 +317,9 @@ test("journey 1 (a) operator seeds instance A: customer, case, grant, and an upl
 
   // Create a customer, then a case under it. With two specs sharing instance
   // A there may be several customer cards, so scope to ours.
+  // Customer management lives only in the Customers area now.
+  await page.getByRole("link", { name: "Customers", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Customers", exact: true })).toBeVisible();
   await page.getByLabel("Display name").fill("Transfer E2E");
   await page.getByRole("button", { name: "Add customer", exact: true }).click();
   await expect(page.getByText("Added customer Transfer E2E.")).toBeVisible();

@@ -123,7 +123,10 @@ test("(a) operator login, dashboard, customer, case, workflow, and grant issue",
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await expect(page).toHaveURL(/\/$/);
 
-  // Create a customer.
+  // Create a customer. Customer management lives only in the Customers area
+  // (the dashboard no longer carries customer widgets).
+  await page.getByRole("link", { name: "Customers", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Customers", exact: true })).toBeVisible();
   await page.getByLabel("Display name").fill("Acme E2E");
   await page.getByRole("button", { name: "Add customer", exact: true }).click();
   await expect(page.getByText("Added customer Acme E2E.")).toBeVisible();
@@ -184,6 +187,12 @@ test("(a2) the individual customer panel lists its cases and links through", asy
   await caseRow.click();
   await expect(page.getByRole("heading", { name: "Case detail" })).toBeVisible();
   await expect(page.getByText("Renderer crash on startup", { exact: true })).toBeVisible();
+  // The case shows its customer in the breadcrumb and links back to the panel.
+  const customerCrumb = page.getByRole("link", { name: "Acme E2E", exact: true });
+  await expect(customerCrumb).toBeVisible();
+  await customerCrumb.click();
+  await expect(page.getByRole("heading", { name: "Acme E2E" })).toBeVisible();
+  await expect(page).toHaveURL(/\/customers\/[^/]+$/);
 });
 
 test("(b) public fragment upload streams the synthetic minidump to a terminal state", async ({ browser }: { browser: Browser }) => {

@@ -20,7 +20,7 @@ import { FeaturePage, LoadingState, ResourceError } from "../feature-page";
 import { Panel } from "../../shared/components/panel";
 import { EmptyState } from "../../shared/components/empty-state";
 import { CreateCustomerForm } from "./customer-forms";
-import { CustomerCard } from "../dashboard/DashboardPage";
+import { CustomerCard } from "./customer-card";
 
 function Directory({
   data,

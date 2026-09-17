@@ -265,6 +265,11 @@ function CaseDetailReady({
       <nav className="breadcrumb" aria-label="Breadcrumb">
         <Link to="/">Cases</Link>
         <span>/</span>
+        {/* The case's owning customer, linked to its individual panel. */}
+        <Link to={`/customers/${encodeURIComponent(detail.customer.customerId)}`}>
+          {detail.customer.displayName}
+        </Link>
+        <span>/</span>
         <span>{detail.title}</span>
       </nav>
       <section className="metric-grid metric-grid-three" aria-label="Case summary">

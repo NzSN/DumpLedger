@@ -124,7 +124,8 @@ describe("Dashboard operator page", () => {
     renderDashboard(fake);
 
     expect(await screen.findByText("No cases yet")).toBeTruthy();
-    expect(screen.getByText("No customers yet")).toBeTruthy();
+    // The dashboard carries no customer section; the directory owns customers.
+    expect(screen.queryByText("No customers yet")).toBeNull();
   });
 
   it("shows a retryable page error and recovers on Try again", async () => {
@@ -152,96 +153,8 @@ describe("Dashboard operator page", () => {
     expect(fake.queryCalls.filter((call) => call.path === "/api/v1/dashboard")).toHaveLength(2);
   });
 
-  it("creates a customer: pending state, success summary, focus, input clear, and refetch", async () => {
-    const fake = new OperatorFakeHttpClient();
-    fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());
-    const mutation = deferredResponder<{ readonly customer: CustomerSummary }>();
-    fake.setMutationResponder("POST", "/api/v1/customers", mutation.responder);
-    const user = userEvent.setup();
-    renderDashboard(fake);
 
-    const nameInput = await screen.findByLabelText("Display name");
-    await user.type(nameInput, "Umbrella Research");
-    await user.click(screen.getByRole("button", { name: "Add customer" }));
 
-    const pendingButton = await screen.findByRole("button", { name: "Adding…" });
-    expect((pendingButton as HTMLButtonElement).disabled).toBe(true);
-    expect((nameInput as HTMLInputElement).disabled).toBe(true);
-
-    await act(async () => {
-      mutation.resolve({ customer: { customerId: "customer-umbrella", displayName: "Umbrella Research" } });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    // Success summary becomes visible and focus moved onto it.
-    await waitFor(() => {
-      expect(screen.getAllByText(byText("Added customer Umbrella Research")).length).toBeGreaterThan(0);
-    });
-    await waitFor(() => {
-      expect(document.activeElement?.textContent).toContain("Added customer Umbrella Research");
-    });
-    // The authoritative dashboard was refetched after the mutation.
-    await waitFor(() => {
-      expect(fake.queryCalls.filter((call) => call.path === "/api/v1/dashboard")).toHaveLength(2);
-    });
-    expect((nameInput as HTMLInputElement).value).toBe("");
-  });
-
-  it("surfaces a customer-creation failure and moves focus to the alert", async () => {
-    const fake = new OperatorFakeHttpClient();
-    fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());
-    fake.setMutationResponder("POST", "/api/v1/customers", () => {
-      throw apiError("A customer with that display name already exists.");
-    });
-    const user = userEvent.setup();
-    renderDashboard(fake);
-
-    const nameInput = await screen.findByLabelText("Display name");
-    await user.type(nameInput, "Acme Corp");
-    await user.click(screen.getByRole("button", { name: "Add customer" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("A customer with that display name already exists.");
-    await waitFor(() => {
-      expect(document.activeElement?.textContent).toContain("A customer with that display name already exists.");
-    });
-    expect(screen.queryByText(byText("Added customer"))).toBeNull();
-    expect((screen.getByRole("button", { name: "Add customer" }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("creates a case under one customer with a link to its detail page", async () => {
-    const fake = new OperatorFakeHttpClient();
-    fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());
-    const created: CaseSummary = {
-      caseId: "case-2001",
-      customerId: "customer-acme",
-      title: "GPU driver reset",
-      status: "new",
-      createdAt: "2026-09-03T08:00:00.000Z",
-    };
-    fake.setMutationResponder("POST", "/api/v1/customers/customer-acme/cases", () => created);
-    const user = userEvent.setup();
-    renderDashboard(fake);
-
-    // Scope to the Acme customer card (the Customers panel heading is unique).
-    const customersPanel = (await screen.findByRole("heading", { name: "Customers" })).closest(".panel");
-    if (customersPanel === null) throw new Error("customers panel not found");
-    const acmeCard = within(customersPanel as HTMLElement).getByText("Acme Corp").closest(".customer-card");
-    if (acmeCard === null) throw new Error("customer card not found");
-    const withinCard = within(acmeCard as HTMLElement);
-    await user.type(withinCard.getByLabelText("New case"), "GPU driver reset");
-    await user.click(withinCard.getByRole("button", { name: "Create" }));
-
-    await waitFor(() => {
-      expect(withinCard.getAllByText(byText("Created case GPU driver reset")).length).toBeGreaterThan(0);
-    });
-    const openLink = withinCard.getByRole("link", { name: "Open case" });
-    expect(openLink.getAttribute("href")).toBe("/cases/case-2001");
-    await waitFor(() => {
-      expect(fake.queryCalls.filter((call) => call.path === "/api/v1/dashboard")).toHaveLength(2);
-    });
-  });
 
   it("aborts the in-flight dashboard load on unmount", async () => {
     const fake = new OperatorFakeHttpClient();

@@ -100,6 +100,9 @@ describe("Case detail operator page", () => {
 
     // Title + facts from the detail body.
     expect(await screen.findByText("Renderer crash on startup")).toBeTruthy();
+    // The breadcrumb shows the owning customer and links to its panel.
+    const customerLink = screen.getByRole("link", { name: "Acme Corp" });
+    expect(customerLink.getAttribute("href")).toBe("/customers/customer-acme");
     expect(screen.getByText("Crash dumps")).toBeTruthy();
     expect(screen.getByText("No dumps attached")).toBeTruthy();
     // Manifest is an ordinary same-origin navigation/download.

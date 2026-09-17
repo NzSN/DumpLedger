@@ -25,12 +25,6 @@ import { EmptyState } from "../../shared/components/empty-state";
 import { StatusPill } from "../../shared/components/status-pill";
 import { caseStatusPresentation } from "../../shared/status";
 import { formatUtcDate } from "../../shared/format";
-import { CreateCaseForm, CreateCustomerForm } from "../customers/customer-forms";
-
-export interface DashboardPageProps {
-  /** Test seam for surfacing a created-entity notice at the page level. */
-  readonly onCustomerCreated?: (customer: CustomerSummary) => void;
-}
 
 function MetricsGrid({ data }: { readonly data: DashboardResponse }): ReactNode {
   const counts = data.counts;
@@ -107,79 +101,13 @@ function RecentCasesPanel({ data }: { readonly data: DashboardResponse }): React
   );
 }
 
-export interface CustomerCardProps {
-  readonly customer: CustomerSummary;
-  readonly onCaseCreated: (created: CaseSummary) => void;
-}
-
-export function CustomerCard({ customer, onCaseCreated }: CustomerCardProps): ReactNode {
-  return (
-    <section className="customer-card">
-      <div>
-        {/* Each customer widget switches to its individual panel. */}
-        <Link className="customer-name" to={`/customers/${encodeURIComponent(customer.customerId)}`}>
-          {customer.displayName}
-        </Link>
-        <div className="mono subtle-id">{customer.customerId}</div>
-      </div>
-      <CreateCaseForm
-        customerId={customer.customerId}
-        customerName={customer.displayName}
-        onCreated={onCaseCreated}
-      />
-    </section>
-  );
-}
-
-function CustomersPanel({
-  data,
-  onCaseCreated,
-}: {
-  readonly data: DashboardResponse;
-  readonly onCaseCreated: (created: CaseSummary) => void;
-}): ReactNode {
-  if (data.customers.length === 0) {
-    return (
-      <Panel title="Customers" subtitle="Create a case directly under its owner.">
-        <EmptyState title="No customers yet" icon="◇">
-          Add the organization or person supplying crash evidence.
-        </EmptyState>
-      </Panel>
-    );
-  }
-  return (
-    <Panel title="Customers" subtitle="Create a case directly under its owner.">
-      <div className="customer-list">
-        {data.customers.map((customer) => (
-          <CustomerCard key={customer.customerId} customer={customer} onCaseCreated={onCaseCreated} />
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
-export function DashboardPage({ onCustomerCreated }: DashboardPageProps): ReactNode {
+export function DashboardPage(): ReactNode {
   const client = useHttpClient();
   const { state, reload } = useResource<DashboardResponse>(
     useCallback(
       (signal) => client.query({ path: "/api/v1/dashboard", decoder: decodeDashboardResponse, signal }),
       [client],
     ),
-  );
-
-  const handleCustomerCreated = useCallback(
-    (_created: CustomerSummary) => {
-      onCustomerCreated?.(_created);
-      reload();
-    },
-    [reload, onCustomerCreated],
-  );
-
-  const handleCaseCreated = useCallback(
-    (_created: CaseSummary) => {
-      reload();
-    },
-    [reload],
   );
 
   return (
@@ -193,19 +121,7 @@ export function DashboardPage({ onCustomerCreated }: DashboardPageProps): ReactN
       {state.status === "ready" && (
         <>
           <MetricsGrid data={state.data} />
-          <div className="layout-grid">
-            <RecentCasesPanel data={state.data} />
-            <div className="stack">
-              <CustomersPanel data={state.data} onCaseCreated={handleCaseCreated} />
-              <Panel
-                title="Add customer"
-                subtitle="Names stay in metadata, never vault paths."
-                className="panel-accent"
-              >
-                <CreateCustomerForm onCreated={handleCustomerCreated} />
-              </Panel>
-            </div>
-          </div>
+          <RecentCasesPanel data={state.data} />
         </>
       )}
     </FeaturePage>
