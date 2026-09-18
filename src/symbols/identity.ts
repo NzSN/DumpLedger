@@ -302,6 +302,50 @@ function formatSymsrvDebugId(guid: Uint8Array, age: number): string {
   return hex + rest + (age >>> 0).toString(16).toUpperCase();
 }
 
+/** MSF 7.0 nil stream size: an absent stream owns no blocks. */
+const MSF_NIL_STREAM_SIZE = 0xffff_ffff;
+
+/**
+ * Reads the head of one MSF stream via its block list in the reassembled
+ * stream directory. Real MSF does NOT lay streams out consecutively from
+ * block 1 — the directory carries an explicit uint32 block list per stream
+ * (Electron's 3.5 GiB PDB is the proof: assuming consecutive layout lands
+ * inside unrelated data, not the PDB Info stream).
+ */
+function readStreamPrefix(
+  directory: Uint8Array,
+  view: DataView,
+  reader: ByteReader,
+  blockSize: number,
+  streamIndex: number,
+  streamCount: number,
+  scanBytes: number,
+): Uint8Array | undefined {
+  let listOffset = 4 + streamCount * 4;
+  for (let index = 0; index < streamIndex; index += 1) {
+    const size = readUint32(view, 4 + index * 4);
+    if (size === undefined) return undefined;
+    const blocks = size === MSF_NIL_STREAM_SIZE ? 0 : Math.ceil(size / blockSize);
+    listOffset += blocks * 4;
+  }
+  const needed = Math.ceil(scanBytes / blockSize);
+  if (listOffset + needed * 4 > directory.length) return undefined;
+  const out = new Uint8Array(scanBytes);
+  let copied = 0;
+  for (let entry = 0; entry < needed && copied < scanBytes; entry += 1) {
+    const block = readUint32(view, listOffset + entry * 4);
+    if (block === undefined || block > Math.floor(reader.size / blockSize)) return undefined;
+    const start = block * blockSize;
+    const take = Math.min(blockSize, scanBytes - copied);
+    if (start + take > reader.size) return undefined;
+    const chunk = reader.readAt(start, take);
+    if (chunk === undefined || chunk.length !== take) return undefined;
+    out.set(chunk, copied);
+    copied += take;
+  }
+  return out;
+}
+
 /**
  * Reads the RSDS record at the start of the PDB Info stream (stream 1) out of
  * the already-reassembled stream directory.
@@ -321,11 +365,8 @@ function readRsdsIdentity(directory: Uint8Array, reader: ByteReader, blockSize: 
     throw symbolIdentityUnreadable(`PDB Info stream is ${stream1Size} bytes; too small for an RSDS record`);
   }
 
-  // MSF allocates a stream's blocks consecutively, so stream 1 starts right
-  // after the blocks of stream 0 (zero-length streams consume no blocks).
-  const stream1StartBlock = 1 + Math.ceil(stream0Size / blockSize);
   const scanBytes = Math.min(stream1Size, RSDS_PATH_SCAN_MAX);
-  const prefix = readConsecutiveBlocksFrom(reader, blockSize, stream1StartBlock, scanBytes);
+  const prefix = readStreamPrefix(directory, view, reader, blockSize, 1, streamCount, scanBytes);
   if (prefix === undefined) throw symbolIdentityUnreadable("PDB Info stream is out of range");
   if (!matchesAscii(prefix, 0, RSDS_SIGNATURE)) {
     throw symbolIdentityUnreadable('PDB Info stream does not start with an "RSDS" record');

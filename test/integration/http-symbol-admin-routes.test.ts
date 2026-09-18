@@ -68,16 +68,28 @@ function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1, ga
   rsds.write(pdbPath, 24, "latin1");
 
   const streams = [Buffer.alloc(0), rsds];
-  const directory = Buffer.alloc(4 + streams.length * 4);
-  directory.writeUInt32LE(streams.length, 0);
-  streams.forEach((stream, index) => directory.writeUInt32LE(stream.length, 4 + index * 4));
-
   const streamStartBlocks: number[] = [];
   let nextBlock = 1;
   for (const stream of streams) {
     streamStartBlocks.push(nextBlock);
     nextBlock += Math.ceil(stream.length / blockSize);
   }
+
+  // MSF 7.0 directory: stream count, the size table, then one uint32 block
+  // list per stream (real MSF does not guarantee consecutive stream layout).
+  const streamBlockCounts = streams.map((stream) => Math.ceil(stream.length / blockSize));
+  const directoryBytes = 4 + streams.length * 4 + streamBlockCounts.reduce((sum, count) => sum + count, 0) * 4;
+  const directory = Buffer.alloc(directoryBytes);
+  directory.writeUInt32LE(streams.length, 0);
+  let listOffset = 4 + streams.length * 4;
+  streams.forEach((stream, index) => {
+    directory.writeUInt32LE(stream.length, 4 + index * 4);
+    for (let block = 0; block < streamBlockCounts[index]!; block += 1) {
+      directory.writeUInt32LE(streamStartBlocks[index]! + block, listOffset + block * 4);
+    }
+    listOffset += streamBlockCounts[index]! * 4;
+  });
+
   // Real multi-GB PDBs keep their stream directory far from the prefix;
   // the gap reproduces that layout without gigabytes of fixture bytes.
   const directoryStartBlock = nextBlock + gapBlocksBeforeDirectory;
