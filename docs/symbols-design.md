@@ -1,6 +1,10 @@
 # Symbols design
 
-Status: milestone 1 implemented (2026-09-16; decisions D1–D4 resolved same day).
+Status: milestones 1 and 2 implemented (2026-09-16 and 2026-09-18;
+decisions D1–D4 resolved 2026-09-16). Of milestone 3, the transfer-bundle
+`--include-symbols` flag is implemented (2026-09-18); CI ingest tokens and
+the EXE artifact kind are in flight; Breakpad `.sym` generation remains
+optional and unscheduled.
 Manages minidump symbol artifacts (PDB/EXE) inside DumpLedger so dumps and
 their debugging symbols live in one place: one auth surface, one audit
 trail, one backup story, one deployment.
@@ -216,15 +220,21 @@ boot (migration runs), verify.
 
 ## Implementation milestones
 
-1. **Symbols in one place**: entities + migration 4 + vault namespace +
-   RSDS/PE parsers + ingest route + Symbols UI + symsrv read route +
-   debugger-evidence test + TLA actions/invariants + transfer-spec repair +
-   dual-spec model-interface regen.
-2. **Linkage**: CvRecord extraction at intake + coverage on dump detail and
-   case pages.
-3. **Scale-out**: CI ingest token, EXE artifact kind, transfer-bundle
-   `--include-symbols` flag (default off), optional Breakpad `.sym`
-   generation.
+1. **Symbols in one place** (done 2026-09-16, commit 2d40371): entities +
+   migration 4 + vault namespace + RSDS/PE parsers + ingest route + Symbols
+   UI + symsrv read route + debugger-evidence test + TLA
+   actions/invariants + transfer-spec repair + dual-spec model-interface
+   regen.
+2. **Linkage** (done 2026-09-18, commit 1ede4a5): CvRecord extraction at
+   intake (best-effort per module; never gates acceptance) + per-module
+   coverage on dump detail + missing-identity aggregation on case pages.
+   Dumps accepted before this milestone carry facts without debug
+   identities and render their modules as "unidentified" until
+   re-inspected; there is no retroactive backfill.
+3. **Scale-out**: transfer-bundle `--include-symbols` flag (done
+   2026-09-18, commit 849d47f; default off; importer re-ingests through
+   the engine symbol path). Remaining: CI ingest token, EXE artifact
+   kind, optional Breakpad `.sym` generation.
 
 ## Resolved decisions (2026-09-16)
 
