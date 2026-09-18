@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { parseIngestTokenHash } from "./auth/ingest-token.js";
 import { OperatorSessions } from "./auth/sessions.js";
 import { createDumpLedgerEngine } from "./engine/dump-ledger-engine.js";
 import { EngineHttpApplication } from "./http/application.js";
@@ -40,6 +41,9 @@ export async function main(): Promise<void> {
   const dataRoot = resolve(process.env.DUMP_LEDGER_DATA_DIR ?? "data");
   const configuredGrantKey = grantKey();
   const operatorPasswordHash = requiredEnvironment("DUMP_LEDGER_OPERATOR_PASSWORD_HASH");
+  // Optional CI symbol-ingest token (docs/security-model.md): unset or empty
+  // disables token auth entirely; a malformed digest fails boot fast.
+  const ingestTokenHash = parseIngestTokenHash(process.env.DUMP_LEDGER_INGEST_TOKEN_HASH);
   const maxConcurrentUploads = positiveIntegerEnvironment("DUMP_LEDGER_MAX_CONCURRENT_UPLOADS", 2);
   const postProcessingCapacity = positiveIntegerEnvironment("DUMP_LEDGER_POST_PROCESSING_QUEUE", 128);
   const postProcessingAttempts = positiveIntegerEnvironment("DUMP_LEDGER_POST_PROCESSING_ATTEMPTS", 5);
@@ -92,6 +96,7 @@ export async function main(): Promise<void> {
   const server = buildHttpServer({
     application: new EngineHttpApplication(engine, vault),
     sessions,
+    ...(ingestTokenHash === undefined ? {} : { ingestTokenHash }),
     uploadLifecycle: new EngineUploadLifecycle(engine),
     uploadSink: new VaultUploadSink(vault),
     uploadPostProcessor: postProcessor,

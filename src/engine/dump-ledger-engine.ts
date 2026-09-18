@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
-import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase, type SymbolArtifactKind } from "../domain/lifecycle.js";
+import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseSymbolIngestAuthChannel, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase, type SymbolArtifactKind } from "../domain/lifecycle.js";
 import { MAX_GRANT_UPLOAD_SLOTS, SqliteLedger } from "../ledger/sqlite-ledger.js";
 import type { SymbolVault, Vault } from "../vault/vault.js";
 import type { ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
@@ -181,6 +181,7 @@ class Engine implements DumpLedgerEngine {
         const artifactId=parseSymbolArtifactId(command.artifactId), sha256=assertSha256(command.sha256);
         const byteSize=assertPositiveBigint(command.byteSize,"byteSize");
         const product=command.product===undefined?null:assertText(command.product,"product",200), version=command.version===undefined?null:assertText(command.version,"version",200), arch=command.arch===undefined?null:assertText(command.arch,"arch",64);
+        const ingestAuth=command.ingestAuth===undefined?null:parseSymbolIngestAuthChannel(command.ingestAuth);
         // The identity pair is fixed by the kind: a PDB resolves by its RSDS
         // debug identity, an EXE/DLL image by its PE code identity.
         const identity=command.kind==="pdb"
@@ -192,7 +193,7 @@ class Engine implements DumpLedgerEngine {
           return {ok:true,action:command.type,occurredAt,artifactId:existing.artifactId,deduplicated:true};
         }
         vault.promoteSymbol(artifactId); this.failpoints.hit("after_symbol_vault_promote");
-        const sealed=this.ledger.sealSymbolArtifact({artifactId,kind:command.kind,debugFile:command.kind==="pdb"?identity.name:null,debugId:command.kind==="pdb"?identity.id:null,codeFile:command.kind==="exe"?identity.name:null,codeId:command.kind==="exe"?identity.id:null,byteSize,sha256,product,version,arch},event());
+        const sealed=this.ledger.sealSymbolArtifact({artifactId,kind:command.kind,debugFile:command.kind==="pdb"?identity.name:null,debugId:command.kind==="pdb"?identity.id:null,codeFile:command.kind==="exe"?identity.name:null,codeId:command.kind==="exe"?identity.id:null,byteSize,sha256,product,version,arch,ingestAuth},event());
         return {ok:true,action:command.type,occurredAt,artifactId:sealed.artifact.artifactId,deduplicated:sealed.deduplicated};
       }
       case "FailSymbol": {

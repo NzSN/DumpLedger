@@ -146,8 +146,8 @@ export class EngineHttpApplication implements HttpApplicationPort {
       ...(input.arch === undefined ? {} : { arch: input.arch }),
     };
     const receipt = this.engine.execute(input.kind === "pdb"
-      ? { type: "SealSymbol", artifactId: input.artifactId as never, kind: "pdb", debugFile: input.debugFile, debugId: input.debugId, byteSize: input.byteSize, sha256: input.sha256, ...annotations }
-      : { type: "SealSymbol", artifactId: input.artifactId as never, kind: "exe", codeFile: input.codeFile, codeId: input.codeId, byteSize: input.byteSize, sha256: input.sha256, ...annotations });
+      ? { type: "SealSymbol", artifactId: input.artifactId as never, kind: "pdb", debugFile: input.debugFile, debugId: input.debugId, byteSize: input.byteSize, sha256: input.sha256, ...annotations, ingestAuth: input.ingestAuth }
+      : { type: "SealSymbol", artifactId: input.artifactId as never, kind: "exe", codeFile: input.codeFile, codeId: input.codeId, byteSize: input.byteSize, sha256: input.sha256, ...annotations, ingestAuth: input.ingestAuth });
     return receipt.ok && receipt.artifactId !== undefined
       ? { ok: true as const, id: receipt.artifactId, deduplicated: receipt.deduplicated === true }
       : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };

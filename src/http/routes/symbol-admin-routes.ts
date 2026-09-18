@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
   decodeSymbolFilenameBase64url,
@@ -12,10 +12,12 @@ import {
   X_SYMBOL_FILENAME_HEADER,
   type SymbolKind,
 } from "@dump-ledger/http-contracts";
+import { verifyIngestToken } from "../../auth/ingest-token.js";
 import { DumpLedgerError } from "../../domain/errors.js";
+import type { SymbolIngestAuthChannel } from "../../domain/lifecycle.js";
 import { parsePdbIdentity, parsePeIdentity } from "../../symbols/identity.js";
 import { jsonRequireMutation, jsonRequireSession, sendError } from "../contracts/json.js";
-import type { SymbolIngestIdentity } from "../server.js";
+import type { HttpServerOptions, SymbolIngestIdentity } from "../server.js";
 import type { RouteContext } from "./common.js";
 
 /**
@@ -58,13 +60,43 @@ function parsePeIdentityOrUndefined(bytes: Buffer, codeFile: string): ReturnType
 class SymbolLimitExceeded extends Error {}
 
 /**
+ * Pinned ingest auth precedence (docs/security-model.md, "CI symbol-ingest
+ * tokens"): when the request carries any `Authorization` header, ONLY the
+ * bearer token path is consulted — a malformed header, a token that does not
+ * match the configured digest, or a disabled token configuration is the same
+ * 401 envelope the session guard sends, and it never falls through to the
+ * session cookie. Without the header the operator session+CSRF guard applies
+ * exactly as before. Bearer requests carry no cookie semantics, so there is
+ * no CSRF/Origin evidence to check on that path.
+ */
+function authorizeSymbolIngest(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: HttpServerOptions,
+): SymbolIngestAuthChannel | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization === undefined) {
+    return jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined ? undefined : "operator";
+  }
+  // The scheme name is matched case-insensitively (HTTP auth semantics); the
+  // token itself is exact and opaque, compared by sha256 digest only.
+  const token = /^Bearer +(\S+)$/i.exec(authorization)?.[1];
+  if (token === undefined || !verifyIngestToken(options.ingestTokenHash, token)) {
+    sendError(reply, "unauthenticated");
+    return undefined;
+  }
+  return "token";
+}
+
+/**
  * Operator symbol-store routes (docs/symbols-design.md, "Ingest"). The read
- * symsrv surface lives in symbol-routes.ts; everything here requires the
- * operator session like every other mutation. Bytes stream straight into
- * symbol staging and identity is parsed from the received prefix — never
- * from uploader input. Since milestone 3 the route accepts PDB, EXE, and DLL
- * artifacts (decision D2 lifted): the suffix picks the kind, the bytes pick
- * the identity.
+ * symsrv surface lives in symbol-routes.ts; list and purge require the
+ * operator session like every other mutation, while POST additionally accepts
+ * the CI bearer token as an alternative (docs/security-model.md). Bytes
+ * stream straight into symbol staging and identity is parsed from the
+ * received prefix — never from uploader input. Since milestone 3 the route
+ * accepts PDB, EXE, and DLL artifacts (decision D2 lifted): the suffix picks
+ * the kind, the bytes pick the identity.
  */
 export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteContext): void {
   const { options } = ctx;
@@ -76,7 +108,8 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
   });
 
   server.post("/api/v1/symbols", async (request, reply) => {
-    if (jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined) return reply;
+    const ingestAuth = authorizeSymbolIngest(request, reply, options);
+    if (ingestAuth === undefined) return reply;
 
     let originalName: string;
     try {
@@ -160,6 +193,7 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
       ...identity,
       byteSize,
       sha256,
+      ingestAuth,
       ...(typeof request.headers["x-symbol-product"] === "string" ? { product: request.headers["x-symbol-product"] } : {}),
       ...(typeof request.headers["x-symbol-version"] === "string" ? { version: request.headers["x-symbol-version"] } : {}),
       ...(typeof request.headers["x-symbol-arch"] === "string" ? { arch: request.headers["x-symbol-arch"] } : {}),

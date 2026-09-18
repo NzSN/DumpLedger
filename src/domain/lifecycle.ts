@@ -14,6 +14,12 @@ export type CaseStatus = (typeof CaseStatuses)[number];
  * debug identity, `exe` (EXE/DLL images) by its PE code identity. */
 export const SymbolArtifactKinds = ["pdb", "exe"] as const;
 export type SymbolArtifactKind = (typeof SymbolArtifactKinds)[number];
+/* How a symbol ingest authenticated (docs/security-model.md, "CI symbol-ingest
+ * tokens"): the interactive operator session+CSRF path (`operator`) or the CI
+ * bearer token (`token`). Recorded on the ingest audit event; auth channels
+ * are deliberately not modeled in TLA+. */
+export const SymbolIngestAuthChannels = ["token", "operator"] as const;
+export type SymbolIngestAuthChannel = (typeof SymbolIngestAuthChannels)[number];
 
 export function isCoverageKind(value: unknown): value is CoverageKind {
   return typeof value === "string" && CoverageKinds.includes(value as CoverageKind);
@@ -34,3 +40,4 @@ export const parseBlobState = (value: unknown): BlobState => parseMember(BlobSta
 export const parseValidationState = (value: unknown): ValidationState => parseMember(ValidationStates, value, "validation state");
 export const parseCaseStatus = (value: unknown): CaseStatus => parseMember(CaseStatuses, value, "case status");
 export const parseSymbolArtifactKind = (value: unknown): SymbolArtifactKind => parseMember(SymbolArtifactKinds, value, "symbol artifact kind");
+export const parseSymbolIngestAuthChannel = (value: unknown): SymbolIngestAuthChannel => parseMember(SymbolIngestAuthChannels, value, "symbol ingest auth channel");

@@ -1,5 +1,5 @@
 import type { AuditEventId, CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
-import type { CaseStatus, CoverageKind, SymbolArtifactKind, TokenState, ValidationState } from "../domain/lifecycle.js";
+import type { CaseStatus, CoverageKind, SymbolArtifactKind, SymbolIngestAuthChannel, TokenState, ValidationState } from "../domain/lifecycle.js";
 
 /** Entity counts advertised by an export manifest and reported back at import completion. */
 export interface ImportCounts {
@@ -104,9 +104,11 @@ export type LifecycleCommand =
   | { readonly type: "IngestSymbol"; readonly kind: SymbolArtifactKind }
   /* SealSymbol carries exactly the identity pair its kind resolves by
    * (docs/symbols-design.md, "Identity model"): a PDB its RSDS debug identity,
-   * an EXE/DLL image its PE code identity. */
-  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
-  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly kind: "exe"; readonly codeFile: string; readonly codeId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
+   * an EXE/DLL image its PE code identity. `ingestAuth` is audit attribution
+   * only (docs/security-model.md, "CI symbol-ingest tokens"); paths that do
+   * not ride an HTTP auth channel (transfer import) leave it absent. */
+  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string; readonly ingestAuth?: SymbolIngestAuthChannel }
+  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly kind: "exe"; readonly codeFile: string; readonly codeId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string; readonly ingestAuth?: SymbolIngestAuthChannel }
   | { readonly type: "FailSymbol"; readonly artifactId: SymbolArtifactId }
   | { readonly type: "PurgeSymbol"; readonly artifactId: SymbolArtifactId }
   | { readonly type: "BeginImport"; readonly manifestDigest: string; readonly counts: ImportCounts }

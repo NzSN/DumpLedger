@@ -18,6 +18,7 @@ import type {
 } from "@dump-ledger/http-contracts";
 import { FixedWindowRateLimiter } from "../auth/rate-limiter.js";
 import { OperatorSessions } from "../auth/sessions.js";
+import type { SymbolIngestAuthChannel } from "../domain/lifecycle.js";
 import { UploadAdmission } from "../intake/upload-admission.js";
 import type { UploadPostProcessor } from "../intake/intake-facade.js";
 import type { PostProcessingQueue } from "../intake/post-processing-queue.js";
@@ -48,8 +49,8 @@ export type SymbolIngestIdentity =
 
 /** One sealed symbol ingest: the parsed identity plus the byte facts. */
 export type SymbolIngestInput =
-  | { readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string; readonly artifactId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
-  | { readonly kind: "exe"; readonly codeFile: string; readonly codeId: string; readonly artifactId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string };
+  | { readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string; readonly artifactId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string; readonly ingestAuth: SymbolIngestAuthChannel }
+  | { readonly kind: "exe"; readonly codeFile: string; readonly codeId: string; readonly artifactId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string; readonly ingestAuth: SymbolIngestAuthChannel };
 
 export type CaseTransitionOutcome =
   | { readonly ok: true; readonly response: TransitionResponse }
@@ -98,6 +99,14 @@ export interface HttpApplicationPort {
 export interface HttpServerOptions {
   readonly application: HttpApplicationPort;
   readonly sessions: OperatorSessions;
+  /**
+   * Optional sha256 digest of the CI symbol-ingest bearer token
+   * (docs/security-model.md, "CI symbol-ingest tokens"), already validated by
+   * the composition root. Present enables `Authorization: Bearer <token>` on
+   * POST /api/v1/symbols as an alternative to the operator session; absent or
+   * undefined disables token auth entirely. No other route consults it.
+   */
+  readonly ingestTokenHash?: Buffer;
   readonly uploadLifecycle: UploadLifecyclePort;
   readonly uploadSink: UploadByteSink;
   readonly now?: () => number;

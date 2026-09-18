@@ -135,6 +135,17 @@ $env:DUMP_LEDGER_OPERATOR_PASSWORD_HASH = npm run --silent generate:operator-pas
 npm start
 ```
 
+A release pipeline can ingest symbols with a bearer token instead of an
+operator session (it cannot list or purge; see
+[`docs/security-model.md`](docs/security-model.md)). Generate the token once,
+put it in the CI secret store, and export only the printed sha256 — leaving
+the variable unset keeps token auth disabled:
+
+```sh
+npm run --silent generate:ingest-token
+export DUMP_LEDGER_INGEST_TOKEN_HASH='<64 lowercase hex characters>'
+```
+
 The default listener is `127.0.0.1:4080` and the default data directory is
 `./data`. The grant key must remain stable across restarts and must be backed up
 separately from the SQLite file. Do not place either secret in version control.

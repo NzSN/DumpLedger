@@ -13,6 +13,7 @@
     "check:model-interface": "bash tools/check-model-interface.sh",
     "dev:contracts": "pnpm --filter @dump-ledger/http-contracts dev",
     "generate:grant-key": "tsc -p tsconfig.json && node dist/tools/generate-grant-key.js",
+    "generate:ingest-token": "tsc -p tsconfig.json && node dist/tools/generate-ingest-token.js",
     "generate:mbt-traces": "pnpm run build && node dist/tools/generate-mbt-traces.js",
     "generate:operator-password-hash": "tsc -p tsconfig.json && node dist/tools/generate-operator-password-hash.js",
     "start": "node dist/src/main.js",

@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
@@ -100,7 +101,7 @@ function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1): B
 /* Fixture                                                                   */
 /* ------------------------------------------------------------------------ */
 
-async function makeFixture() {
+async function makeFixture(options: { readonly ingestTokenHash?: Buffer } = {}) {
   const vault = new MemoryVault();
   const engine = createDumpLedgerEngine({
     databasePath: ":memory:",
@@ -122,6 +123,7 @@ async function makeFixture() {
     uploadSink: new VaultUploadSink(vault),
     uploadPostProcessor: new EngineUploadPostProcessor(engine),
     now: () => Date.parse("2026-09-16T08:00:00.000Z"),
+    ...(options.ingestTokenHash === undefined ? {} : { ingestTokenHash: options.ingestTokenHash }),
   });
   const login = await server.inject({
     method: "POST",
@@ -350,4 +352,100 @@ test("EXE symbol store: ingest, code-identity symsrv read, dedup, DLL kind, and 
   assert.equal(gone.statusCode, 404);
   const stillThere = await server.inject({ method: "GET", url: `/symbols/${pdbReceipt.debugFile}/${pdbReceipt.debugId}/${pdbReceipt.debugFile}` });
   assert.equal(stillThere.statusCode, 200);
+});
+
+/* ------------------------------------------------------------------------ */
+/* CI ingest token (docs/security-model.md, "CI symbol-ingest tokens")       */
+/* ------------------------------------------------------------------------ */
+
+/** The CI-side secret; the server only ever sees its sha256 digest. */
+const CI_INGEST_TOKEN = "ci-ingest-token-0123456789abcdef";
+
+test("CI ingest token: bearer-only precedence on POST /api/v1/symbols", async t => {
+  const { server, engine, mutationHeaders } = await makeFixture({
+    ingestTokenHash: createHash("sha256").update(CI_INGEST_TOKEN, "utf8").digest(),
+  });
+  t.after(async () => { await server.close(); engine.close(); });
+  const ingest = (headers: Record<string, string>, payload: Buffer) => server.inject({
+    method: "POST", url: "/api/v1/symbols",
+    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url("electron.pdb"), ...headers },
+    payload,
+  });
+
+  // The bearer token alone ingests — no session cookie, no CSRF header.
+  const tokenIngest = await ingest({ authorization: `Bearer ${CI_INGEST_TOKEN}` }, syntheticPdb());
+  assert.equal(tokenIngest.statusCode, 201);
+  const tokenReceipt = decodeSymbolIngestResponse(tokenIngest.json(), "$");
+  assert.equal(tokenReceipt.debugFile, EXPECTED_DEBUG_FILE);
+  assert.equal(tokenReceipt.debugId, EXPECTED_DEBUG_ID);
+  assert.equal(tokenReceipt.deduplicated, false);
+
+  // The seal audit event attributes the ingest to the token channel.
+  const auditFor = (artifactId: string) => engine.snapshot().auditEvents
+    .filter(event => event.action === "IngestSymbol")
+    .find(event => event.detail.artifactId === artifactId);
+  assert.equal(auditFor(tokenReceipt.artifactId)?.detail.ingestAuth, "token");
+
+  // A wrong token is 401 even when a valid session cookie and CSRF token are
+  // present: an Authorization header pins the bearer path exclusively.
+  const wrongToken = await ingest({ authorization: "Bearer not-the-ci-token", ...mutationHeaders }, syntheticPdb());
+  assert.equal(wrongToken.statusCode, 401);
+  assert.equal(errorCode(wrongToken), "unauthenticated");
+
+  // An Authorization header that is not a Bearer credential is 401 the same way.
+  for (const authorization of [`Token ${CI_INGEST_TOKEN}`, "Bearer", "Bearer x y"]) {
+    const malformed = await ingest({ authorization, ...mutationHeaders }, syntheticPdb());
+    assert.equal(malformed.statusCode, 401);
+    assert.equal(errorCode(malformed), "unauthenticated");
+  }
+
+  // Without the header the session+CSRF path still ingests, and its audit
+  // event carries the operator channel (a distinct identity, so this is a
+  // real seal rather than a dedup no-op).
+  const operatorIngest = await ingest(mutationHeaders, syntheticPdb(`C:\\build\\${EXPECTED_DEBUG_FILE}`, 2));
+  assert.equal(operatorIngest.statusCode, 201);
+  const operatorReceipt = decodeSymbolIngestResponse(operatorIngest.json(), "$");
+  assert.equal(operatorReceipt.deduplicated, false);
+  assert.equal(auditFor(operatorReceipt.artifactId)?.detail.ingestAuth, "operator");
+
+  // The bearer token is ingest-only: list and purge stay session-only.
+  const listWithToken = await server.inject({ method: "GET", url: "/api/v1/symbols", headers: { authorization: `Bearer ${CI_INGEST_TOKEN}` } });
+  assert.equal(listWithToken.statusCode, 401);
+  assert.equal(errorCode(listWithToken), "unauthenticated");
+  const purgeWithToken = await server.inject({ method: "DELETE", url: `/api/v1/symbols/${tokenReceipt.artifactId}`, headers: { authorization: `Bearer ${CI_INGEST_TOKEN}` } });
+  assert.equal(purgeWithToken.statusCode, 401);
+  assert.equal(errorCode(purgeWithToken), "unauthenticated");
+  // The artifact is still there afterwards.
+  const stillListed = decodeSymbolListResponse((await server.inject({ method: "GET", url: "/api/v1/symbols", headers: mutationHeaders })).json(), "$");
+  assert.ok(stillListed.symbols.some(symbol => symbol.artifactId === tokenReceipt.artifactId));
+});
+
+test("CI ingest token: bearer is rejected while token auth is disabled", async t => {
+  const { server, engine, mutationHeaders } = await makeFixture();
+  t.after(async () => { await server.close(); engine.close(); });
+  const pdb = syntheticPdb();
+  const ingest = (headers: Record<string, string>) => server.inject({
+    method: "POST", url: "/api/v1/symbols",
+    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url("electron.pdb"), ...headers },
+    payload: pdb,
+  });
+
+  // Any presented bearer token is 401 while the feature is unconfigured, even
+  // alongside a valid session — no cookie fallthrough.
+  const withoutSession = await ingest({ authorization: `Bearer ${CI_INGEST_TOKEN}` });
+  assert.equal(withoutSession.statusCode, 401);
+  assert.equal(errorCode(withoutSession), "unauthenticated");
+  const withSession = await ingest({ authorization: `Bearer ${CI_INGEST_TOKEN}`, ...mutationHeaders });
+  assert.equal(withSession.statusCode, 401);
+  assert.equal(errorCode(withSession), "unauthenticated");
+
+  // The ordinary session path is untouched by the discarded bearer attempts:
+  // one seal, one audit event, operator channel.
+  const sessionIngest = await ingest(mutationHeaders);
+  assert.equal(sessionIngest.statusCode, 201);
+  const receipt = decodeSymbolIngestResponse(sessionIngest.json(), "$");
+  const audits = engine.snapshot().auditEvents.filter(event => event.action === "IngestSymbol");
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0]?.detail.ingestAuth, "operator");
+  assert.equal(audits[0]?.detail.artifactId, receipt.artifactId);
 });

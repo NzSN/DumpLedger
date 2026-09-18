@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import BetterSqlite3 from "better-sqlite3";
 import { DumpLedgerError } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type SymbolArtifactId } from "../domain/ids.js";
-import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type SymbolArtifactKind, type TokenState, type ValidationState } from "../domain/lifecycle.js";
+import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type SymbolArtifactKind, type SymbolIngestAuthChannel, type TokenState, type ValidationState } from "../domain/lifecycle.js";
 import { isDebugSymbolArtifact, type AuditEventProjection, type DumpLedgerProjection, type DumpProjection, type GrantProjection, type StoredSymbolArtifact } from "../engine/projection.js";
 import { applyMigrations } from "./migrations.js";
 
@@ -72,6 +72,9 @@ export interface SymbolArtifactInsert {
   readonly product: string | null;
   readonly version: string | null;
   readonly arch: string | null;
+  /** Auth channel of the HTTP ingest that sealed this artifact; null for
+   * non-HTTP paths (transfer import), which have no auth channel. */
+  readonly ingestAuth: SymbolIngestAuthChannel | null;
 }
 
 /** module_id is deterministic: the same stored identity pair always maps to
@@ -287,8 +290,8 @@ export class SqliteLedger {
       this.prepare("INSERT INTO symbol_artifacts(artifact_id, module_id, kind, byte_size, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?)")
         .run(insert.artifactId, moduleId, insert.kind, insert.byteSize.toString(), insert.sha256, event.occurredAt);
       this.insertAudit(event, "IngestSymbol", null, null, null, insert.kind === "pdb"
-        ? { artifactId: insert.artifactId, kind: insert.kind, debugFile: insert.debugFile, debugId: insert.debugId, deduplicated: false }
-        : { artifactId: insert.artifactId, kind: insert.kind, codeFile: insert.codeFile, codeId: insert.codeId, deduplicated: false });
+        ? { artifactId: insert.artifactId, kind: insert.kind, debugFile: insert.debugFile, debugId: insert.debugId, deduplicated: false, ingestAuth: insert.ingestAuth }
+        : { artifactId: insert.artifactId, kind: insert.kind, codeFile: insert.codeFile, codeId: insert.codeId, deduplicated: false, ingestAuth: insert.ingestAuth });
       const artifact = this.findSymbolArtifact(identity.name, identity.id, insert.kind);
       if (artifact === undefined || artifact.artifactId !== insert.artifactId) throw new DumpLedgerError("integrity_failure", "sealed symbol artifact was not found after insert");
       return { artifact, deduplicated: false };
