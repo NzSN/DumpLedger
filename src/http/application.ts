@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import type { ByteReader } from "../symbols/identity.js";
 
 import {
   type ActivityItem,
@@ -160,6 +161,28 @@ export class EngineHttpApplication implements HttpApplicationPort {
   appendSymbolBytes(artifactIdText: string, chunk: Uint8Array): void {
     if (this.symbolVault === undefined) throw new Error("symbol storage is not configured");
     this.symbolVault.appendSymbol(parseSymbolArtifactId(artifactIdText), chunk);
+  }
+
+  /** Read-only random access over a synced symbol staging object, for
+   * identity verification against the FULL staged bytes (a multi-GB PDB's
+   * MSF directory can live anywhere in the file). */
+  openSymbolStagingReader(artifactIdText: string): (ByteReader & { close(): void }) | undefined {
+    if (this.symbolVault === undefined || typeof this.symbolVault.openSymbolStagingReader !== "function") return undefined;
+    let artifactId;
+    try { artifactId = parseSymbolArtifactId(artifactIdText); } catch { return undefined; }
+    const reader = this.symbolVault.openSymbolStagingReader(artifactId);
+    if (reader === undefined) return undefined;
+    if (reader.size > BigInt(Number.MAX_SAFE_INTEGER)) { reader.close(); return undefined; }
+    const size = Number(reader.size);
+    return {
+      size,
+      readAt: (offset, length) => {
+        if (!Number.isSafeInteger(offset) || offset < 0 || length < 0 || offset + length > size) return undefined;
+        const chunk = reader.read(BigInt(offset), length);
+        return chunk.length === length ? chunk : undefined;
+      },
+      close: () => reader.close(),
+    };
   }
 
   syncSymbolStaging(artifactIdText: string): void {

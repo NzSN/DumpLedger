@@ -15,7 +15,7 @@ import {
 import { verifyIngestToken } from "../../auth/ingest-token.js";
 import { DumpLedgerError } from "../../domain/errors.js";
 import type { SymbolIngestAuthChannel } from "../../domain/lifecycle.js";
-import { parsePdbIdentity, parsePeIdentity } from "../../symbols/identity.js";
+import { parsePdbIdentityFrom, parsePeIdentityFrom, type ByteReader } from "../../symbols/identity.js";
 import { jsonRequireMutation, jsonRequireSession, sendError } from "../contracts/json.js";
 import type { HttpServerOptions, SymbolIngestIdentity } from "../server.js";
 import type { RouteContext } from "./common.js";
@@ -28,7 +28,6 @@ import type { RouteContext } from "./common.js";
  * degrades to `symbol_identity_unreadable` exactly like a malformed one — the
  * route never scans the whole artifact for identity offsets.
  */
-const IDENTITY_WINDOW_BYTES = 1024 * 1024;
 
 /**
  * Symbol artifact kind by upload filename suffix (D2 lifted: `.exe`/`.dll`
@@ -48,9 +47,9 @@ function symbolKindForFilename(filename: string): SymbolKind | undefined {
  * file, mirroring the PDB path where a broken artifact is a 422, not a 400.
  * Anything but the parser's own rejected-input error is a real defect and
  * keeps propagating. */
-function parsePeIdentityOrUndefined(bytes: Buffer, codeFile: string): ReturnType<typeof parsePeIdentity> {
+function parsePeIdentityOrUndefined(reader: ByteReader, codeFile: string): ReturnType<typeof parsePeIdentityFrom> {
   try {
-    return parsePeIdentity(bytes, codeFile);
+    return parsePeIdentityFrom(reader, codeFile);
   } catch (error) {
     if (error instanceof DumpLedgerError) return undefined;
     throw error;
@@ -133,8 +132,6 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
     const artifactId = begun.id;
 
     const hash = createHash("sha256");
-    const identityWindow: Buffer[] = [];
-    let identityWindowBytes = 0;
     let byteSize = 0n;
     let failed: "symbol_too_large" | "storage_unavailable" | undefined;
     const destination = new Writable({
@@ -142,11 +139,6 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
         try {
           byteSize += BigInt(chunk.byteLength);
           if (byteSize > MAX_SYMBOL_BYTES) throw new SymbolLimitExceeded();
-          if (identityWindowBytes < IDENTITY_WINDOW_BYTES) {
-            const keep = Math.min(chunk.byteLength, IDENTITY_WINDOW_BYTES - identityWindowBytes);
-            identityWindow.push(chunk.subarray(0, keep));
-            identityWindowBytes += keep;
-          }
           hash.update(chunk);
           ctx.options.application.appendSymbolBytes(artifactId, chunk);
           done();
@@ -165,26 +157,36 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
     }
     options.application.syncSymbolStaging(artifactId);
 
-    // Identity is parsed from the received prefix -- never from uploader input.
-    // A PDB resolves by its RSDS GUID+age; an EXE/DLL image by PE
-    // `TimeDateStamp` + `SizeOfImage`, with the upload filename's basename as
-    // `codeFile` (the COFF header stores no name).
-    const window = Buffer.concat(identityWindow);
+    // Identity is parsed from the full STAGED bytes -- never from uploader
+    // input and never from a prefix window: a multi-GB PDB keeps its MSF
+    // stream directory in blocks that can sit anywhere in the file. A PDB
+    // resolves by its RSDS GUID+age; an EXE/DLL image by PE `TimeDateStamp`
+    // + `SizeOfImage`, with the upload filename's basename as `codeFile`
+    // (the COFF header stores no name).
+    const staged = options.application.openSymbolStagingReader(artifactId);
+    if (staged === undefined) {
+      options.application.failSymbolIngest(artifactId);
+      return sendError(reply, "symbol_identity_unreadable");
+    }
     let identity: SymbolIngestIdentity;
-    if (kind === "pdb") {
-      const parsed = parsePdbIdentity(window);
-      if (parsed === undefined) {
-        options.application.failSymbolIngest(artifactId);
-        return sendError(reply, "symbol_identity_unreadable");
+    try {
+      if (kind === "pdb") {
+        const parsed = parsePdbIdentityFrom(staged);
+        if (parsed === undefined) {
+          options.application.failSymbolIngest(artifactId);
+          return sendError(reply, "symbol_identity_unreadable");
+        }
+        identity = { kind, debugFile: parsed.debugFile, debugId: parsed.debugId };
+      } else {
+        const parsed = parsePeIdentityOrUndefined(staged, originalName);
+        if (parsed === undefined) {
+          options.application.failSymbolIngest(artifactId);
+          return sendError(reply, "symbol_identity_unreadable");
+        }
+        identity = { kind, codeFile: parsed.codeFile, codeId: parsed.codeId };
       }
-      identity = { kind, debugFile: parsed.debugFile, debugId: parsed.debugId };
-    } else {
-      const parsed = parsePeIdentityOrUndefined(window, originalName);
-      if (parsed === undefined) {
-        options.application.failSymbolIngest(artifactId);
-        return sendError(reply, "symbol_identity_unreadable");
-      }
-      identity = { kind, codeFile: parsed.codeFile, codeId: parsed.codeId };
+    } finally {
+      staged.close();
     }
 
     const sha256 = hash.digest("hex");

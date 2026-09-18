@@ -89,6 +89,23 @@ export class MemoryVault implements Vault, SymbolVault {
     this.symbolObjects.set(artifactId, concatenate(staging.chunks));
     this.symbolStaging.delete(artifactId);
   }
+  openSymbolStagingReader(artifactId: SymbolArtifactId): VaultReader | undefined {
+    const staging = this.symbolStaging.get(artifactId);
+    if (staging === undefined) return undefined;
+    if (staging.open) throw new DumpLedgerError("invalid_transition", "symbol staging object is not sealed");
+    const snapshot = concatenate(staging.chunks);
+    let closed = false;
+    return {
+      size: BigInt(snapshot.byteLength),
+      read(position, length) {
+        if (closed) throw new DumpLedgerError("invalid_transition", "symbol staging reader is closed");
+        if (position < 0n || position > BigInt(snapshot.byteLength) || length < 0) throw new RangeError("invalid symbol read range");
+        const start = Number(position);
+        return snapshot.subarray(start, Math.min(start + length, snapshot.byteLength));
+      },
+      close() { closed = true; },
+    };
+  }
   openSymbol(artifactId: SymbolArtifactId): VaultReader | undefined {
     const object = this.symbolObjects.get(artifactId);
     if (object === undefined) return undefined;

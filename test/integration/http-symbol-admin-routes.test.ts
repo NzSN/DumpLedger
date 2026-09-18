@@ -59,7 +59,7 @@ function syntheticExe(timestamp = PE_TIMESTAMP, sizeOfImage = PE_SIZE_OF_IMAGE):
   return bytes;
 }
 
-function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1): Buffer {
+function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1, gapBlocksBeforeDirectory = 0): Buffer {
   const blockSize = 4096;
   const rsds = Buffer.alloc(4 + 16 + 4 + pdbPath.length + 1);
   rsds.write("RSDS", 0, "latin1");
@@ -78,7 +78,9 @@ function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1): B
     streamStartBlocks.push(nextBlock);
     nextBlock += Math.ceil(stream.length / blockSize);
   }
-  const directoryStartBlock = nextBlock;
+  // Real multi-GB PDBs keep their stream directory far from the prefix;
+  // the gap reproduces that layout without gigabytes of fixture bytes.
+  const directoryStartBlock = nextBlock + gapBlocksBeforeDirectory;
   const blockMapStartBlock = directoryStartBlock + 1;
   const numBlocks = blockMapStartBlock + 1;
 
@@ -262,6 +264,35 @@ test("symbol store: ingest, symsrv read, dedup, purge, and auth boundaries", asy
   assert.equal(gone.statusCode, 404);
   const emptyAgain = decodeSymbolListResponse((await server.inject({ method: "GET", url: "/api/v1/symbols", headers: { cookie } })).json(), "$");
   assert.deepEqual(emptyAgain, { symbols: [] });
+});
+
+test("symbol store ingests a PDB whose MSF directory lives beyond 1 MiB", async t => {
+  // Regression for the real-Electron-PDB failure found during CDB ground
+  // truth: prefix-window identity parsing cannot reach a stream directory
+  // placed deep in a multi-GB artifact. 300 gap blocks at 4 KiB place this
+  // fixture's directory past the old 1 MiB window; identity must still be
+  // derived from the full staged bytes.
+  const { server, engine, mutationHeaders } = await makeFixture();
+  t.after(async () => { await server.close(); engine.close(); });
+
+  const sparse = syntheticPdb(`C:\\build\\${EXPECTED_DEBUG_FILE}`, 1, 300);
+  assert.ok(sparse.byteLength > 1024 * 1024);
+
+  const ingested = await server.inject({
+    method: "POST", url: "/api/v1/symbols",
+    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url("electron.pdb"), ...mutationHeaders },
+    payload: sparse,
+  });
+  assert.equal(ingested.statusCode, 201);
+  const receipt = decodeSymbolIngestResponse(ingested.json(), "$");
+  assert.equal(receipt.debugFile, EXPECTED_DEBUG_FILE);
+  assert.equal(receipt.debugId, EXPECTED_DEBUG_ID);
+  assert.equal(receipt.byteSize, BigInt(sparse.byteLength));
+
+  const fetched = await server.inject({ method: "GET", url: `/symbols/${receipt.debugFile}/${receipt.debugId}/${receipt.debugFile}` });
+  assert.equal(fetched.statusCode, 200);
+  assert.equal(fetched.rawPayload.length, sparse.byteLength);
+  assert.deepEqual(fetched.rawPayload, sparse);
 });
 
 test("EXE symbol store: ingest, code-identity symsrv read, dedup, DLL kind, and list", async t => {

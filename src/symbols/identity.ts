@@ -58,6 +58,33 @@ const RSDS_SIGNATURE = "RSDS";
 const RSDS_HEADER_BYTES = 4 + 16 + 4;
 /** Upper bound on the region of the PDB Info stream scanned for the path. */
 const RSDS_PATH_SCAN_MAX = 64 * 1024;
+/** Sanity bound on the MSF stream directory reassembled during identity
+ * parsing: real multi-GB PDBs carry directories of a few MB; anything larger
+ * is corrupt, not big. */
+const MSF_MAX_DIRECTORY_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Random-access byte source for identity parsing. Identity is derived from
+ * the STAGED artifact after ingest streaming completes (never from an
+ * in-memory prefix): a multi-GB PDB keeps its MSF stream directory in blocks
+ * that can sit anywhere in the file, so no bounded prefix window can hold it.
+ */
+export interface ByteReader {
+  readonly size: number;
+  readAt(offset: number, length: number): Uint8Array | undefined;
+}
+
+/** Adapts an in-memory buffer to the random-access reader. */
+export function byteReaderOf(bytes: Uint8Array): ByteReader {
+  return {
+    size: bytes.length,
+    readAt: (offset, length) => {
+      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length)) return undefined;
+      if (offset < 0 || length < 0 || offset + length > bytes.length) return undefined;
+      return bytes.subarray(offset, offset + length);
+    },
+  };
+}
 
 // --- PE ---------------------------------------------------------------------
 
@@ -154,6 +181,53 @@ function readConsecutiveBlocks(
   return out;
 }
 
+/** readConsecutiveBlocks over a ByteReader: identical semantics, random access. */
+function readConsecutiveBlocksFrom(
+  reader: ByteReader,
+  blockSize: number,
+  startBlock: number,
+  byteCount: number,
+): Uint8Array | undefined {
+  if (!Number.isSafeInteger(startBlock) || startBlock < 0) return undefined;
+  if (!Number.isSafeInteger(byteCount) || byteCount < 0) return undefined;
+  const out = new Uint8Array(byteCount);
+  let copied = 0;
+  let block = startBlock;
+  while (copied < byteCount) {
+    if (!Number.isSafeInteger(block) || block < 0) return undefined;
+    if (block > Math.floor(reader.size / blockSize)) return undefined;
+    const start = block * blockSize;
+    const take = Math.min(blockSize, reader.size - start, byteCount - copied);
+    if (take <= 0) return undefined;
+    const chunk = reader.readAt(start, take);
+    if (chunk === undefined || chunk.length !== take) return undefined;
+    out.set(chunk, copied);
+    copied += take;
+    block += 1;
+  }
+  return out;
+}
+
+/** copyBlockInto over a ByteReader: identical semantics, random access. */
+function copyBlockIntoFrom(
+  reader: ByteReader,
+  blockSize: number,
+  block: number,
+  target: Uint8Array,
+  targetOffset: number,
+  byteCount: number,
+): number | undefined {
+  if (!Number.isSafeInteger(block) || block < 0) return undefined;
+  if (block > Math.floor(reader.size / blockSize)) return undefined;
+  const start = block * blockSize;
+  const take = Math.min(blockSize, reader.size - start, byteCount);
+  if (take <= 0) return undefined;
+  const chunk = reader.readAt(start, take);
+  if (chunk === undefined || chunk.length !== take) return undefined;
+  target.set(chunk, targetOffset);
+  return take;
+}
+
 /** Copies one block's readable prefix into `target`; returns the byte count. */
 function copyBlockInto(
   bytes: Uint8Array,
@@ -232,7 +306,7 @@ function formatSymsrvDebugId(guid: Uint8Array, age: number): string {
  * Reads the RSDS record at the start of the PDB Info stream (stream 1) out of
  * the already-reassembled stream directory.
  */
-function readRsdsIdentity(directory: Uint8Array, fileBytes: Uint8Array, blockSize: number): PdbIdentity {
+function readRsdsIdentity(directory: Uint8Array, reader: ByteReader, blockSize: number): PdbIdentity {
   const view = toDataView(directory);
   const streamCount = readUint32(view, 0);
   if (streamCount === undefined) throw symbolIdentityUnreadable("stream directory is truncated");
@@ -251,7 +325,7 @@ function readRsdsIdentity(directory: Uint8Array, fileBytes: Uint8Array, blockSiz
   // after the blocks of stream 0 (zero-length streams consume no blocks).
   const stream1StartBlock = 1 + Math.ceil(stream0Size / blockSize);
   const scanBytes = Math.min(stream1Size, RSDS_PATH_SCAN_MAX);
-  const prefix = readConsecutiveBlocks(fileBytes, blockSize, stream1StartBlock, scanBytes);
+  const prefix = readConsecutiveBlocksFrom(reader, blockSize, stream1StartBlock, scanBytes);
   if (prefix === undefined) throw symbolIdentityUnreadable("PDB Info stream is out of range");
   if (!matchesAscii(prefix, 0, RSDS_SIGNATURE)) {
     throw symbolIdentityUnreadable('PDB Info stream does not start with an "RSDS" record');
@@ -327,9 +401,22 @@ export function parseRsdsCodeViewRecord(bytes: Uint8Array): PdbIdentity | undefi
  * recovered from the PDB Info stream.
  */
 export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
-  if (!looksLikeMsf(bytes)) return undefined;
+  return parsePdbIdentityFrom(byteReaderOf(bytes));
+}
 
-  const view = toDataView(bytes);
+/**
+ * Random-access PDB identity walk over the whole staged artifact. Reads only
+ * the superblock, the block map, the stream directory, and the head of the
+ * PDB Info stream — never the full file — so multi-GB artifacts parse in
+ * bounded memory regardless of where their directory blocks live.
+ */
+export function parsePdbIdentityFrom(reader: ByteReader): PdbIdentity | undefined {
+  const probe = reader.readAt(0, Math.min(reader.size, 56));
+  if (probe === undefined || !looksLikeMsf(probe)) return undefined;
+  if (probe.length < 56) throw symbolIdentityUnreadable("superblock is truncated");
+  const superblock = probe;
+
+  const view = toDataView(superblock);
   const blockSize = readUint32(view, MSF_BLOCK_SIZE_OFFSET);
   const numDirectoryBytes = readUint32(view, MSF_NUM_DIRECTORY_BYTES_OFFSET);
   const blockMapAddr = readUint32(view, MSF_BLOCK_MAP_ADDR_OFFSET);
@@ -343,9 +430,9 @@ export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
   ) {
     throw symbolIdentityUnreadable(`block size ${blockSize} is not a supported power of two`);
   }
-  if (blockSize > bytes.length) throw symbolIdentityUnreadable("block size exceeds the artifact size");
+  if (blockSize > reader.size) throw symbolIdentityUnreadable("block size exceeds the artifact size");
   if (numDirectoryBytes === 0) throw symbolIdentityUnreadable("stream directory is empty");
-  if (numDirectoryBytes > bytes.length) {
+  if (numDirectoryBytes > reader.size || numDirectoryBytes > MSF_MAX_DIRECTORY_BYTES) {
     throw symbolIdentityUnreadable("stream directory is larger than the artifact");
   }
 
@@ -353,7 +440,7 @@ export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
   // begins with one uint32 block index per stream-directory block.
   const directoryBlockCount = Math.ceil(numDirectoryBytes / blockSize);
   const blockMapBytes = directoryBlockCount * 4;
-  const blockMap = readConsecutiveBlocks(bytes, blockSize, blockMapAddr, blockMapBytes);
+  const blockMap = readConsecutiveBlocksFrom(reader, blockSize, blockMapAddr, blockMapBytes);
   if (blockMap === undefined) throw symbolIdentityUnreadable("block map is out of range");
 
   const blockMapView = toDataView(blockMap);
@@ -362,13 +449,13 @@ export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
   for (let index = 0; index < directoryBlockCount && copied < numDirectoryBytes; index += 1) {
     const block = readUint32(blockMapView, index * 4);
     if (block === undefined) throw symbolIdentityUnreadable("block map is truncated");
-    const took = copyBlockInto(bytes, blockSize, block, directory, copied, numDirectoryBytes - copied);
+    const took = copyBlockIntoFrom(reader, blockSize, block, directory, copied, numDirectoryBytes - copied);
     if (took === undefined) throw symbolIdentityUnreadable("stream directory block is out of range");
     copied += took;
   }
   if (copied !== numDirectoryBytes) throw symbolIdentityUnreadable("stream directory is truncated");
 
-  return readRsdsIdentity(directory, bytes, blockSize);
+  return readRsdsIdentity(directory, reader, blockSize);
 }
 
 /**
@@ -381,25 +468,42 @@ export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
  * COFF header and `SizeOfImage` field.
  */
 export function parsePeIdentity(bytes: Uint8Array, codeFile: string): PeIdentity | undefined {
+  return parsePeIdentityFrom(byteReaderOf(bytes), codeFile);
+}
+
+/**
+ * Random-access PE code-identity walk. The COFF header can sit at an
+ * arbitrary `e_lfanew` offset, so the header region is read by offset, never
+ * assumed to fit a prefix window.
+ */
+export function parsePeIdentityFrom(reader: ByteReader, codeFile: string): PeIdentity | undefined {
   const codeFileProblem = storeSegmentProblem(codeFile);
   if (codeFileProblem !== undefined) {
     throw invalidInput(`codeFile is not a usable store path segment (${codeFileProblem})`);
   }
+  if (reader.size < DOS_E_LFANEW_OFFSET + 4) return undefined;
 
-  const view = toDataView(bytes);
-  if (readUint16(view, 0) !== DOS_SIGNATURE) return undefined;
-  if (bytes.length < DOS_E_LFANEW_OFFSET + 4) return undefined;
-  const peOffset = readUint32(view, DOS_E_LFANEW_OFFSET);
-  if (peOffset === undefined || peOffset > bytes.length - 4) return undefined;
-  if (!matchesAscii(bytes, peOffset, PE_SIGNATURE)) return undefined;
+  const dosHeader = reader.readAt(0, DOS_E_LFANEW_OFFSET + 4);
+  if (dosHeader === undefined) return undefined;
+  const dosView = toDataView(dosHeader);
+  if (readUint16(dosView, 0) !== DOS_SIGNATURE) return undefined;
+  const peOffset = readUint32(dosView, DOS_E_LFANEW_OFFSET);
+  if (peOffset === undefined || peOffset > reader.size - 4) return undefined;
+  const signature = reader.readAt(peOffset, 4);
+  if (signature === undefined || !matchesAscii(signature, 0, PE_SIGNATURE)) return undefined;
 
   const coffOffset = peOffset + 4;
-  if (coffOffset > bytes.length - COFF_HEADER_BYTES) return undefined;
-  const timestamp = readUint32(view, coffOffset + COFF_TIMESTAMP_OFFSET);
-  const sizeOfOptionalHeader = readUint16(view, coffOffset + COFF_OPTIONAL_HEADER_SIZE_OFFSET);
+  if (coffOffset > reader.size - COFF_HEADER_BYTES) return undefined;
+  const coff = reader.readAt(coffOffset, COFF_HEADER_BYTES);
+  if (coff === undefined) return undefined;
+  const coffView = toDataView(coff);
+  const timestamp = readUint32(coffView, COFF_TIMESTAMP_OFFSET);
+  const sizeOfOptionalHeader = readUint16(coffView, COFF_OPTIONAL_HEADER_SIZE_OFFSET);
   if (timestamp === undefined || sizeOfOptionalHeader === undefined) return undefined;
   if (sizeOfOptionalHeader < OPTIONAL_HEADER_MIN_BYTES) return undefined;
-  const sizeOfImage = readUint32(view, coffOffset + COFF_HEADER_BYTES + OPTIONAL_HEADER_SIZE_OF_IMAGE_OFFSET);
+  const optional = reader.readAt(coffOffset + COFF_HEADER_BYTES + OPTIONAL_HEADER_SIZE_OF_IMAGE_OFFSET, 4);
+  if (optional === undefined) return undefined;
+  const sizeOfImage = readUint32(toDataView(optional), 0);
   if (sizeOfImage === undefined) return undefined;
 
   return { codeFile, codeId: formatPeCodeId(timestamp, sizeOfImage) };

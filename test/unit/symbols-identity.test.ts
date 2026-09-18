@@ -3,10 +3,12 @@ import { test } from "node:test";
 
 import { DumpLedgerError } from "../../src/domain/errors.js";
 import {
+  byteReaderOf,
   decodeStorePath,
   encodeStorePath,
   parsePeIdentity,
   parsePdbIdentity,
+  parsePdbIdentityFrom,
 } from "../../src/symbols/identity.js";
 
 /**
@@ -60,7 +62,10 @@ interface MsfLayout {
 }
 
 /** Minimal but structurally faithful MSF 7.0 container around the given streams. */
-function buildMsf(streams: readonly Buffer[], options: { readonly blockSize?: number } = {}): MsfLayout {
+function buildMsf(
+  streams: readonly Buffer[],
+  options: { readonly blockSize?: number; readonly gapBlocksBeforeDirectory?: number } = {},
+): MsfLayout {
   const blockSize = options.blockSize ?? DEFAULT_BLOCK_SIZE;
   const streamStartBlocks: number[] = [];
   let nextBlock = 1;
@@ -72,7 +77,10 @@ function buildMsf(streams: readonly Buffer[], options: { readonly blockSize?: nu
   const directory = Buffer.alloc(4 + streams.length * 4);
   directory.writeUInt32LE(streams.length, 0);
   streams.forEach((stream, index) => directory.writeUInt32LE(stream.length, 4 + index * 4));
-  const directoryStartBlock = nextBlock;
+  // Real multi-GB PDBs keep their stream directory far from the prefix;
+  // the gap reproduces that layout without gigabytes of fixture bytes.
+  const directoryStartBlock = nextBlock + (options.gapBlocksBeforeDirectory ?? 0);
+  nextBlock = directoryStartBlock;
   const directoryBlockCount = Math.ceil(directory.length / blockSize);
   nextBlock += directoryBlockCount;
 
@@ -113,6 +121,7 @@ interface SyntheticPdbOptions {
   readonly blockSize?: number;
   readonly infoStream?: Buffer;
   readonly terminatePath?: boolean;
+  readonly gapBlocksBeforeDirectory?: number;
 }
 
 function syntheticPdb(options: SyntheticPdbOptions = {}): MsfLayout {
@@ -121,7 +130,10 @@ function syntheticPdb(options: SyntheticPdbOptions = {}): MsfLayout {
     options.infoStream ??
     rsdsRecord(options.pdbPath ?? "C:\\build\\out\\electron.pdb", guid, options.age ?? 1, options.terminatePath ?? true);
   const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), infoStream];
-  return buildMsf(streams, { blockSize: options.blockSize ?? DEFAULT_BLOCK_SIZE });
+  return buildMsf(streams, {
+    blockSize: options.blockSize ?? DEFAULT_BLOCK_SIZE,
+    gapBlocksBeforeDirectory: options.gapBlocksBeforeDirectory ?? 0,
+  });
 }
 
 interface SyntheticPeOptions {
@@ -477,4 +489,29 @@ test("a parsed PDB identity encodes into a decodable store path", () => {
     debugId: "0123456789ABCDEF0123456789ABCDEF1",
     file: "electron.pdb",
   });
+});
+
+test("parsePdbIdentityFrom resolves an identity whose stream directory lives beyond 1 MiB", () => {
+  // A real multi-GB PDB keeps its MSF stream directory in blocks that can
+  // sit anywhere in the file; the operator route and transfer import
+  // therefore parse identity from the full staged bytes via the random-access
+  // reader, never from a prefix window. 400 gap blocks at 4 KiB place the
+  // directory past the 1 MiB mark the old window used to enforce.
+  const sparse = syntheticPdb({
+    pdbPath: "C:\\build\\out\\electron.pdb",
+    gapBlocksBeforeDirectory: 400,
+    blockSize: 4096,
+  });
+  assert.ok(sparse.directoryStartBlock * 4096 > 1024 * 1024);
+
+  const identity = parsePdbIdentityFrom(byteReaderOf(sparse.bytes));
+  assert.equal(identity?.debugFile, "electron.pdb");
+  assert.equal(identity?.debugId, "0123456789ABCDEF0123456789ABCDEF1");
+
+  // The buffer API parses the same bytes identically.
+  assert.deepEqual(parsePdbIdentity(sparse.bytes), identity);
+
+  // ...while a 1 MiB prefix of the same artifact is unparseable, documenting
+  // why prefix-window identity extraction cannot work for real PDBs.
+  assertUnreadable(() => parsePdbIdentity(sparse.bytes.subarray(0, 1024 * 1024)));
 });

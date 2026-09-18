@@ -34,6 +34,7 @@ import { registerGrantRoutes } from "./routes/grant-routes.js";
 import { registerOperationRoutes } from "./routes/operation-routes.js";
 import { registerTransferRoutes } from "./routes/transfer-routes.js";
 import { registerUploadRoutes } from "./routes/upload-routes.js";
+import type { ByteReader } from "../symbols/identity.js";
 import { registerSymbolRoutes } from "./routes/symbol-routes.js";
 import { registerSymbolAdminRoutes } from "./routes/symbol-admin-routes.js";
 import { registerStaticWeb } from "./static-web.js";
@@ -89,6 +90,7 @@ export interface HttpApplicationPort {
   failSymbolIngest(artifactId: string): void;
   appendSymbolBytes(artifactId: string, chunk: Uint8Array): void;
   syncSymbolStaging(artifactId: string): void;
+  openSymbolStagingReader(artifactId: string): (ByteReader & { close(): void }) | undefined;
   purgeSymbol(artifactId: string): MutationResult;
   /** Symsrv read lookup: matches either identity pair (debug or code). */
   openSymbolArtifact(name: string, id: string):

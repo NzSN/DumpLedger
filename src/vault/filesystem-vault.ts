@@ -148,6 +148,25 @@ export class FilesystemVault implements Vault, SymbolVault {
     assertRealDirectory(objectDirectory);
     renameSync(staging, object); syncDirectory(objectDirectory); syncDirectory(this.symbolsRoot);
   }
+  openSymbolStagingReader(artifactId: SymbolArtifactId): VaultReader | undefined {
+    if (this.openSymbolStaging.has(artifactId)) throw new DumpLedgerError("invalid_transition", "symbol staging object is not sealed");
+    if (!existsSync(this.symbolStagingPath(artifactId))) return undefined;
+    const descriptor = openSync(this.symbolStagingPath(artifactId), constants.O_RDONLY | constants.O_NOFOLLOW);
+    const fileInfo = fstatSync(descriptor, { bigint: true });
+    if (!fileInfo.isFile()) { closeSync(descriptor); throw new DumpLedgerError("storage_unavailable", "symbol staging object is not a regular file"); }
+    let closed = false;
+    return {
+      size: fileInfo.size,
+      read(position, length) {
+        if (closed) throw new DumpLedgerError("invalid_transition", "symbol staging reader is closed");
+        if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER) || length < 0) throw new RangeError("invalid symbol read range");
+        const buffer = Buffer.alloc(length);
+        const count = readSync(descriptor, buffer, 0, length, Number(position));
+        return Uint8Array.from(buffer.subarray(0, count));
+      },
+      close() { if (!closed) closeSync(descriptor); closed = true; },
+    };
+  }
   openSymbol(artifactId: SymbolArtifactId): VaultReader | undefined {
     if (!existsSync(this.symbolObjectPath(artifactId))) return undefined;
     assertRealDirectory(this.symbolObjectDirectory(artifactId));

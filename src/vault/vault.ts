@@ -25,6 +25,10 @@ export interface SymbolVault {
   createSymbolStaging(artifactId: SymbolArtifactId): void;
   appendSymbol(artifactId: SymbolArtifactId, bytes: Uint8Array): void;
   syncAndCloseSymbol(artifactId: SymbolArtifactId): void;
+  /** Read-only access to a synced (sealed) staging object, for post-ingest
+   * identity verification against the full staged bytes; `undefined` when no
+   * staging object exists, invalid_transition while still write-open. */
+  openSymbolStagingReader(artifactId: SymbolArtifactId): VaultReader | undefined;
   promoteSymbol(artifactId: SymbolArtifactId): void;
   openSymbol(artifactId: SymbolArtifactId): VaultReader | undefined;
   removeSymbolStaging(artifactId: SymbolArtifactId): void;

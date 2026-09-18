@@ -32,7 +32,7 @@ import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
 import type { TransitionReceipt, TransitionSuccess } from "../engine/projection.js";
 import { applyMigrations } from "../ledger/migrations.js";
 import type { SymbolVault, Vault } from "../vault/vault.js";
-import { parsePdbIdentity } from "../symbols/identity.js";
+import { parsePdbIdentityFrom, type ByteReader } from "../symbols/identity.js";
 import { MAX_MANIFEST_BYTES, dumpEntryName, parseExportManifest, type ExportManifest, type ExportManifestSymbol } from "./manifest.js";
 import { readTar, type TarEntry, type TarSource } from "./tar.js";
 
@@ -44,8 +44,6 @@ const IMPORT_HASH_MISMATCH = "import sha256 mismatch";
 const VAULT_ENTRY_PATTERN = /^vault\/(dump_[0-9A-HJKMNP-TV-Z]{26})\/original\.dmp$/;
 /** Loose syntactic shape; the manifest cross-check below is the strict gate. */
 const SYMBOL_ENTRY_PATTERN = /^symbols\/[A-Za-z0-9_.-]{1,96}\.bin$/;
-/** Bytes buffered from the start of an artifact for MSF/RSDS identity parsing (mirrors the operator route). */
-const IDENTITY_WINDOW_BYTES = 1024 * 1024;
 const REQUIRED_TABLES = ["schema_migrations", "customers", "cases", "upload_grants", "dumps", "audit_events"] as const;
 
 export interface ImportBundleOptions {
@@ -528,6 +526,20 @@ function toImportCounts(counts: ExportManifest["counts"]): ImportCounts {
  * exact-match join. Any failure raises integrity_failure after removing the
  * staging residue — a symbol that fails validation never lands.
  */
+/** Adapts a symbol staging VaultReader to the identity parser's ByteReader. */
+function byteReaderOfVault(reader: { readonly size: bigint; read(position: bigint, length: number): Uint8Array }): ByteReader {
+  if (reader.size > BigInt(Number.MAX_SAFE_INTEGER)) throw corrupt("symbol staging object exceeds the readable range");
+  const size = Number(reader.size);
+  return {
+    size,
+    readAt: (offset, length) => {
+      if (!Number.isSafeInteger(offset) || offset < 0 || length < 0 || offset + length > size) return undefined;
+      const chunk = reader.read(BigInt(offset), length);
+      return chunk.length === length ? chunk : undefined;
+    },
+  };
+}
+
 function importSymbolEntry(
   symbol: ExportManifestSymbol,
   entry: TarEntry,
@@ -539,17 +551,10 @@ function importSymbolEntry(
   if (artifactId === undefined) throw corrupt("IngestSymbol succeeded without an artifact id");
   try {
     const hasher = createHash("sha256");
-    const identityWindow: Uint8Array[] = [];
-    let identityWindowBytes = 0;
     let byteSize = 0n;
     for (const chunk of entry.chunks()) {
       byteSize += BigInt(chunk.byteLength);
       if (byteSize > symbol.byteSize) throw corrupt(`symbol ${symbol.debugFile}/${symbol.debugId} exceeds its declared byteSize`);
-      if (identityWindowBytes < IDENTITY_WINDOW_BYTES) {
-        const keep = Math.min(chunk.byteLength, IDENTITY_WINDOW_BYTES - identityWindowBytes);
-        identityWindow.push(chunk.subarray(0, keep));
-        identityWindowBytes += keep;
-      }
       hasher.update(chunk);
       vault.appendSymbol(artifactId, chunk);
     }
@@ -557,11 +562,23 @@ function importSymbolEntry(
     const sha256 = hasher.digest("hex");
     if (sha256 !== symbol.sha256) throw corrupt(`symbol ${symbol.debugFile}/${symbol.debugId} sha256 mismatch`);
     vault.syncAndCloseSymbol(artifactId);
+    // Identity re-verification reads the full staged bytes, not a prefix
+    // window: a multi-GB PDB's MSF stream directory can sit anywhere in the
+    // file (same discipline as the operator ingest route).
     let identity;
-    try {
-      identity = parsePdbIdentity(Buffer.concat(identityWindow));
-    } catch {
-      identity = undefined;
+    {
+      if (typeof vault.openSymbolStagingReader !== "function") {
+        throw corrupt("symbol storage cannot read staged bytes for identity verification");
+      }
+      const staged = vault.openSymbolStagingReader(artifactId);
+      if (staged === undefined) throw corrupt(`symbol ${symbol.artifactId} staging is not readable after sync`);
+      try {
+        identity = parsePdbIdentityFrom(byteReaderOfVault(staged));
+      } catch {
+        identity = undefined;
+      } finally {
+        staged.close();
+      }
     }
     if (identity === undefined || identity.debugFile !== symbol.debugFile || identity.debugId !== symbol.debugId) {
       throw corrupt(`symbol ${symbol.artifactId} carries an unreadable or mismatched identity`);
@@ -593,7 +610,7 @@ function importSymbolEntry(
 /** The vault must carry the symbol namespace before a symbol-bearing bundle can be imported. */
 function requireSymbolVault(vault: Vault): SymbolVault {
   const candidate = vault as Partial<SymbolVault>;
-  if (typeof candidate.appendSymbol !== "function" || typeof candidate.syncAndCloseSymbol !== "function") {
+  if (typeof candidate.appendSymbol !== "function" || typeof candidate.syncAndCloseSymbol !== "function" || typeof candidate.openSymbolStagingReader !== "function") {
     throw new DumpLedgerError("integrity_failure", "symbol storage is not configured on this vault");
   }
   return candidate as SymbolVault;
