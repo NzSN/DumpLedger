@@ -25,9 +25,17 @@ import BetterSqlite3 from "better-sqlite3";
 import type { ExportSummary } from "@dump-ledger/http-contracts";
 import { DumpLedgerError } from "../domain/errors.js";
 import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
-import type { DumpLedgerProjection, DumpProjection } from "../engine/projection.js";
-import type { Vault, VaultReader } from "../vault/vault.js";
-import { dumpEntryName, serializeExportManifest, type ExportManifest, type ExportManifestDump, type ExportManifestSkipped } from "./manifest.js";
+import type { DumpLedgerProjection, DumpProjection, SymbolArtifactProjection } from "../engine/projection.js";
+import type { SymbolVault, Vault, VaultReader } from "../vault/vault.js";
+import {
+  dumpEntryName,
+  serializeExportManifest,
+  symbolEntryName,
+  type ExportManifest,
+  type ExportManifestDump,
+  type ExportManifestSkipped,
+  type ExportManifestSymbol,
+} from "./manifest.js";
 import { createTarWriter, type TarSink, type TarWriter } from "./tar.js";
 
 const BUNDLE_PART_NAME = "bundle.tar.part";
@@ -61,6 +69,13 @@ export interface ExportBundleOptions {
   readonly createdAt?: string;
   /** generator.version written into the manifest; informational only (schemaMigrations is the compat gate). */
   readonly generatorVersion?: string;
+  /**
+   * Opt-in symbol payload (design milestone 3, default false): when true the
+   * bundle carries one entry per registered symbol artifact whose exact
+   * (debugFile, debugId) identity a declared dump's stored inspection facts
+   * reference. Omitted/false is byte-identical to the pre-flag pipeline.
+   */
+  readonly includeSymbols?: boolean;
   readonly targetFactory?: BundleTargetFactory;
 }
 
@@ -144,6 +159,83 @@ function writeFileEntry(writer: TarWriter, name: string, path: string): void {
   }
 }
 
+/**
+ * Reads the stored inspection facts of the declared dumps from the ledger
+ * copy (the same consistent snapshot the bundle's SQLite entry preserves).
+ * Only used on the opt-in symbol path; a bundle without symbols never reads
+ * these columns.
+ */
+function readStoredFacts(copyPath: string): ReadonlyMap<string, Readonly<Record<string, unknown>>> {
+  const facts = new Map<string, Readonly<Record<string, unknown>>>();
+  const database = new BetterSqlite3(copyPath, { readonly: true });
+  try {
+    const rows = database.prepare("SELECT dump_id, inspection_facts_json FROM dumps WHERE inspection_facts_json IS NOT NULL").all() as Array<{ dump_id: string; inspection_facts_json: string }>;
+    for (const row of rows) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.inspection_facts_json);
+      } catch {
+        continue; // stored facts are best-effort metadata; an unreadable row matches nothing
+      }
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        facts.set(row.dump_id, parsed as Readonly<Record<string, unknown>>);
+      }
+    }
+  } finally {
+    database.close();
+  }
+  return facts;
+}
+
+/** The exact, case-sensitive (debugFile, debugId) identity join key. */
+function identityKey(debugFile: string, debugId: string): string {
+  return `${debugFile}\u0000${debugId}`;
+}
+
+/** Collects the debug identities one dump's stored facts reference (the parallel inspection-facts field names are pinned). */
+function referencedIdentities(facts: Readonly<Record<string, unknown>> | undefined): readonly string[] {
+  const modules = facts?.["modules"];
+  if (!Array.isArray(modules)) return [];
+  const identities: string[] = [];
+  for (const module of modules) {
+    if (typeof module !== "object" || module === null || Array.isArray(module)) continue;
+    const record = module as Readonly<Record<string, unknown>>;
+    const debugFile = record["debugFile"];
+    const debugId = record["debugId"];
+    if (typeof debugFile !== "string" || typeof debugId !== "string" || debugFile.length === 0 || debugId.length === 0) continue;
+    identities.push(identityKey(debugFile, debugId));
+  }
+  return identities;
+}
+
+/**
+ * Selects the registered symbol artifacts the bundle will carry: a declared
+ * dump's facts reference the artifact's exact identity (case-sensitive), and
+ * every matched artifact is included once (deterministic order by artifact
+ * id, mirroring the dump ordering).
+ */
+function selectSymbols(artifacts: readonly SymbolArtifactProjection[], factsByDump: ReadonlyMap<string, Readonly<Record<string, unknown>>>, declared: readonly string[]): readonly ExportManifestSymbol[] {
+  const referenced = new Set<string>();
+  for (const dumpId of declared) {
+    for (const identity of referencedIdentities(factsByDump.get(dumpId))) referenced.add(identity);
+  }
+  return artifacts
+    .filter(artifact => artifact.kind === "pdb" && referenced.has(identityKey(artifact.debugFile, artifact.debugId)))
+    .sort((a, b) => (a.artifactId < b.artifactId ? -1 : a.artifactId > b.artifactId ? 1 : 0))
+    .map(artifact => ({
+      artifactId: artifact.artifactId,
+      debugFile: artifact.debugFile,
+      debugId: artifact.debugId,
+      kind: "pdb" as const,
+      byteSize: artifact.byteSize,
+      sha256: artifact.sha256,
+      entry: symbolEntryName(artifact.artifactId),
+      ...(artifact.product === null ? {} : { product: artifact.product }),
+      ...(artifact.version === null ? {} : { version: artifact.version }),
+      ...(artifact.arch === null ? {} : { arch: artifact.arch }),
+    }));
+}
+
 function raceFailure(dumpId: string, detail: string, cause?: unknown): DumpLedgerError {
   return new DumpLedgerError("storage_unavailable", `retryable: vault bytes for ${dumpId} ${detail}; rerun the export`, cause === undefined ? undefined : { cause });
 }
@@ -178,6 +270,31 @@ function writeDumpEntry(writer: TarWriter, vault: Vault, dump: DumpProjection): 
   }
 }
 
+/**
+ * Streams one carried symbol artifact through the symbol vault. Like dump
+ * bytes, a vanished/changed artifact aborts the whole export (retryable): a
+ * bundle missing a manifest entry is never sealed.
+ */
+function writeSymbolEntry(writer: TarWriter, symbolVault: SymbolVault, symbol: ExportManifestSymbol): void {
+  const reader = symbolVault.openSymbol(symbol.artifactId);
+  if (reader === undefined) throw raceFailure(symbol.artifactId, "vanished before the export could open them");
+  try {
+    if (reader.size !== symbol.byteSize) throw raceFailure(symbol.artifactId, `changed size mid-export (recorded ${symbol.byteSize}, found ${reader.size})`);
+    const entry = writer.addEntry(symbol.entry, symbol.byteSize);
+    let position = 0n;
+    while (position < symbol.byteSize) {
+      const wanted = Number(symbol.byteSize - position < BigInt(STREAM_CHUNK_SIZE) ? symbol.byteSize - position : BigInt(STREAM_CHUNK_SIZE));
+      const chunk = reader.read(position, wanted);
+      if (chunk.byteLength !== wanted) throw raceFailure(symbol.artifactId, "vanished mid-copy");
+      entry.append(chunk);
+      position += BigInt(chunk.byteLength);
+    }
+    entry.finish();
+  } finally {
+    reader.close();
+  }
+}
+
 function readSchemaMigrations(ledgerCopyPath: string): number {
   const database = new BetterSqlite3(ledgerCopyPath, { readonly: true });
   try {
@@ -188,7 +305,7 @@ function readSchemaMigrations(ledgerCopyPath: string): number {
   }
 }
 
-function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: string, generatorVersion: string, schemaMigrations: number): ExportManifest {
+function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: string, generatorVersion: string, schemaMigrations: number, symbols: readonly ExportManifestSymbol[] | undefined): ExportManifest {
   const dumps: ExportManifestDump[] = [];
   const skipped: ExportManifestSkipped[] = [];
   for (const dump of snapshot.dumps) {
@@ -216,9 +333,11 @@ function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: 
         grants: snapshot.grants.length,
         dumps: dumps.length,
         auditEvents,
+        ...(symbols === undefined ? {} : { symbols: symbols.length }),
       },
       skipped,
       dumps,
+      ...(symbols === undefined ? {} : { symbols }),
   };
 }
 
@@ -289,7 +408,17 @@ export async function openPreparedExport(prepared: PreparedExport, options: Expo
     snapshot = options.engine.snapshot();
     await options.engine.backup(ledgerCopyPath);
     const schemaMigrations = readSchemaMigrations(ledgerCopyPath);
-    manifest = select(snapshot, options.engine.grantKeyFingerprint(), createdAt, options.generatorVersion ?? DEFAULT_GENERATOR_VERSION, schemaMigrations);
+    // The opt-in symbol path joins the backup's stored facts against the
+    // snapshot's registered artifacts; without the flag nothing is read and
+    // the manifest is byte-identical to the pre-flag output.
+    let symbols: readonly ExportManifestSymbol[] | undefined;
+    if (options.includeSymbols === true) {
+      const declaredIds = snapshot.dumps
+        .filter(dump => dump.phase === "available" || dump.phase === "rejected" || dump.phase === "deleted")
+        .map(dump => dump.dumpId as string);
+      symbols = selectSymbols(snapshot.symbols, readStoredFacts(ledgerCopyPath), declaredIds);
+    }
+    manifest = select(snapshot, options.engine.grantKeyFingerprint(), createdAt, options.generatorVersion ?? DEFAULT_GENERATOR_VERSION, schemaMigrations, symbols);
   } catch (error) {
     rmSync(exportDir, { recursive: true, force: true });
     throw error;
@@ -319,6 +448,13 @@ export async function openPreparedExport(prepared: PreparedExport, options: Expo
           .filter(dump => dump.phase === "available")
           .sort((a, b) => (a.dumpId < b.dumpId ? -1 : a.dumpId > b.dumpId ? 1 : 0));
         for (const dump of available) writeDumpEntry(writer, options.vault, dump);
+        const symbols = manifest.symbols;
+        if (symbols !== undefined && symbols.length > 0) {
+          const candidate = options.vault as Partial<SymbolVault>;
+          if (typeof candidate.openSymbol !== "function") throw new DumpLedgerError("invalid_input", "symbol storage is not configured on this vault");
+          const symbolVault = candidate as SymbolVault;
+          for (const symbol of symbols) writeSymbolEntry(writer, symbolVault, symbol);
+        }
         writer.finish();
         target.seal();
         target = undefined;

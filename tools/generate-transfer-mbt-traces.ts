@@ -91,14 +91,16 @@ const traceCases: readonly TraceCase[] = [
   {
     destination: "01-round-trip-available.itf.json",
     witnessModule: "TransferRoundTrip",
-    lengthBound: 24,
-    terminalDescription: "ImportFinish with dump slot 1 restored to available and grants consumed+issued",
+    lengthBound: 30,
+    terminalDescription: "ImportFinish with dump slot 1 restored to available, grants consumed+issued, and only symbol identity 1 carried and registered",
     terminalMatches: (state) =>
       importFinished(state) &&
       sequenceSlot(state, "dumpPhase", 1) === "available" &&
       sequenceSlot(state, "dumpPhase", 2) === "absent" &&
       sequenceSlot(state, "tokenState", 1) === "consumed" &&
-      sequenceSlot(state, "tokenState", 2) === "issued",
+      sequenceSlot(state, "tokenState", 2) === "issued" &&
+      encodedSet(state, "symbolRegistered").length === 1 &&
+      encodedSet(state, "symbolRegistered")[0] === "1",
   },
   {
     destination: "02-tampered-rejected.itf.json",

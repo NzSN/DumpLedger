@@ -81,9 +81,10 @@ import {
  *      and observe(context) returns Promise<DumpLedgerTransferObservation>.
  *      Names are lowerFirst(action id): initialize, acceptDump, beginPurge,
  *      beginUpload, deleteBundle, exportFail, exportSeal, exportStart,
- *      finishPurge, importCase, importCustomer, importDumpOk, importDumpReject,
- *      importDumpTombD, importDumpTombR, importFinish, importHardFail,
- *      importStart, importTokens, issueToken, markQuarantined, promoteObject,
+ *      exportStartWithSymbols, finishPurge, importCase, importCustomer,
+ *      importDumpOk, importDumpReject, importDumpTombD, importDumpTombR,
+ *      importFinish, importHardFail, importStart, importSymbols, importTokens,
+ *      ingestSymbol, issueToken, markQuarantined, promoteObject, purgeSymbol,
  *      rejectDump, sealUpload, tamperBundle, wipeInstance.
  *  A5. Port inputs are the action's declared contract inputs, decoded by the
  *      binding from `parameters` (`case` spelled `case_`); the initializer
@@ -95,9 +96,9 @@ import {
  *      non-wire variables, lowerFirst: caseStatus, tokenState, tokenUploads,
  *      dumpToken, tokFirstDump, dumpPhase, dumpCase, blobState,
  *      digestRecorded, validation, coverage, downloadable, wiped,
- *      fingerprintMatches, bundle { bad, cstat, dcase, dcov, deleted, gdump,
- *      gstate, guploads, promised, rejected, status }, custDone, caseDone,
- *      done, tokDone.
+ *      fingerprintMatches, includeSymbols, bundleSymbols, bundle { bad,
+ *      cstat, dcase, dcov, deleted, gdump, gstate, guploads, promised,
+ *      rejected, status }, custDone, caseDone, done, tokDone.
  *  A7. TransferMbtHarness.observe() still returns a wire State (the
  *      handwritten low-level contract), so this seam decodes it to the native
  *      observation with the exact inverse of the generated encodeNative; the
@@ -157,6 +158,8 @@ interface DumpLedgerTransferObservation {
   readonly downloadable: readonly bigint[];
   readonly wiped: boolean;
   readonly fingerprintMatches: boolean;
+  readonly includeSymbols: boolean;
+  readonly bundleSymbols: readonly bigint[];
   readonly bundle: BundleObservation;
   readonly custDone: readonly bigint[];
   readonly caseDone: readonly bigint[];
@@ -188,6 +191,7 @@ interface TransferGeneratedPort {
   exportFail(context: ReplayContext): Promise<void>;
   exportSeal(context: ReplayContext): Promise<void>;
   exportStart(context: ReplayContext): Promise<void>;
+  exportStartWithSymbols(context: ReplayContext): Promise<void>;
   finishPurge(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
   importCase(input: { readonly case_: bigint }, context: ReplayContext): Promise<void>;
   importCustomer(input: { readonly case_: bigint }, context: ReplayContext): Promise<void>;
@@ -210,10 +214,13 @@ interface TransferGeneratedPort {
   importFinish(context: ReplayContext): Promise<void>;
   importHardFail(context: ReplayContext): Promise<void>;
   importStart(context: ReplayContext): Promise<void>;
+  importSymbols(context: ReplayContext): Promise<void>;
   importTokens(input: { readonly token: bigint }, context: ReplayContext): Promise<void>;
+  ingestSymbol(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
   issueToken(input: { readonly token: bigint }, context: ReplayContext): Promise<void>;
   markQuarantined(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
   promoteObject(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
+  purgeSymbol(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
   rejectDump(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
   sealUpload(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
   tamperBundle(input: { readonly dump: bigint }, context: ReplayContext): Promise<void>;
@@ -421,6 +428,10 @@ function createGeneratedTransferPort(
     exportFail: (_context) => action("ExportFail", () => harness.exportFail()),
     exportSeal: (_context) => action("ExportSeal", () => harness.exportSeal()),
     exportStart: (_context) => action("ExportStart", () => harness.exportStart()),
+    exportStartWithSymbols: (_context) => action(
+      "ExportStartWithSymbols",
+      () => harness.exportStart(true),
+    ),
     finishPurge: (input, _context) => action("FinishPurge", () => harness.finishPurge(input.dump)),
     importCase: (input, _context) => action("ImportCase", () => harness.importCase(input.case_)),
     importCustomer: (input, _context) => action(
@@ -446,13 +457,16 @@ function createGeneratedTransferPort(
     importFinish: (_context) => action("ImportFinish", () => harness.importFinish()),
     importHardFail: (_context) => action("ImportHardFail", () => harness.importHardFail()),
     importStart: (_context) => action("ImportStart", () => harness.importStart()),
+    importSymbols: (_context) => action("ImportSymbols", () => harness.importSymbols()),
     importTokens: (input, _context) => action("ImportTokens", () => harness.importTokens(input.token)),
+    ingestSymbol: (input, _context) => action("IngestSymbol", () => harness.ingestSymbol(input.dump)),
     issueToken: (input, _context) => action("IssueToken", () => harness.issueToken(input.token)),
     markQuarantined: (input, _context) => action(
       "MarkQuarantined",
       () => harness.markQuarantined(input.dump),
     ),
     promoteObject: (input, _context) => action("PromoteObject", () => harness.promoteObject(input.dump)),
+    purgeSymbol: (input, _context) => action("PurgeSymbol", () => harness.purgeSymbol(input.dump)),
     rejectDump: (input, _context) => action("RejectDump", () => harness.rejectDump(input.dump)),
     sealUpload: (input, _context) => action("SealUpload", () => harness.sealUpload(input.dump)),
     tamperBundle: (input, _context) => action("TamperBundle", () => harness.tamperBundle(input.dump)),
@@ -555,10 +569,10 @@ test("transfer corpus reaches all_steps_done through the negotiated generated as
     "each trace must initialize a fresh engine and SQLite ledger",
   );
   /* Corpus contract (verified against the handwritten path): 7 traces,
-   * 138 wire actions, 145 observations (one per model state), 13 session
+   * 142 wire actions, 149 observations (one per model state), 13 session
    * generations (7 initial + 6 wiped targets). */
-  assert.equal(transfer.actionCalls, 138, "the corpus dispatches 138 wire actions");
-  assert.equal(transfer.observeCalls, 145, "one observation per model state across all seven traces");
+  assert.equal(transfer.actionCalls, 142, "the corpus dispatches 142 wire actions");
+  assert.equal(transfer.observeCalls, 149, "one observation per model state across all seven traces");
   assert.equal(transfer.sessionCreates, 13, "7 initial generations plus 6 wiped target generations");
   /* TransferMbtHarness.wipeInstance() closes the current instance generation
    * and opens a fresh target one, so creations are trace count + wipes. */

@@ -31,8 +31,9 @@ import type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCust
 import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
 import type { TransitionReceipt, TransitionSuccess } from "../engine/projection.js";
 import { applyMigrations } from "../ledger/migrations.js";
-import type { Vault } from "../vault/vault.js";
-import { MAX_MANIFEST_BYTES, dumpEntryName, parseExportManifest, type ExportManifest } from "./manifest.js";
+import type { SymbolVault, Vault } from "../vault/vault.js";
+import { parsePdbIdentity } from "../symbols/identity.js";
+import { MAX_MANIFEST_BYTES, dumpEntryName, parseExportManifest, type ExportManifest, type ExportManifestSymbol } from "./manifest.js";
 import { readTar, type TarEntry, type TarSource } from "./tar.js";
 
 const MAX_BUNDLE_PATH_LENGTH = 1024;
@@ -41,6 +42,10 @@ const DEFAULT_MAX_BUNDLE_BYTES = BigInt(Number.MAX_SAFE_INTEGER);
 const DEFAULT_MAX_LEDGER_BYTES = 8n * 1024n * 1024n * 1024n; // bound on the temp ledger copy
 const IMPORT_HASH_MISMATCH = "import sha256 mismatch";
 const VAULT_ENTRY_PATTERN = /^vault\/(dump_[0-9A-HJKMNP-TV-Z]{26})\/original\.dmp$/;
+/** Loose syntactic shape; the manifest cross-check below is the strict gate. */
+const SYMBOL_ENTRY_PATTERN = /^symbols\/[A-Za-z0-9_.-]{1,96}\.bin$/;
+/** Bytes buffered from the start of an artifact for MSF/RSDS identity parsing (mirrors the operator route). */
+const IDENTITY_WINDOW_BYTES = 1024 * 1024;
 const REQUIRED_TABLES = ["schema_migrations", "customers", "cases", "upload_grants", "dumps", "audit_events"] as const;
 
 export interface ImportBundleOptions {
@@ -56,6 +61,8 @@ export interface ImportBundleOptions {
 
 export interface ImportOutcome {
   readonly status: "finished" | "failed";
+  /** Carried symbol artifacts re-ingested through the engine (deduplicated re-imports included). */
+  readonly symbols: number;
   /** Available dumps whose streamed bytes matched the manifest hash and size. */
   readonly verified: number;
   /** Dumps that reached available, plus deleted tombstones imported. */
@@ -74,6 +81,7 @@ export interface Counters {
   imported: number;
   rejected: number;
   skipped: number;
+  symbols: number;
 }
 
 function invalid(message: string): DumpLedgerError {
@@ -145,7 +153,8 @@ function checkBundlePath(raw: string): string {
 function collectEntries(source: TarSource, maxBundleBytes: bigint, maxManifestBytes: number, maxLedgerBytes: bigint): ReadonlyMap<string, TarEntry> {
   const entries = new Map<string, TarEntry>();
   for (const entry of readTar(source, { maxEntries: MAX_BUNDLE_ENTRIES, maxBytes: maxBundleBytes })) {
-    if (entry.name !== "manifest.json" && entry.name !== "ledger.sqlite" && !VAULT_ENTRY_PATTERN.test(entry.name)) {
+    if (entry.name !== "manifest.json" && entry.name !== "ledger.sqlite"
+      && !VAULT_ENTRY_PATTERN.test(entry.name) && !SYMBOL_ENTRY_PATTERN.test(entry.name)) {
       throw invalid(`bundle carries an unexpected tar entry: ${JSON.stringify(entry.name)}`);
     }
     entries.set(entry.name, entry);
@@ -422,8 +431,13 @@ function checkConsistency(manifest: ExportManifest, rows: BundleRows, entries: R
     if (manifestById.has(row.dumpId)) continue;
     if (!skippedIds.has(row.dumpId)) throw corrupt(`bundle ledger dump ${row.dumpId} (${row.phase}) appears in neither the manifest nor its skipped list`);
   }
+  const declaredSymbolEntries = new Set((manifest.symbols ?? []).map(symbol => symbol.entry));
+  for (const symbol of manifest.symbols ?? []) {
+    if (!entries.has(symbol.entry)) throw corrupt(`bundle is missing ${symbol.entry}, which the manifest promises`);
+  }
   for (const name of entries.keys()) {
     if (name === "manifest.json" || name === "ledger.sqlite") continue;
+    if (declaredSymbolEntries.has(name)) continue;
     const match = VAULT_ENTRY_PATTERN.exec(name);
     const idText = match?.[1];
     if (idText === undefined) throw invalid(`bundle carries an unexpected tar entry: ${JSON.stringify(name)}`);
@@ -505,6 +519,86 @@ function toImportCounts(counts: ExportManifest["counts"]): ImportCounts {
   };
 }
 
+/**
+ * Re-ingests one carried symbol artifact through the same engine path the
+ * operator ingest route uses (IngestSymbol -> append bytes -> SealSymbol).
+ * The bytes are re-verified while streaming: size, SHA-256, and the identity
+ * parsed from the received prefix must all agree with the manifest, so a
+ * manifest cannot smuggle a differently-identified artifact past the store's
+ * exact-match join. Any failure raises integrity_failure after removing the
+ * staging residue — a symbol that fails validation never lands.
+ */
+function importSymbolEntry(
+  symbol: ExportManifestSymbol,
+  entry: TarEntry,
+  engine: DumpLedgerEngine,
+  vault: SymbolVault,
+): "imported" | "deduplicated" {
+  const begun = requireOk(engine.execute({ type: "IngestSymbol", kind: "pdb" }));
+  const artifactId = begun.artifactId;
+  if (artifactId === undefined) throw corrupt("IngestSymbol succeeded without an artifact id");
+  try {
+    const hasher = createHash("sha256");
+    const identityWindow: Uint8Array[] = [];
+    let identityWindowBytes = 0;
+    let byteSize = 0n;
+    for (const chunk of entry.chunks()) {
+      byteSize += BigInt(chunk.byteLength);
+      if (byteSize > symbol.byteSize) throw corrupt(`symbol ${symbol.debugFile}/${symbol.debugId} exceeds its declared byteSize`);
+      if (identityWindowBytes < IDENTITY_WINDOW_BYTES) {
+        const keep = Math.min(chunk.byteLength, IDENTITY_WINDOW_BYTES - identityWindowBytes);
+        identityWindow.push(chunk.subarray(0, keep));
+        identityWindowBytes += keep;
+      }
+      hasher.update(chunk);
+      vault.appendSymbol(artifactId, chunk);
+    }
+    if (byteSize !== symbol.byteSize) throw corrupt(`symbol ${symbol.debugFile}/${symbol.debugId} delivered ${byteSize} bytes, expected ${symbol.byteSize}`);
+    const sha256 = hasher.digest("hex");
+    if (sha256 !== symbol.sha256) throw corrupt(`symbol ${symbol.debugFile}/${symbol.debugId} sha256 mismatch`);
+    vault.syncAndCloseSymbol(artifactId);
+    let identity;
+    try {
+      identity = parsePdbIdentity(Buffer.concat(identityWindow));
+    } catch {
+      identity = undefined;
+    }
+    if (identity === undefined || identity.debugFile !== symbol.debugFile || identity.debugId !== symbol.debugId) {
+      throw corrupt(`symbol ${symbol.artifactId} carries an unreadable or mismatched identity`);
+    }
+    const sealed = requireOk(engine.execute({
+      type: "SealSymbol",
+      artifactId,
+      debugFile: symbol.debugFile,
+      debugId: symbol.debugId,
+      kind: "pdb",
+      byteSize,
+      sha256,
+      ...(symbol.product === undefined ? {} : { product: symbol.product }),
+      ...(symbol.version === undefined ? {} : { version: symbol.version }),
+      ...(symbol.arch === undefined ? {} : { arch: symbol.arch }),
+    }));
+    return sealed.deduplicated === true ? "deduplicated" : "imported";
+  } catch (error) {
+    try {
+      engine.execute({ type: "FailSymbol", artifactId });
+    } catch {
+      // best effort: the import fails below regardless, staging residue is
+      // removed by the ordinary symbol staging discipline at next startup
+    }
+    throw error;
+  }
+}
+
+/** The vault must carry the symbol namespace before a symbol-bearing bundle can be imported. */
+function requireSymbolVault(vault: Vault): SymbolVault {
+  const candidate = vault as Partial<SymbolVault>;
+  if (typeof candidate.appendSymbol !== "function" || typeof candidate.syncAndCloseSymbol !== "function") {
+    throw new DumpLedgerError("integrity_failure", "symbol storage is not configured on this vault");
+  }
+  return candidate as SymbolVault;
+}
+
 /** What stageDump did with one declared dump. */
 export type ImportDumpDisposition =
   | "staged"             // bytes verified; the row landed sealed/staging
@@ -539,8 +633,16 @@ export interface ImportSession {
    */
   stageDump(dumpId: DumpId): ImportDumpDisposition;
   /**
+   * Re-ingests every symbol artifact the bundle carries (idempotent: an
+   * already-present identity dedups to the existing artifact) and returns the
+   * number of carried artifacts. Must run before finish() when the manifest
+   * declares symbols.
+   */
+  importSymbols(): number;
+  /**
    * Replays the historical audit events and writes FinishImport. Requires
-   * every customer, case, grant, and declared dump to have been stepped.
+   * every customer, case, grant, declared dump, and carried symbol to have
+   * been stepped.
    */
   finish(): void;
   /**
@@ -593,6 +695,7 @@ export function openImportSession(options: ImportBundleOptions): ImportSession {
     const steppedCases = new Set<CaseId>();
     const steppedGrants = new Set<GrantId>();
     const steppedDumps = new Set<DumpId>();
+    let symbolsImported = false;
     let engineImportId: AuditEventId | null = null;
     let phase: "open" | "began" | "finished" | "abandoned" = "open";
     let closed = false;
@@ -690,8 +793,25 @@ export function openImportSession(options: ImportBundleOptions): ImportSession {
         steppedDumps.add(dumpId);
         return declared.phase === "rejected" ? "tombstone-rejected" : "tombstone-deleted";
       },
+      importSymbols(): number {
+        requirePhase("began");
+        const declared = manifest.symbols ?? [];
+        const symbolVault = declared.length > 0 ? requireSymbolVault(vault) : undefined;
+        for (const symbol of declared) {
+          const entry = entries.get(symbol.entry);
+          if (entry === undefined) throw corrupt(`bundle is missing ${symbol.entry}`);
+          importSymbolEntry(symbol, entry, engine, symbolVault!);
+        }
+        // Re-running is safe: the engine dedups by identity, so the second
+        // pass re-verifies the bytes and leaves the store unchanged.
+        symbolsImported = symbolsImported || declared.length > 0;
+        return declared.length;
+      },
       finish(): void {
         requirePhase("began");
+        if (manifest.symbols !== undefined && manifest.symbols.length > 0 && !symbolsImported) {
+          throw new DumpLedgerError("invalid_transition", "import finish requires the carried symbols to have been imported");
+        }
         if (steppedCustomers.size !== rows.customers.length
           || steppedCases.size !== rows.cases.length
           || steppedGrants.size !== rows.grants.length
@@ -744,7 +864,7 @@ export function openImportSession(options: ImportBundleOptions): ImportSession {
  * a failure after BeginImport deliberately never reaches FinishImport.
  */
 export function importBundle(options: ImportBundleOptions): ImportOutcome {
-  const counters: Counters = { verified: 0, imported: 0, rejected: 0, skipped: 0 };
+  const counters: Counters = { verified: 0, imported: 0, rejected: 0, skipped: 0, symbols: 0 };
   let engineImportId: AuditEventId | null = null;
   let session: ImportSession | undefined;
   try {
@@ -755,6 +875,9 @@ export function importBundle(options: ImportBundleOptions): ImportOutcome {
     for (const customer of session.rows.customers) session.importCustomer(customer.customerId);
     for (const caseRow of session.rows.cases) session.importCase(caseRow.caseId);
     for (const grant of session.rows.grants) session.importGrant(grant.grantId);
+    // Carried symbols are payload: verify and re-ingest them before the dump
+    // bytes so a corrupt symbol fails the import before more state lands.
+    counters.symbols = session.importSymbols();
     const engine = options.engine;
     for (const row of session.rows.dumps) {
       const declared = session.manifest.dumps.find(dump => dump.dumpId === row.dumpId);

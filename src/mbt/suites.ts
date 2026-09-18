@@ -28,11 +28,12 @@ export const BASE_REQUIRED_ACTIONS = [
 /** Transition wire actions the transfer corpus must evidence. */
 export const TRANSFER_REQUIRED_ACTIONS = [
   "AcceptDump", "BeginPurge", "BeginUpload", "DeleteBundle", "ExportFail",
-  "ExportSeal", "ExportStart", "FinishPurge", "ImportCase", "ImportCustomer",
-  "ImportDumpOk", "ImportDumpReject", "ImportDumpTombD", "ImportDumpTombR",
-  "ImportFinish", "ImportHardFail", "ImportStart", "ImportTokens",
-  "IssueToken", "MarkQuarantined", "PromoteObject", "RejectDump",
-  "SealUpload", "TamperBundle", "WipeInstance",
+  "ExportSeal", "ExportStart", "ExportStartWithSymbols", "FinishPurge",
+  "ImportCase", "ImportCustomer", "ImportDumpOk", "ImportDumpReject",
+  "ImportDumpTombD", "ImportDumpTombR", "ImportFinish", "ImportHardFail",
+  "ImportStart", "ImportSymbols", "ImportTokens", "IngestSymbol",
+  "IssueToken", "MarkQuarantined", "PromoteObject", "PurgeSymbol",
+  "RejectDump", "SealUpload", "TamperBundle", "WipeInstance",
 ] as const;
 
 export function defineDumpLedgerSuite(specPath: string, traces: readonly PinnedTrace[]) {

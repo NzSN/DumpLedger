@@ -49,6 +49,15 @@
    - Audit-event replay and the tar/filesystem layer are not modeled; the
      base spec has no audit variable. Their guarantees are covered by
      integration and e2e tests instead.
+   - Symbol payloads (design milestone 3, request flag default OFF): an
+     export request either opts in to the registered symbol identities its
+     declared dumps reference or does not. The bundle snapshot records the
+     request flag (includeSymbols) and the carried identity set
+     (bundleSymbols); import registers those identities with the same union
+     semantics as the base IngestSymbol, so re-importing a bundle whose
+     identities are already present is a no-op. The dump -> identity
+     references are the static DumpSymbols relation; the real join keys on
+     the exact case-sensitive (debug_file, debug_id) strings.
    - A crash mid-import is ImportHardFail: partial ledger/vault state
      persists and no FinishImport marker exists, mirroring importBundle's
      catch path.
@@ -79,6 +88,20 @@ VARIABLES
                           importing instance's key? chosen once per behavior;
                           FALSE is the policy case (issued grants import as
                           revoked; grants in any other state are preserved) *)
+  \* @type: Bool;
+  includeSymbols,      (* did the export request the opt-in symbol payload?
+                          The request flag is an explicit wire input of the
+                          export-start actions (ExportStart = off,
+                          ExportStartWithSymbols = on): a nondeterministic
+                          choice would not be replayable by the trace client,
+                          which never sees the expected post-state. FALSE
+                          again once the bundle is deleted. *)
+  \* @type: Set(Int);
+  bundleSymbols,       (* symbol identity slots the current bundle carries
+                          (the export-time snapshot of the registered set,
+                          joined against the declared dumps' module facts);
+                          empty alongside an absent bundle or a flag-off
+                          export *)
   \* @type: { status: Str, promised: Set(Int), rejected: Set(Int), deleted: Set(Int), bad: Int, cstat: Seq(Str), gstate: Seq(Str), gdump: Seq(Int), guploads: Seq(Int), dcase: Seq(Int), dcov: Seq(Str) };
   bundle,    (* the single abstract bundle: promised dumps carry vault-byte
                 entries; rejected/deleted dumps are metadata-only tombstones;
@@ -99,8 +122,8 @@ VARIABLES
                    consumed-by link (the real COALESCE(consumed_by_dump_id)),
                    exported as bundle.gdump and replayed verbatim at import *)
 
-tvars == <<wiped, fingerprintMatches, bundle, custDone, caseDone, done, tokDone,
-           tokFirstDump>>
+tvars == <<wiped, fingerprintMatches, includeSymbols, bundleSymbols, bundle,
+           custDone, caseDone, done, tokDone, tokFirstDump>>
 
 \* @type: { status: Str, promised: Set(Int), rejected: Set(Int), deleted: Set(Int), bad: Int, cstat: Seq(Str), gstate: Seq(Str), gdump: Seq(Int), guploads: Seq(Int), dcase: Seq(Int), dcov: Seq(Str) };
 NoBundle == [status |-> "absent", promised |-> {}, rejected |-> {},
@@ -109,6 +132,30 @@ NoBundle == [status |-> "absent", promised |-> {}, rejected |-> {},
              gdump |-> <<NoDump, NoDump>>, guploads |-> <<0, 0>>,
              dcase |-> <<NoCase, NoCase>>,
              dcov |-> <<NoCoverage, NoCoverage>>]
+
+\* Static dump -> symbol identity references: which registered identities a
+\* dump's module facts name (the real exporter reads the dump's stored
+\* inspectionFacts.modules[] and joins debugFile/debugId against the artifact
+\* store by exact, case-sensitive identity). Slot 1's dump references
+\* identities 1 and 2, slot 2's references identity 1: the shared reference
+\* exercises the include-once guarantee, and a referenced identity that was
+\* never registered (or was purged) exercises the "matched registered
+\* artifacts only" side of the join.
+\* @type: Set(<<Int, Int>>);
+DumpSymbols == {<<1, 1>>, <<1, 2>>, <<2, 1>>}
+
+\* The export-time symbol selection: the flag-on bundle carries exactly the
+\* registered identities the declared dumps reference. "Declared" is the
+\* same stable-phase partition the promised/rejected/deleted snapshots are
+\* built from (available bytes plus rejected/deleted tombstones -- everything
+\* the manifest lists), evaluated in the pre-state of the export-start action
+\* so it freezes the source store exactly as the real manifest does.
+\* @type: Set(Int);
+RelevantSymbols ==
+  {m \in symbolRegistered:
+     \E d \in Dumps:
+       /\ dumpPhase[d] \in {"available", "rejected", "deleted"}
+       /\ <<d, m>> \in DumpSymbols}
 
 TransferInit ==
   /\ Init
@@ -121,6 +168,8 @@ TransferInit ==
   /\ tokDone = {}
   /\ tokFirstDump = <<NoDump, NoDump>>
   /\ symbolRegistered = {}
+  /\ includeSymbols = FALSE
+  /\ bundleSymbols = {}
 
 (* Fresh ledger: the import precondition. BeginImport requires every table
    empty; in this abstraction that is exactly the base Init shape, and no
@@ -153,7 +202,8 @@ IssueTokenI(t) ==
   /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
-                 wiped>>
+                 wiped,
+                 includeSymbols, bundleSymbols>>
 
 BeginUploadI(t, d) ==
   /\ t \in Tokens
@@ -191,7 +241,8 @@ BeginUploadI(t, d) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, bundle, done, tokDone, fingerprintMatches,
-                 custDone, caseDone, wiped>>
+                 custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 SealUploadI(d) ==
   /\ d \in Dumps
@@ -204,7 +255,8 @@ SealUploadI(d) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  validation, coverage, downloadable, symbolRegistered, bundle, done, tokDone,
-                 fingerprintMatches, custDone, caseDone, wiped>>
+                 fingerprintMatches, custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 PromoteI(d) ==
   /\ d \in Dumps
@@ -217,7 +269,8 @@ PromoteI(d) ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
-                 wiped>>
+                 wiped,
+                 includeSymbols, bundleSymbols>>
 
 QuarantineI(d) ==
   /\ d \in Dumps
@@ -231,7 +284,8 @@ QuarantineI(d) ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
-                 wiped>>
+                 wiped,
+                 includeSymbols, bundleSymbols>>
 
 AcceptI(d, kind) ==
   /\ d \in Dumps
@@ -247,7 +301,8 @@ AcceptI(d, kind) ==
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d, kind |-> kind]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, symbolRegistered, bundle, done, tokDone,
-                 fingerprintMatches, custDone, caseDone, wiped>>
+                 fingerprintMatches, custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 RejectI(d) ==
   /\ d \in Dumps
@@ -260,7 +315,8 @@ RejectI(d) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, coverage, downloadable, symbolRegistered, bundle, done,
-                 tokDone, fingerprintMatches, custDone, caseDone, wiped>>
+                 tokDone, fingerprintMatches, custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* Retention: purging lands a deleted tombstone (association, digest,
    validation, and coverage survive). Exported tombstones are exactly what
@@ -275,7 +331,8 @@ BeginPurgeI(d) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, validation, coverage, symbolRegistered, bundle, done, tokDone,
-                 fingerprintMatches, custDone, caseDone, wiped>>
+                 fingerprintMatches, custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 FinishPurgeI(d) ==
   /\ d \in Dumps
@@ -288,19 +345,56 @@ FinishPurgeI(d) ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
-                 wiped>>
+                 wiped,
+                 includeSymbols, bundleSymbols>>
+
+(* SYMBOL INGEST/PURGE (base spec actions, same wire labels): the source
+   instance must be able to register identities before an export can carry
+   them, and either instance may purge an artifact it no longer wants. The
+   identity slot rides the generic `dump` wire field (the base spec's own
+   precedent), and ingest is a set union, so re-ingesting an identity is a
+   no-op exactly like the engine's dedup. Purge removes only the register
+   entry: identities the current bundle already carries are unaffected until
+   the requested operation reads them again. *)
+IngestSymbolI(m) ==
+  /\ m \in Symbols
+  /\ symbolRegistered' = symbolRegistered \cup {m}
+  /\ action_taken' = "IngestSymbol"
+  /\ parameters' = [case |-> 0, token |-> 0, dump |-> m,
+                      kind |-> NoCoverage]
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+                 blobState, digestRecorded, validation, coverage,
+                 downloadable, includeSymbols, bundleSymbols, bundle, done, tokDone,
+                 fingerprintMatches, custDone, caseDone, wiped>>
+
+PurgeSymbolI(m) ==
+  /\ m \in Symbols
+  /\ m \in symbolRegistered
+  /\ symbolRegistered' = symbolRegistered \ {m}
+  /\ action_taken' = "PurgeSymbol"
+  /\ parameters' = [case |-> 0, token |-> 0, dump |-> m,
+                      kind |-> NoCoverage]
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+                 blobState, digestRecorded, validation, coverage,
+                 downloadable, includeSymbols, bundleSymbols, bundle, done, tokDone,
+                 fingerprintMatches, custDone, caseDone, wiped>>
 
 (* EXPORT: selection partitions non-absent dumps by phase; any mid-copy race
    (vanishing bytes under a concurrent purge) aborts the whole export, so a
    sealed bundle is byte-exact by construction. The snapshot fields capture
    exactly what the real tar bundle's ledger copy preserves. *)
-ExportStart ==
+ExportStartRequest(flag, label) ==
      (* one transfer cycle per behavior: the wiped target never exports,
         because a second cycle would reset the import-progress tracking that
         doubles as case-presence on the target *)
   /\ ~wiped
   /\ bundle.status \in {"absent", "sealed", "failed",
                         "finished", "import-failed"}
+  /\ includeSymbols' = flag
+     (* the flag-off request carries no symbols at all; the flag-on request
+        carries the registered-and-referenced set exactly once (a set has no
+        duplicates) *)
+  /\ bundleSymbols' = IF flag THEN RelevantSymbols ELSE {}
   /\ bundle' = [status |-> "running",
                 promised |-> {d \in Dumps: dumpPhase[d] = "available"},
                 rejected |-> {d \in Dumps: dumpPhase[d] = "rejected"},
@@ -319,12 +413,25 @@ ExportStart ==
   /\ custDone' = {}
   /\ caseDone' = {}
   /\ tokDone' = {}
-  /\ action_taken' = "ExportStart"
+  /\ action_taken' = label
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, fingerprintMatches, wiped>>
+
+ExportStart ==
+  \* the default request: includeSymbols absent/false
+  ExportStartRequest(FALSE, "ExportStart")
+
+(* The opt-in request (design milestone 3, the `--include-symbols` flag):
+   identical to ExportStart except the bundle also carries the registered
+   symbol identities RelevantSymbols selected. This is a second wire action,
+   not a nondeterministic flag: the trace client must replay the chosen
+   request exactly (it never sees the expected post-state), and in the real
+   pipeline the flag is an explicit request field. *)
+ExportStartWithSymbols ==
+  ExportStartRequest(TRUE, "ExportStartWithSymbols")
 
 ExportSeal ==
   /\ bundle.status = "running"
@@ -335,7 +442,8 @@ ExportSeal ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
-                 caseDone, wiped>>
+                 caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 ExportFail ==
   /\ bundle.status = "running"
@@ -346,7 +454,8 @@ ExportFail ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
-                 caseDone, wiped>>
+                 caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* External tampering between seal and import: exactly one promised dump's
    bytes are flipped (the e2e journey-2 shape). *)
@@ -360,11 +469,16 @@ TamperBundle(d) ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
-                 caseDone, wiped>>
+                 caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 DeleteBundle ==
   /\ bundle.status \in {"sealed", "failed", "finished", "import-failed"}
   /\ bundle' = NoBundle
+     (* deleting the file also forgets the export request: the next export
+        starts from the default (flag-off, no carried symbols) *)
+  /\ includeSymbols' = FALSE
+  /\ bundleSymbols' = {}
      (* the done-sets are NOT reset: on the wiped target they double as
         imported-entity presence, which deleting the bundle file does not
         change; pre-wipe they are always empty anyway *)
@@ -405,7 +519,8 @@ WipeInstance ==
   /\ action_taken' = "WipeInstance"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<fingerprintMatches, bundle>>
+  /\ UNCHANGED <<fingerprintMatches, bundle,
+                 includeSymbols, bundleSymbols>>
 
 (* IMPORT: gated by FreshLedger (the engine's empty-table guard), consumes a
    sealed bundle, and materializes dumps through the SAME lifecycle
@@ -423,7 +538,8 @@ ImportStart ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
-                 downloadable, symbolRegistered, fingerprintMatches, wiped>>
+                 downloadable, symbolRegistered, fingerprintMatches, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* Entity rows travel in dependency order: customers before cases before
    grants before dumps. The guards here are the ledger's FK checks.
@@ -440,7 +556,8 @@ ImportCustomer(c) ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, fingerprintMatches, bundle, caseDone, done,
-                 tokDone, wiped>>
+                 tokDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* The imported case lands with its exported status (the real ImportCase
    preserves the source row's status column). *)
@@ -456,7 +573,8 @@ ImportCase(c) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered,
-                 fingerprintMatches, bundle, custDone, done, tokDone, wiped>>
+                 fingerprintMatches, bundle, custDone, done, tokDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* Grant import replays the exported row: the bundle only carries grants that
    existed at export (gstate[t] /= "unused"), the source state is preserved,
@@ -482,7 +600,25 @@ ImportTokens(t) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, dumpToken, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
-                 done, fingerprintMatches, custDone, caseDone, wiped>>
+                 done, fingerprintMatches, custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
+
+(* Carried symbol identities register on the target through the same union
+   semantics as the base IngestSymbol, i.e. the real importer's re-ingest
+   dedup: running the step twice leaves the register equal to one run, and an
+   identity the target already holds is a no-op. ImportFinish requires every
+   carried identity to have been registered, so a symbol-bearing bundle never
+   finishes without its symbols. *)
+ImportSymbols ==
+  /\ bundle.status = "importing"
+  /\ symbolRegistered' = symbolRegistered \cup bundleSymbols
+  /\ action_taken' = "ImportSymbols"
+  /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
+                      kind |-> NoCoverage]
+  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+                 blobState, digestRecorded, validation, coverage,
+                 downloadable, includeSymbols, bundleSymbols, bundle, done, tokDone,
+                 fingerprintMatches, custDone, caseDone, wiped>>
 
 (* Verified bytes: staged and hashed to match the manifest, the row is
    created sealed/staging exactly like a sealed upload, then the shared
@@ -515,7 +651,8 @@ ImportDumpOk(d, c) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, validation, coverage,
                  downloadable, symbolRegistered, bundle, tokDone, fingerprintMatches, custDone,
-                 caseDone, wiped>>
+                 caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* SHA-256/size mismatch (including the tampered dump): rejected tombstone,
    no bytes, never downloadable -- import.ts mismatchTombstone. The real row
@@ -548,7 +685,8 @@ ImportDumpReject(d, c) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
-                 wiped>>
+                 wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* Exported tombstones: metadata only, blobState none. The real tombstone row
    preserves the source validation/coverage/sha256 columns. A rejected source
@@ -583,7 +721,8 @@ ImportDumpTombR(d, c) ==
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
-                 wiped>>
+                 wiped,
+                 includeSymbols, bundleSymbols>>
 
 ImportDumpTombD(d, c) ==
   /\ bundle.status = "importing"
@@ -613,12 +752,16 @@ ImportDumpTombD(d, c) ==
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
   /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, downloadable, symbolRegistered, bundle,
-                 tokDone, fingerprintMatches, custDone, caseDone, wiped>>
+                 tokDone, fingerprintMatches, custDone, caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* FinishImport requires every declared dump disposed of and every exported
    grant row imported; it audits only. *)
 ImportFinish ==
   /\ bundle.status = "importing"
+  /\ bundleSymbols \subseteq symbolRegistered
+     (* the carried symbols are payload: they must have landed (ImportSymbols)
+        before the import can finish *)
   /\ (bundle.promised \cup bundle.rejected \cup bundle.deleted) \subseteq done
   /\ custDone = Customers
   /\ caseDone = Cases
@@ -630,7 +773,8 @@ ImportFinish ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
-                 caseDone, wiped>>
+                 caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 (* Any hard failure after BeginImport: partial state persists, no
    FinishImport marker (importBundle's catch path). *)
@@ -643,7 +787,8 @@ ImportHardFail ==
   /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
-                 caseDone, wiped>>
+                 caseDone, wiped,
+                 includeSymbols, bundleSymbols>>
 
 TransferNext ==
   \/ \E t \in Tokens: IssueTokenI(t)
@@ -655,7 +800,10 @@ TransferNext ==
   \/ \E d \in Dumps: RejectI(d)
   \/ \E d \in Dumps: BeginPurgeI(d)
   \/ \E d \in Dumps: FinishPurgeI(d)
+  \/ \E m \in Symbols: IngestSymbolI(m)
+  \/ \E m \in Symbols: PurgeSymbolI(m)
   \/ ExportStart
+  \/ ExportStartWithSymbols
   \/ ExportSeal
   \/ ExportFail
   \/ \E d \in Dumps: TamperBundle(d)
@@ -665,6 +813,7 @@ TransferNext ==
   \/ \E c \in Customers: ImportCustomer(c)
   \/ \E c \in Cases: ImportCase(c)
   \/ \E t \in Tokens: ImportTokens(t)
+  \/ ImportSymbols
   \/ \E d \in Dumps, c \in Cases: ImportDumpOk(d, c)
   \/ \E d \in Dumps, c \in Cases: ImportDumpReject(d, c)
   \/ \E d \in Dumps, c \in Cases: ImportDumpTombR(d, c)
@@ -675,8 +824,8 @@ TransferNext ==
 allVars == <<caseStatus, tokenState, dumpToken, tokenUploads, dumpPhase,
              dumpCase, blobState, digestRecorded, validation, coverage,
              downloadable, symbolRegistered, action_taken, parameters, wiped,
-             fingerprintMatches, bundle, custDone, caseDone, done, tokDone,
-             tokFirstDump>>
+             fingerprintMatches, includeSymbols, bundleSymbols, bundle,
+             custDone, caseDone, done, tokDone, tokFirstDump>>
 
 TransferSpec == TransferInit /\ [][TransferNext]_allVars
 
@@ -747,12 +896,22 @@ EntityOrder ==
   /\ \A d \in done:
        {t \in Tokens: bundle.gstate[t] /= "unused"} \subseteq tokDone
 
+(* Export-request symbol policy: a flag-off export never carries symbols, and
+   an absent bundle never carries any. There is deliberately no
+   "finished => carried symbols are registered" conjunct: after FinishImport
+   the target may purge an imported artifact, which does not retroactively
+   invalidate the bundle. *)
+TransferSymbolPolicy ==
+  /\ ~includeSymbols => bundleSymbols = {}
+  /\ bundle.status = "absent" => bundleSymbols = {}
+
 TransferSafety ==
   /\ BundleTypeOK
   /\ BundleStructure
   /\ ImportDisposition
   /\ EntityOrder
   /\ FingerprintPolicy
+  /\ TransferSymbolPolicy
 
 (* The wire annotation universe of this module: the base lifecycle labels the
    lite actions reuse, plus the transfer-specific labels. The base spec's
@@ -760,11 +919,12 @@ TransferSafety ==
 TransferActionLabels ==
   {"Init", "IssueToken", "BeginUpload", "SealUpload", "PromoteObject",
    "MarkQuarantined", "AcceptDump", "RejectDump", "BeginPurge",
-   "FinishPurge", "ExportStart", "ExportSeal", "ExportFail",
+   "FinishPurge", "IngestSymbol", "PurgeSymbol", "ExportStart",
+   "ExportStartWithSymbols", "ExportSeal", "ExportFail",
    "TamperBundle", "DeleteBundle", "WipeInstance", "ImportStart",
-   "ImportCustomer", "ImportCase", "ImportTokens", "ImportDumpOk",
-   "ImportDumpReject", "ImportDumpTombR", "ImportDumpTombD", "ImportFinish",
-   "ImportHardFail"}
+   "ImportCustomer", "ImportCase", "ImportTokens", "ImportSymbols",
+   "ImportDumpOk", "ImportDumpReject", "ImportDumpTombR", "ImportDumpTombD",
+   "ImportFinish", "ImportHardFail"}
 
 TransferAnnotationOK ==
   /\ action_taken \in TransferActionLabels
@@ -799,6 +959,8 @@ TransferTypeOK ==
   /\ \A d \in Dumps: coverage[d] \in CoverageKinds \cup {NoCoverage}
   /\ downloadable \subseteq Dumps
   /\ symbolRegistered \subseteq Symbols
+  /\ includeSymbols \in BOOLEAN
+  /\ bundleSymbols \subseteq Symbols
   /\ TransferAnnotationOK
 
 (* The batch-aware token invariants with one transfer-aware relaxation: an

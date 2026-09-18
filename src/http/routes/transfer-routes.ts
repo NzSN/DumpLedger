@@ -12,6 +12,12 @@
  * The routes are registered only when the composition root provides a
  * TransferManager (`options.transfer`); without one these paths fall through
  * to the standard JSON 404 like every other unknown /api path.
+ *
+ * The export request gains an optional body `{ "includeSymbols": boolean }`
+ * (design milestone 3, default false). It is decoded here with the same
+ * strictness as the contract decoders (no unknown keys, boolean only) but
+ * kept out of @dump-ledger/http-contracts: the flag is optional and the
+ * response shape is unchanged, so no client contract version needs to move.
  */
 
 import { createReadStream, lstatSync, statSync } from "node:fs";
@@ -66,6 +72,28 @@ function assertImportBundlePath(raw: string): string {
 }
 
 /**
+ * Decodes the optional export-request body. No body, an empty body, or a body
+ * without the field means "flag off" — exactly the pre-flag request.
+ */
+function decodeIncludeSymbols(request: { readonly body?: unknown }): boolean | "invalid" {
+  const body = request.body;
+  if (body === undefined || body === null || body === "") return false;
+  if (typeof body !== "string") return "invalid";
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return "invalid";
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "invalid";
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) if (key !== "includeSymbols") return "invalid";
+  const flag = record["includeSymbols"];
+  if (flag === undefined) return false;
+  return typeof flag === "boolean" ? flag : "invalid";
+}
+
+/**
  * Maps a thrown transfer-layer failure onto the stable error envelope. Like
  * contractErrorFor, anything unexpected degrades to internal_error rather
  * than leaking an internal detail or bypassing the envelope.
@@ -85,6 +113,8 @@ export function registerTransferRoutes(server: FastifyInstance, ctx: RouteContex
 
   server.post("/api/v1/operations/exports", async (request, reply) => {
     if (jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined) return reply;
+    const includeSymbols = decodeIncludeSymbols(request);
+    if (includeSymbols === "invalid") return sendError(reply, "invalid_request");
     try {
       // The single-job claim is synchronous: a second job while one runs
       // throws invalid_transition (-> 409). The returned promise settles with
@@ -93,7 +123,7 @@ export function registerTransferRoutes(server: FastifyInstance, ctx: RouteContex
       // the promise is not awaited. It never rejects today — failures land in
       // the recorded summary — the catch only guards the process if that ever
       // changes.
-      void transfer.startExport().catch(() => undefined);
+      void transfer.startExport(includeSymbols).catch(() => undefined);
     } catch (error) {
       return transferError(reply, error);
     }

@@ -43,7 +43,8 @@ const EXPECTED_COVERAGE = {
   DeleteBundle: 1,
   ExportFail: 1,
   ExportSeal: 6,
-  ExportStart: 7,
+  ExportStart: 6,
+  ExportStartWithSymbols: 1,
   FinishPurge: 1,
   ImportCase: 12,
   ImportCustomer: 12,
@@ -54,10 +55,13 @@ const EXPECTED_COVERAGE = {
   ImportFinish: 5,
   ImportHardFail: 1,
   ImportStart: 6,
+  ImportSymbols: 1,
   ImportTokens: 10,
+  IngestSymbol: 2,
   IssueToken: 11,
   MarkQuarantined: 11,
   PromoteObject: 11,
+  PurgeSymbol: 1,
   RejectDump: 1,
   SealUpload: 8,
   TamperBundle: 1,
@@ -79,8 +83,8 @@ test("transfer corpus replays to all_steps_done through the handwritten low-leve
   }
 
   assert.equal(probe.initializeCalls, 7, "each trace gets a fresh engine, vault, and exports directory");
-  assert.equal(probe.actionCalls, 138);
-  assert.equal(probe.observeCalls, 145, "one observation per model state across all seven traces");
+  assert.equal(probe.actionCalls, 142);
+  assert.equal(probe.observeCalls, 149, "one observation per model state across all seven traces");
   assert.equal(probe.sessionCreates, 13, "7 initial instances plus 6 wiped target instances");
   assert.equal(probe.sessionCloses, 13, "every instance generation is closed exactly once");
   assert.equal(probe.disposeCalls, 1);

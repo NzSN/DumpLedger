@@ -1,14 +1,27 @@
 ------------------------- MODULE TransferRoundTrip --------------------------
-(* Pinned happy path: upload a dump to available, issue a second grant,
-   export, wipe, and restore. The imported dump re-earns available through
+(* Pinned happy path: register two symbol identities, purge one, upload a
+   dump to available, issue a second grant, export WITH the symbol flag,
+   wipe, and restore. The imported dump re-earns available through
    quarantine; the imported grants land in their exported states
-   (consumed + issued) under a matching grant-key fingerprint. *)
+   (consumed + issued) under a matching grant-key fingerprint; and the
+   carried symbol identity (identity 1 -- identity 2 was purged before the
+   export) registers on the target. Dump slot 1 references identities 1 and
+   2 (DumpSymbols), so the carried set exercises both the registered join
+   and the include-once selection. *)
 EXTENDS DumpLedgerTransfer
 
 WitnessInit == TransferInit /\ fingerprintMatches
 
 WitnessNext ==
   \/ /\ action_taken = "Init"
+     /\ IngestSymbolI(1)
+  \/ /\ action_taken = "IngestSymbol"
+     /\ symbolRegistered = {1}
+     /\ IngestSymbolI(2)
+  \/ /\ action_taken = "IngestSymbol"
+     /\ symbolRegistered = {1, 2}
+     /\ PurgeSymbolI(2)
+  \/ /\ action_taken = "PurgeSymbol"
      /\ IssueTokenI(1)
   \/ /\ action_taken = "IssueToken"
      /\ tokenState = <<"issued", "unused">>
@@ -27,8 +40,8 @@ WitnessNext ==
      /\ IssueTokenI(2)
   \/ /\ action_taken = "IssueToken"
      /\ tokenState = <<"consumed", "issued">>
-     /\ ExportStart
-  \/ /\ action_taken = "ExportStart"
+     /\ ExportStartWithSymbols
+  \/ /\ action_taken = "ExportStartWithSymbols"
      /\ ExportSeal
   \/ /\ action_taken = "ExportSeal"
      /\ WipeInstance
@@ -53,6 +66,8 @@ WitnessNext ==
      /\ ImportTokens(2)
   \/ /\ action_taken = "ImportTokens"
      /\ tokDone = {1, 2}
+     /\ ImportSymbols
+  \/ /\ action_taken = "ImportSymbols"
      /\ ImportDumpOk(1, 1)
   \/ /\ action_taken = "ImportDumpOk"
      /\ PromoteI(1)
@@ -70,6 +85,7 @@ WitnessNext ==
 WitnessNotReached ==
   ~(bundle.status = "finished" /\ dumpPhase = <<"available", "absent">>
     /\ tokenState = <<"consumed", "issued">>
+    /\ symbolRegistered = {1}
     /\ action_taken = "ImportFinish")
 
 =============================================================================

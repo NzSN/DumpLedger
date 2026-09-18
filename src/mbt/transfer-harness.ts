@@ -29,7 +29,7 @@ import { join } from "node:path";
 import type { ReplayComputer, State, Value } from "mirrorecma";
 import { getParam } from "mirrorecma";
 
-import type { CaseId, CustomerId, DumpId, GrantId } from "../domain/ids.js";
+import type { CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
 import type { CoverageKind } from "../domain/lifecycle.js";
 import {
   createDumpLedgerEngine,
@@ -50,10 +50,10 @@ import {
   openImportSession,
   type ImportSession,
 } from "../transfer/import.js";
+import { parsePdbIdentity, type PdbIdentity } from "../symbols/identity.js";
 import { dumpEntryName } from "../transfer/manifest.js";
 import { parseTarSize } from "../transfer/tar.js";
 import { MemoryVault } from "../vault/memory-vault.js";
-import type { Vault } from "../vault/vault.js";
 
 const MODEL_SLOTS = [1n, 2n] as const;
 const CASE_SLOTS = [1n, 2n] as const;
@@ -64,6 +64,80 @@ const NO_COVERAGE = "unclassified";
 const DEFAULT_UPLOAD_BYTES = new TextEncoder().encode("DumpLedger model-based test payload");
 const EXPORT_KEY = new Uint8Array(32).fill(0x44);
 const OTHER_KEY = new Uint8Array(32).fill(0x55);
+
+/* Mirrors DumpSymbols == {<<1, 1>>, <<1, 2>>, <<2, 1>>} in
+ * specs/DumpLedgerTransfer.tla: dump slot 1's module facts reference symbol
+ * identities 1 and 2; dump slot 2's reference identity 1 (include-once). */
+const MODEL_DUMP_SYMBOL_SLOTS = new Map<bigint, readonly bigint[]>([
+  [1n, [1n, 2n]],
+  [2n, [1n]],
+]);
+
+const SYMBOL_BLOCK_SIZE = 4096;
+const SYMBOL_MSF_MAGIC = "Microsoft C/C++ MSF 7.00\r\n\u001aDS";
+
+/**
+ * Minimal MSF 7.0 PDB whose PDB Info stream carries a slot-specific RSDS
+ * record. The bytes are ingestible through the real symbol vault and the
+ * import path can re-parse their identity, exactly like a real PDB (identity
+ * is always derived from bytes, never from the wire).
+ */
+function symbolPdbBytes(slotValue: bigint): Buffer {
+  const pdbPath = `C:\\mbt\\model-symbol-${slotValue}.pdb`;
+  const rsds = Buffer.alloc(4 + 16 + 4 + Buffer.byteLength(pdbPath, "utf8") + 1);
+  rsds.write("RSDS", 0, "latin1");
+  rsds.writeUInt32LE(0x01234567 + Number(slotValue), 4);
+  rsds.writeUInt16LE(0x89ab, 8);
+  rsds.writeUInt16LE(0xcdef, 10);
+  Buffer.from([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]).copy(rsds, 12);
+  rsds.writeUInt32LE(Number(slotValue), 20);
+  rsds.write(pdbPath, 24, "utf8");
+  const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), rsds];
+
+  const streamStartBlocks: number[] = [];
+  let nextBlock = 1;
+  for (const stream of streams) {
+    streamStartBlocks.push(nextBlock);
+    nextBlock += Math.ceil(stream.length / SYMBOL_BLOCK_SIZE);
+  }
+  const directory = Buffer.alloc(4 + streams.length * 4);
+  directory.writeUInt32LE(streams.length, 0);
+  streams.forEach((stream, index) => directory.writeUInt32LE(stream.length, 4 + index * 4));
+  const directoryStartBlock = nextBlock;
+  const directoryBlockCount = Math.ceil(directory.length / SYMBOL_BLOCK_SIZE);
+  nextBlock += directoryBlockCount;
+  let blockMapBlockCount = Math.ceil((directoryBlockCount * 4) / SYMBOL_BLOCK_SIZE);
+  while ((directoryBlockCount + blockMapBlockCount) * 4 > blockMapBlockCount * SYMBOL_BLOCK_SIZE) blockMapBlockCount += 1;
+  const blockMapStartBlock = nextBlock;
+  nextBlock += blockMapBlockCount;
+
+  const bytes = Buffer.alloc(nextBlock * SYMBOL_BLOCK_SIZE);
+  bytes.write(SYMBOL_MSF_MAGIC, 0, "latin1");
+  bytes.writeUInt32LE(SYMBOL_BLOCK_SIZE, 32);
+  bytes.writeUInt32LE(1, 36);
+  bytes.writeUInt32LE(nextBlock, 40);
+  bytes.writeUInt32LE(directory.length, 44);
+  bytes.writeUInt32LE(0, 48);
+  bytes.writeUInt32LE(blockMapStartBlock, 52);
+  streams.forEach((stream, index) => stream.copy(bytes, streamStartBlocks[index]! * SYMBOL_BLOCK_SIZE));
+  directory.copy(bytes, directoryStartBlock * SYMBOL_BLOCK_SIZE);
+  const mapOffset = blockMapStartBlock * SYMBOL_BLOCK_SIZE;
+  for (let index = 0; index < directoryBlockCount; index += 1) bytes.writeUInt32LE(directoryStartBlock + index, mapOffset + index * 4);
+  for (let index = 0; index < blockMapBlockCount; index += 1) bytes.writeUInt32LE(blockMapStartBlock + index, mapOffset + (directoryBlockCount + index) * 4);
+  return bytes;
+}
+
+const SYMBOL_IDENTITIES = new Map<bigint, PdbIdentity>();
+
+/** The model slot's identity, parsed from the synthetic PDB exactly like the real ingest path does. */
+function symbolIdentity(slotValue: bigint): PdbIdentity {
+  const cached = SYMBOL_IDENTITIES.get(slotValue);
+  if (cached !== undefined) return cached;
+  const identity = parsePdbIdentity(symbolPdbBytes(slotValue));
+  if (identity === undefined) throw new Error(`synthetic MBT symbol ${slotValue} carries no readable identity`);
+  SYMBOL_IDENTITIES.set(slotValue, identity);
+  return identity;
+}
 
 export interface TransferProbe {
   initializeCalls: number;
@@ -100,11 +174,11 @@ class ScriptedInspector implements ControlledInspector {
     error: "inspection outcome was not configured",
   };
 
-  accept(coverage: CoverageKind): void {
+  accept(coverage: CoverageKind, facts?: Readonly<Record<string, unknown>>): void {
     this.outcome = {
       ok: true,
       coverage,
-      facts: { source: "transfer-mbt-scripted-inspector" },
+      facts: facts ?? { source: "transfer-mbt-scripted-inspector" },
     };
   }
 
@@ -122,7 +196,7 @@ class ScriptedInspector implements ControlledInspector {
 
 interface Instance {
   readonly engine: DumpLedgerEngine;
-  readonly vault: Vault;
+  readonly vault: MemoryVault;
   readonly inspector: ScriptedInspector;
 }
 
@@ -237,6 +311,7 @@ export class TransferMbtHarness {
   private wiped = false;
   private fingerprintMatches = true;
   private importKey: Uint8Array = EXPORT_KEY;
+  private includeSymbols = false;
   private custDone = new Set<bigint>();
   private caseDone = new Set<bigint>();
   private done = new Set<bigint>();
@@ -256,6 +331,7 @@ export class TransferMbtHarness {
     this.exportRecord = undefined;
     this.importRecord = undefined;
     this.tampered = 0n;
+    this.includeSymbols = false;
     this.custDone = new Set();
     this.caseDone = new Set();
     this.done = new Set();
@@ -362,10 +438,25 @@ export class TransferMbtHarness {
 
   acceptDump(dumpValue: bigint, kind: string): void {
     const dumpId = this.requireDump(dumpValue);
+    const dump = slot(dumpValue, "dump");
     if (kind !== "partial" && kind !== "full-memory-declared" && kind !== "unknown") {
       throw new RangeError(`coverage kind is outside the model universe: ${kind}`);
     }
-    this.requireInstance().inspector.accept(kind);
+    /* Stored module facts reference the identity slots the model's DumpSymbols
+       relation assigns to this dump: the real exporter joins these exact
+       (debugFile, debugId) strings against the artifact store. */
+    const modules = (MODEL_DUMP_SYMBOL_SLOTS.get(dump) ?? []).map((symbolSlot) => {
+      const identity = symbolIdentity(symbolSlot);
+      return {
+        name: `model-module-${symbolSlot}.dll`,
+        baseOfImage: "0",
+        sizeOfImage: 1,
+        timestamp: 0,
+        debugFile: identity.debugFile,
+        debugId: identity.debugId,
+      };
+    });
+    this.requireInstance().inspector.accept(kind, { source: "transfer-mbt-scripted-inspector", modules });
     this.execute({ type: "AcceptDump", dumpId });
   }
 
@@ -382,9 +473,50 @@ export class TransferMbtHarness {
     this.execute({ type: "FinishPurge", dumpId: this.requireDump(dumpValue) });
   }
 
+  /* ---------------------------- symbol path ----------------------------- */
+
+  private registeredSymbolArtifact(symbolValue: bigint): SymbolArtifactId | undefined {
+    const identity = symbolIdentity(symbolValue);
+    return this.requireInstance().engine.findSymbolArtifact(identity.debugFile, identity.debugId, "pdb")?.artifactId;
+  }
+
+  ingestSymbol(symbolValue: bigint): void {
+    const symbol = slot(symbolValue, "symbol");
+    if (this.registeredSymbolArtifact(symbol) !== undefined) {
+      throw new Error(`symbol slot ${symbol} was already registered`);
+    }
+    const bytes = symbolPdbBytes(symbol);
+    const identity = symbolIdentity(symbol);
+    const artifactId = requireResult(this.execute({ type: "IngestSymbol", kind: "pdb" }).artifactId, "artifactId") as SymbolArtifactId;
+    const vault = this.requireInstance().vault;
+    vault.appendSymbol(artifactId, bytes);
+    vault.syncAndCloseSymbol(artifactId);
+    const sealed = this.execute({
+      type: "SealSymbol",
+      artifactId,
+      debugFile: identity.debugFile,
+      debugId: identity.debugId,
+      kind: "pdb",
+      byteSize: BigInt(bytes.byteLength),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    if (requireResult(sealed.artifactId, "artifactId") !== artifactId) {
+      throw new Error("symbol ingest returned an unexpected artifact id");
+    }
+  }
+
+  purgeSymbol(symbolValue: bigint): void {
+    const symbol = slot(symbolValue, "symbol");
+    const artifactId = this.registeredSymbolArtifact(symbol);
+    if (artifactId === undefined) {
+      throw new Error(`symbol slot ${symbol} is not registered`);
+    }
+    this.execute({ type: "PurgeSymbol", artifactId });
+  }
+
   /* --------------------------- transfer path ---------------------------- */
 
-  async exportStart(): Promise<void> {
+  async exportStart(withSymbols = false): Promise<void> {
     if (this.exportRecord !== undefined) {
       throw new Error("an export is already tracked");
     }
@@ -400,6 +532,7 @@ export class TransferMbtHarness {
       engine: instance.engine,
       vault: instance.vault,
       exportsDir: this.requireExportsDir(),
+      includeSymbols: withSymbols,
       targetFactory: (paths) => {
         const real = fileBundleTarget(paths);
         return {
@@ -414,6 +547,7 @@ export class TransferMbtHarness {
         };
       },
     });
+    this.includeSymbols = withSymbols;
     this.exportRecord = {
       session,
       bundlePath: join(session.exportDir, "bundle.tar"),
@@ -457,6 +591,7 @@ export class TransferMbtHarness {
     const record = this.requireExportRecord();
     rmSync(record.session.exportDir, { recursive: true, force: true });
     this.exportRecord = undefined;
+    this.includeSymbols = false;
     this.tampered = 0n;
   }
 
@@ -512,6 +647,10 @@ export class TransferMbtHarness {
     const token = slot(tokenValue, "token");
     this.requireImport("importing").session.importGrant(this.requireGrant(token).grantId);
     this.tokDone.add(token);
+  }
+
+  importSymbols(): void {
+    this.requireImport("importing").session.importSymbols();
   }
 
   importDump(dumpValue: bigint, caseValue: bigint): void {
@@ -623,7 +762,7 @@ export class TransferMbtHarness {
       }))),
       validation: vSeqStr(MODEL_SLOTS.map((modelSlot) => dumpBySlot(modelSlot)?.validation ?? "not-checked")),
       coverage: vSeqStr(MODEL_SLOTS.map((modelSlot) => dumpBySlot(modelSlot)?.coverage ?? NO_COVERAGE)),
-      symbolRegistered: vSetInt(new Set()),
+      symbolRegistered: vSetInt(new Set(MODEL_SLOTS.filter((symbol) => this.registeredSymbolArtifact(symbol) !== undefined))),
       downloadable: vSetInt(new Set(projection.downloadable.map((realId) => {
         const mapped = this.dumpToSlot.get(realId);
         if (mapped === undefined) {
@@ -633,6 +772,8 @@ export class TransferMbtHarness {
       }))),
       wiped: vBool(this.wiped),
       fingerprintMatches: vBool(this.fingerprintMatches),
+      includeSymbols: vBool(this.exportRecord !== undefined && this.includeSymbols),
+      bundleSymbols: vSetInt(this.carriedSymbolSlots()),
       bundle: this.observeBundle(),
       custDone: vSetInt(this.custDone),
       caseDone: vSetInt(this.caseDone),
@@ -640,6 +781,24 @@ export class TransferMbtHarness {
       tokDone: vSetInt(this.tokDone),
     };
     return state;
+  }
+
+  /** The export manifest's carried symbols mapped back onto model slots. */
+  private carriedSymbolSlots(): Set<bigint> {
+    const record = this.exportRecord;
+    const slots = new Set<bigint>();
+    if (record === undefined) return slots;
+    const byIdentity = new Map<string, bigint>();
+    for (const symbol of MODEL_SLOTS) {
+      const identity = symbolIdentity(symbol);
+      byIdentity.set(`${identity.debugFile}\u0000${identity.debugId}`, symbol);
+    }
+    for (const carried of record.session.manifest.symbols ?? []) {
+      const mapped = byIdentity.get(`${carried.debugFile}\u0000${carried.debugId}`);
+      if (mapped === undefined) throw new Error(`carried symbol ${carried.debugFile}/${carried.debugId} has no model slot`);
+      slots.add(mapped);
+    }
+    return slots;
   }
 
   private observeBundle(): Value {
@@ -906,7 +1065,10 @@ export function createTransferReplayComputer(
       case "RejectDump": owned.rejectDump(inputs.dump); break;
       case "BeginPurge": owned.beginPurge(inputs.dump); break;
       case "FinishPurge": owned.finishPurge(inputs.dump); break;
-      case "ExportStart": await owned.exportStart(); break;
+      case "IngestSymbol": owned.ingestSymbol(inputs.dump); break;
+      case "PurgeSymbol": owned.purgeSymbol(inputs.dump); break;
+      case "ExportStart": await owned.exportStart(false); break;
+      case "ExportStartWithSymbols": await owned.exportStart(true); break;
       case "ExportSeal": await owned.exportSeal(); break;
       case "ExportFail": await owned.exportFail(); break;
       case "TamperBundle": owned.tamperBundle(inputs.dump); break;
@@ -916,6 +1078,7 @@ export function createTransferReplayComputer(
       case "ImportCustomer": owned.importCustomer(inputs.case_); break;
       case "ImportCase": owned.importCase(inputs.case_); break;
       case "ImportTokens": owned.importTokens(inputs.token); break;
+      case "ImportSymbols": owned.importSymbols(); break;
       case "ImportDumpOk":
       case "ImportDumpReject":
       case "ImportDumpTombR":

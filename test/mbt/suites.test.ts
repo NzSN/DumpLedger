@@ -95,7 +95,7 @@ test("the transfer corpus passes as a checked application suite", async () => {
   };
   const result = await runSuite(suite, { mirror: MIRROR_BIN, implementation });
   assertPassedSuite(result, 7, TRANSFER_REQUIRED_ACTIONS);
-  assert.equal(result.evidence.transitionsMatched, String(138));
+  assert.equal(result.evidence.transitionsMatched, String(142));
 });
 
 test("a seeded observation defect is a genuine model mismatch, not a pass", async () => {

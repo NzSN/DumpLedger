@@ -126,6 +126,12 @@
       "inputs": []
     },
     {
+      "id": "ExportStartWithSymbols",
+      "wireAction": "ExportStartWithSymbols",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
       "id": "FinishPurge",
       "wireAction": "FinishPurge",
       "wireAliases": [],
@@ -347,6 +353,12 @@
       "inputs": []
     },
     {
+      "id": "ImportSymbols",
+      "wireAction": "ImportSymbols",
+      "wireAliases": [],
+      "inputs": []
+    },
+    {
       "id": "ImportTokens",
       "wireAction": "ImportTokens",
       "wireAliases": [],
@@ -361,6 +373,27 @@
               },
               {
                 "field": "token"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "IngestSymbol",
+      "wireAction": "IngestSymbol",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
               }
             ]
           }
@@ -412,6 +445,27 @@
     {
       "id": "PromoteObject",
       "wireAction": "PromoteObject",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PurgeSymbol",
+      "wireAction": "PurgeSymbol",
       "wireAliases": [],
       "inputs": [
         {
@@ -619,6 +673,16 @@
     {
       "id": "SymbolRegistered",
       "wireName": "symbolRegistered",
+      "provenance": "implementation"
+    },
+    {
+      "id": "IncludeSymbols",
+      "wireName": "includeSymbols",
+      "provenance": "implementation"
+    },
+    {
+      "id": "BundleSymbols",
+      "wireName": "bundleSymbols",
       "provenance": "implementation"
     }
   ]

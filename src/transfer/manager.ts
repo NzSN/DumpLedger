@@ -110,8 +110,12 @@ export class TransferManager {
     this.#active = null;
   }
 
-  /** Starts an export job; the summary resolves when the bundle is sealed (or the job failed). */
-  startExport(): Promise<ExportSummary> {
+  /**
+   * Starts an export job; the summary resolves when the bundle is sealed (or
+   * the job failed). `includeSymbols` is the opt-in request flag (default
+   * false: the bundle is byte-identical to the pre-flag pipeline).
+   */
+  startExport(includeSymbols = false): Promise<ExportSummary> {
     const exportId = this.#claim("export");
     const createdAt = new Date().toISOString();
     this.#exports.set(exportId, { exportId, status: "running", createdAt, byteSize: null, error: null });
@@ -127,6 +131,7 @@ export class TransferManager {
         exportsDir: this.#exportsDir,
         exportId,
         createdAt,
+        includeSymbols,
         ...(this.#generatorVersion !== undefined ? { generatorVersion: this.#generatorVersion } : {}),
       }).then(finish, (error: unknown) => finish({ exportId, status: "failed", createdAt, byteSize: null, error: errorMessage(error) }));
     } catch (error) {
