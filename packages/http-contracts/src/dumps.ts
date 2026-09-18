@@ -5,12 +5,17 @@
  *   GET  /api/v1/dumps/:dumpId/content   (raw immutable `.dmp` stream; no JSON body)
  *   PUT  /api/v1/dumps/:dumpId/retention <- RetentionRequest -> RetentionResponse
  *
+ * Dump detail links every module fact to the symbol store as `symbolCoverage`:
+ * `present` names the matching artifact, `missing` is an identity with no
+ * artifact, and `unidentified` is a module fact without a debug identity.
+ *
  * Retention accepts a bounded integer number of days. The backend computes the
  * canonical UTC deadline from its own server clock; the browser clock and
  * timezone are never authoritative.
  */
 
 import {
+  arrayOf,
   booleanField,
   canonicalDecimal,
   canonicalTimestamp,
@@ -19,6 +24,7 @@ import {
   integerField,
   nullableField,
   object,
+  oneOf,
   sha256Hex,
   text,
   type Decoder,
@@ -38,6 +44,58 @@ import {
 export const MAX_RETENTION_DAYS = 36_500;
 export const MAX_INSPECTION_ERROR_LENGTH = 2000;
 
+/** Most module rows one dump-detail response may carry (mirrors the inspector's module cap). */
+export const MAX_MODULE_SYMBOL_COVERAGE_ITEMS = 4096;
+/** Module names are display-only; longer stored names read as absent. */
+export const MAX_MODULE_NAME_LENGTH = 1024;
+/** Debug-file names are identity fields, bounded like symbol ingest (255). */
+export const MAX_DEBUG_FILE_LENGTH = 255;
+/** Debug identifiers are identity fields (RSDS GUID+age hex), bounded like symbol ingest (64). */
+export const MAX_DEBUG_ID_LENGTH = 64;
+
+/** Symbol-store status of one module fact on the dump detail response. */
+export type ModuleSymbolStatus = "present" | "missing" | "unidentified";
+export const MODULE_SYMBOL_STATUSES = ["present", "missing", "unidentified"] as const;
+export interface ModuleSymbolCoverage {
+  readonly name: string | null;
+  readonly debugFile: string | null;
+  readonly debugId: string | null;
+  readonly status: ModuleSymbolStatus;
+  readonly artifactId: string | null;
+}
+
+const moduleSymbolStatusDecoder = oneOf(MODULE_SYMBOL_STATUSES, "module symbol status");
+
+export const decodeModuleSymbolCoverage: Decoder<ModuleSymbolCoverage> = (value, path) => {
+  const decoded = object(
+    {
+      name: field(nullableField(text({ max: MAX_MODULE_NAME_LENGTH, label: "name" }))),
+      debugFile: field(nullableField(text({ max: MAX_DEBUG_FILE_LENGTH, label: "debugFile" }))),
+      debugId: field(nullableField(text({ max: MAX_DEBUG_ID_LENGTH, label: "debugId" }))),
+      status: field(moduleSymbolStatusDecoder),
+      artifactId: field(nullableField(identifierField("artifactId"))),
+    },
+    "module symbol coverage",
+  )(value, path);
+  return {
+    name: decoded.name,
+    debugFile: decoded.debugFile,
+    debugId: decoded.debugId,
+    status: decoded.status,
+    artifactId: decoded.artifactId,
+  };
+};
+
+export function encodeModuleSymbolCoverage(coverage: ModuleSymbolCoverage): Record<string, unknown> {
+  return {
+    name: coverage.name,
+    debugFile: coverage.debugFile,
+    debugId: coverage.debugId,
+    status: coverage.status,
+    artifactId: coverage.artifactId,
+  };
+}
+
 /** Dump-detail body: lifecycle, coverage, facts, retention, and activity. */
 export interface DumpDetailResponse {
   readonly dumpId: string;
@@ -55,6 +113,8 @@ export interface DumpDetailResponse {
   readonly purgeAt: string | null;
   readonly purgedAt: string | null;
   readonly inspectionError: string | null;
+  /** One row per `inspectionFacts.modules[]` entry, in stored order. */
+  readonly symbolCoverage: readonly ModuleSymbolCoverage[];
   readonly activity: readonly ActivityItem[];
 }
 
@@ -86,6 +146,12 @@ export const decodeDumpDetailResponse: Decoder<DumpDetailResponse> = (value, pat
       inspectionError: field(
         nullableField(text({ max: MAX_INSPECTION_ERROR_LENGTH, label: "inspectionError" })),
       ),
+      symbolCoverage: field(
+        arrayOf(decodeModuleSymbolCoverage, {
+          label: "symbolCoverage",
+          maxLength: MAX_MODULE_SYMBOL_COVERAGE_ITEMS,
+        }),
+      ),
       activity: field((entries, entriesPath) => decodeActivityItems(entries, entriesPath)),
     },
     "dump detail response",
@@ -105,6 +171,7 @@ export const decodeDumpDetailResponse: Decoder<DumpDetailResponse> = (value, pat
     purgeAt: decoded.purgeAt,
     purgedAt: decoded.purgedAt,
     inspectionError: decoded.inspectionError,
+    symbolCoverage: decoded.symbolCoverage,
     activity: decoded.activity,
   };
 };
@@ -125,6 +192,7 @@ export function encodeDumpDetailResponse(detail: DumpDetailResponse): Record<str
     purgeAt: detail.purgeAt,
     purgedAt: detail.purgedAt,
     inspectionError: detail.inspectionError,
+    symbolCoverage: detail.symbolCoverage.map(encodeModuleSymbolCoverage),
     activity: detail.activity.map(encodeActivityItem),
   };
 }

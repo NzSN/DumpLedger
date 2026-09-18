@@ -11,12 +11,18 @@ import {
   type DashboardResponse,
   type DumpDetailResponse,
   type GrantRecord,
+  type MissingSymbolIdentity,
+  type ModuleSymbolCoverage,
   MAX_CASE_LIST_ITEMS,
   MAX_DASHBOARD_CUSTOMERS,
   MAX_DASHBOARD_RECENT_CASES,
+  MAX_DEBUG_FILE_LENGTH,
+  MAX_DEBUG_ID_LENGTH,
+  MAX_MODULE_NAME_LENGTH,
 } from "@dump-ledger/http-contracts";
-import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId } from "../domain/ids.js";
+import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type CaseId } from "../domain/ids.js";
 import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
+import type { DumpLedgerProjection, SymbolArtifactProjection } from "../engine/projection.js";
 import type { SymbolVault, Vault, VaultReader } from "../vault/vault.js";
 import type { CaseTransitionOutcome, HttpApplicationPort } from "./server.js";
 
@@ -363,6 +369,7 @@ export class EngineHttpApplication implements HttpApplicationPort {
       allowedActions: allowedActionsFor(item.status),
       grants,
       dumps,
+      missingSymbols: missingSymbolsFor(projection, caseId),
       activity,
     };
   }
@@ -418,6 +425,7 @@ export class EngineHttpApplication implements HttpApplicationPort {
       purgeAt: dump.purgeAt,
       purgedAt: dump.purgedAt,
       inspectionError: dump.inspectionError === null ? null : dump.inspectionError.slice(0, 2000),
+      symbolCoverage: symbolCoverageFor(dump.inspectionFacts, projection.symbols),
       activity,
     };
   }
@@ -478,4 +486,101 @@ function activityItemOf(
     occurredAt,
     ...(outcome === undefined || outcome.length === 0 ? {} : { outcome }),
   };
+}
+
+/**
+ * Tolerant module-fact readers for `inspection_facts.modules[]`
+ * (docs/symbols-design.md: "Dump <-> symbol linkage"). Facts are stored JSON
+ * written by an earlier server version, so every field is optional and any
+ * value that is not plain bounded text reads as absent.
+ */
+function factText(value: unknown, max: number): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > max) return null;
+  return /[\u0000-\u001f\u007f]/.test(value) ? null : value;
+}
+
+function factModules(
+  facts: Readonly<Record<string, unknown>> | null,
+): readonly Readonly<Record<string, unknown>>[] | null {
+  const modules = facts === null ? undefined : facts.modules;
+  if (!Array.isArray(modules)) return null;
+  return modules.filter((entry): entry is Readonly<Record<string, unknown>> =>
+    entry !== null && typeof entry === "object" && !Array.isArray(entry));
+}
+
+interface ModuleSymbolFacts {
+  readonly name: string | null;
+  readonly debugFile: string | null;
+  readonly debugId: string | null;
+}
+
+function moduleSymbolFacts(entry: Readonly<Record<string, unknown>>): ModuleSymbolFacts {
+  return {
+    name: factText(entry.name, MAX_MODULE_NAME_LENGTH),
+    debugFile: factText(entry.debugFile, MAX_DEBUG_FILE_LENGTH),
+    debugId: factText(entry.debugId, MAX_DEBUG_ID_LENGTH),
+  };
+}
+
+/** Exact (debugFile, debugId) key: symbol resolution is case-sensitive by
+ * design (docs/symbols-design.md, "Identity model"), and NUL cannot appear
+ * inside either identity string. */
+function symbolKey(debugFile: string, debugId: string): string {
+  return `${debugFile}\u0000${debugId}`;
+}
+
+function symbolIndex(symbols: readonly SymbolArtifactProjection[]): ReadonlyMap<string, SymbolArtifactProjection> {
+  return new Map(symbols.map(symbol => [symbolKey(symbol.debugFile, symbol.debugId), symbol]));
+}
+
+/** Per-module symbol coverage for one dump; stored order is preserved. */
+function symbolCoverageFor(
+  facts: Readonly<Record<string, unknown>> | null,
+  symbols: readonly SymbolArtifactProjection[],
+): readonly ModuleSymbolCoverage[] {
+  const modules = factModules(facts);
+  if (modules === null) return [];
+  const index = symbolIndex(symbols);
+  return modules.map((entry): ModuleSymbolCoverage => {
+    const identity = moduleSymbolFacts(entry);
+    if (identity.debugFile === null || identity.debugId === null) {
+      return { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "unidentified", artifactId: null };
+    }
+    const artifact = index.get(symbolKey(identity.debugFile, identity.debugId));
+    return artifact === undefined
+      ? { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "missing", artifactId: null }
+      : { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "present", artifactId: artifact.artifactId };
+  });
+}
+
+/** Missing identities aggregated across the case's available dumps: one entry
+ * per unmatched (debugFile, debugId), with deduped, sorted contributing
+ * dumpIds so the case page renders deterministically. */
+function missingSymbolsFor(projection: DumpLedgerProjection, caseId: CaseId): readonly MissingSymbolIdentity[] {
+  const grouped = new Map<string, { debugFile: string; debugId: string; dumpIds: Set<string> }>();
+  const index = symbolIndex(projection.symbols);
+  for (const dump of projection.dumps) {
+    if (dump.caseId !== caseId || dump.phase !== "available") continue;
+    const modules = factModules(dump.inspectionFacts);
+    if (modules === null) continue;
+    for (const entry of modules) {
+      const identity = moduleSymbolFacts(entry);
+      if (identity.debugFile === null || identity.debugId === null) continue;
+      const key = symbolKey(identity.debugFile, identity.debugId);
+      if (index.has(key)) continue;
+      const group = grouped.get(key);
+      if (group === undefined) grouped.set(key, { debugFile: identity.debugFile, debugId: identity.debugId, dumpIds: new Set([dump.dumpId]) });
+      else group.dumpIds.add(dump.dumpId);
+    }
+  }
+  return [...grouped.values()]
+    .sort((left, right) => left.debugFile === right.debugFile
+      ? compareCodeUnits(left.debugId, right.debugId)
+      : compareCodeUnits(left.debugFile, right.debugFile))
+    .map(group => ({ debugFile: group.debugFile, debugId: group.debugId, dumpIds: [...group.dumpIds].sort() }));
+}
+
+/** Code-unit ordering, so aggregation order never depends on locale data. */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

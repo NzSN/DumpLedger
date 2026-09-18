@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
- * Feature-scoped styles for the operator Symbols page. Base tokens and
+ * Feature-scoped styles for the Symbols feature (operator store page plus the
+ * dump/case linkage lists). Base tokens and
  * classes (.panel, .record-row, .drop-zone, .progress-track, .empty-state)
  * come from frontend/src/styles/; only the symbols-specific bits live here.
  * ------------------------------------------------------------------------- */
@@ -99,4 +100,34 @@
   margin: 0.6rem 0 0;
   color: var(--muted);
   font-size: 0.8125rem;
+}
+
+/* Dump ↔ symbol linkage rows (milestone 2): one compact status cell per module,
+   toned by coverage verdict. `unidentified` stays muted — it is an absence of
+   debug identity, not a missing artifact. */
+.symbol-coverage-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.symbol-coverage-status.is-present {
+  color: var(--green);
+}
+
+.symbol-coverage-status.is-missing {
+  color: var(--red);
+}
+
+.symbol-coverage-status.is-unidentified {
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }

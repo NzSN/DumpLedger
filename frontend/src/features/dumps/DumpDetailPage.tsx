@@ -11,6 +11,9 @@
  *     browser clock and timezone are never authoritative.
  *   - Download is an ordinary same-origin navigation to the raw content
  *     endpoint; dump bytes are never buffered through the React app.
+ *   - Symbol coverage is report-only: every inspected module shows its debug
+ *     identity and whether the symbol store has the artifact. Missing symbols
+ *     never gate dump availability.
  */
 
 import { useCallback, useId, useState, type FormEvent, type ReactNode } from "react";
@@ -42,6 +45,7 @@ import {
 } from "../../shared/status";
 import { formatUtcTimestamp, formatBytes } from "../../shared/format";
 import { ActivityTimeline } from "../cases/activity-timeline";
+import { SymbolCoverageList } from "../symbols/SymbolLinkageLists";
 
 export const DEFAULT_RETENTION_DAYS = 30;
 
@@ -245,6 +249,12 @@ function DumpDetailReady({
         <div className="stack">
           <Panel title="Artifact details" subtitle="Facts recorded from the immutable original.">
             <FactGrid detail={detail} />
+          </Panel>
+          <Panel
+            title="Symbol coverage"
+            subtitle="Module debug identities recorded at intake, matched against the symbol store."
+          >
+            <SymbolCoverageList entries={detail.symbolCoverage} />
           </Panel>
           <Panel title="Lifecycle activity" subtitle="Audited events for this dump.">
             <ActivityTimeline items={detail.activity} />

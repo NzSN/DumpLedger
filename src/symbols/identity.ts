@@ -283,6 +283,42 @@ function readRsdsIdentity(directory: Uint8Array, fileBytes: Uint8Array, blockSiz
 }
 
 /**
+ * Parses a raw CodeView RSDS record, as found at a minidump module's CvRecord
+ * location: 4-byte "RSDS" signature, 16-byte GUID, 4-byte little-endian age,
+ * then a NUL-terminated UTF-8 PDB path. `debugFile` is the path's basename
+ * (either separator style); `debugId` uses the same SymSrv formatting as
+ * `parsePdbIdentity`.
+ *
+ * Strictly best-effort, unlike the MSF-container parser: non-RSDS signatures
+ * (e.g. NB10 records), truncation, unterminated or unreadable paths, and
+ * malformed fields all degrade to `undefined`, and the function never throws.
+ * Linkage metadata must not fail an inspection, so callers can treat a
+ * `undefined` result as "this module has no usable identity".
+ */
+export function parseRsdsCodeViewRecord(bytes: Uint8Array): PdbIdentity | undefined {
+  if (!matchesAscii(bytes, 0, RSDS_SIGNATURE)) return undefined;
+  // The smallest record is the 24-byte header plus a NUL terminator.
+  if (bytes.length < RSDS_HEADER_BYTES + 1) return undefined;
+
+  const age = readUint32(toDataView(bytes), 20);
+  if (age === undefined) return undefined;
+  const pathEnd = bytes.indexOf(0, RSDS_HEADER_BYTES);
+  if (pathEnd === -1) return undefined;
+
+  let path: string;
+  try {
+    path = UTF8_DECODER.decode(bytes.subarray(RSDS_HEADER_BYTES, pathEnd));
+  } catch {
+    return undefined;
+  }
+  if (controlCharacterIndex(path) !== -1) return undefined;
+  const debugFile = fileNameFromPath(path);
+  if (debugFile === undefined || debugFileNameProblem(debugFile) !== undefined) return undefined;
+
+  return { debugFile, debugId: formatSymsrvDebugId(bytes.subarray(4, 20), age) };
+}
+
+/**
  * Derives the debug identity of a PDB from its bytes.
  *
  * Returns `undefined` when the bytes are not an MSF container. Throws

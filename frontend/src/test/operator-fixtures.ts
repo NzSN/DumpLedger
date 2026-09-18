@@ -22,6 +22,8 @@ import type {
   ImportProgressResponse,
   ImportStatus,
   IssuedGrant,
+  MissingSymbolIdentity,
+  ModuleSymbolCoverage,
   OperationsResponse,
   RuntimeJobSummary,
   TransitionResponse,
@@ -60,6 +62,7 @@ export function caseDump(
 
 export interface CaseDetailOverrides {
   readonly status?: CaseStatus;
+  readonly missingSymbols?: readonly MissingSymbolIdentity[];
   readonly allowedActions?: readonly CaseAction[];
   readonly grants?: readonly CaseGrantSummary[];
   readonly dumps?: readonly CaseDumpSummary[];
@@ -80,6 +83,7 @@ export function caseDetailFixture(overrides: CaseDetailOverrides = {}): CaseDeta
     allowedActions: overrides.allowedActions ?? ["StartInvestigation", "CloseCase"],
     grants: overrides.grants ?? [],
     dumps: overrides.dumps ?? [],
+    missingSymbols: overrides.missingSymbols ?? [],
     activity:
       overrides.activity ??
       [activityItem("2026-09-01T10:00:00.000Z", "CaseOpened"), activityItem("2026-09-01T10:05:00.000Z", "CaseStarted")],
@@ -122,6 +126,7 @@ export function issuedGrantRecord(
 
 export interface DumpDetailOverrides {
   readonly phase?: DumpDetailResponse["phase"];
+  readonly symbolCoverage?: readonly ModuleSymbolCoverage[];
   readonly downloadable?: boolean;
   readonly purgeAt?: string | null;
   readonly byteSize?: bigint | null;
@@ -151,6 +156,7 @@ export function dumpDetailFixture(overrides: DumpDetailOverrides = {}): DumpDeta
     purgeAt: overrides.purgeAt ?? null,
     purgedAt: overrides.purgedAt ?? null,
     inspectionError: overrides.inspectionError ?? null,
+    symbolCoverage: overrides.symbolCoverage ?? [],
     activity:
       overrides.activity ??
       [

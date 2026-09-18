@@ -290,4 +290,52 @@ describe("Case detail operator page", () => {
     expect(await screen.findByText("Renderer crash on startup")).toBeTruthy();
     expect(fake.queryCalls.filter((call) => call.path === DETAIL_PATH)).toHaveLength(2);
   });
+
+  it("aggregates missing symbol identities with referencing-dump links", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () =>
+      caseDetailFixture({
+        dumps: [caseDump("dump-9001", "available"), caseDump("dump-9002", "available")],
+        missingSymbols: [
+          {
+            debugFile: "electron.pdb",
+            debugId: "3A9C1B2C3D4E5F60718293A4B5C6D7E81",
+            dumpIds: ["dump-9001", "dump-9002"],
+          },
+          {
+            debugFile: "node.pdb",
+            debugId: "ABCDEF0123456789ABCDEF01234567890",
+            dumpIds: ["dump-9002"],
+          },
+        ],
+      }),
+    );
+    renderCaseDetail(fake);
+
+    await screen.findByText("Renderer crash on startup");
+    const panel = screen.getByText("Missing symbols").closest("section");
+    expect(panel).not.toBeNull();
+    const scope = within(panel as HTMLElement);
+
+    // Each missing identity lists its debug file, full debug id, and count.
+    expect(scope.getByText("electron.pdb")).toBeTruthy();
+    expect(scope.getByText("3A9C1B2C3D4E5F60718293A4B5C6D7E81")).toBeTruthy();
+    expect(scope.getByText("Referenced by 2 dumps")).toBeTruthy();
+    expect(scope.getByText("node.pdb")).toBeTruthy();
+    expect(scope.getByText("Referenced by 1 dump")).toBeTruthy();
+    // Every referencing dump links to its dump detail, matching the dump rows.
+    const linked = scope.getByRole("link", { name: "dump-9001" });
+    expect(linked.getAttribute("href")).toBe("/dumps/dump-9001");
+    expect(scope.getAllByRole("link", { name: "dump-9002" })).toHaveLength(2);
+  });
+
+  it("shows the missing symbols empty state when nothing is missing", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () => caseDetailFixture());
+    renderCaseDetail(fake);
+
+    await screen.findByText("Renderer crash on startup");
+    expect(screen.getByText("No missing symbols")).toBeTruthy();
+    expect(screen.getByText(/Every debug identity referenced by this case's dumps/)).toBeTruthy();
+  });
 });

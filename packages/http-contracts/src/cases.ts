@@ -2,6 +2,9 @@
  * Case contracts (design sections 7.3 and 7.4): summaries, search, creation,
  * detail, and the five explicit lifecycle transitions.
  *
+ * Case detail carries `missingSymbols`: the module debug identities its
+ * available dumps reference but the symbol store does not hold.
+ *
  * `allowedActions` on the case detail response is presentation guidance only,
  * never authorization. Every transition is re-checked inside the lifecycle
  * engine and its ledger transaction, and the server rejects illegal or
@@ -22,6 +25,7 @@ import {
   text,
   type Decoder,
 } from "./decode.js";
+import { MAX_DEBUG_FILE_LENGTH, MAX_DEBUG_ID_LENGTH } from "./dumps.js";
 import { MAX_GRANT_MAX_UPLOADS } from "./grants.js";
 import {
   caseActionDecoder,
@@ -42,6 +46,10 @@ export const MAX_CASE_TITLE_LENGTH = 300;
 export const MAX_SEARCH_QUERY_LENGTH = 200;
 export const MAX_CURSOR_LENGTH = 256;
 export const MAX_CASE_LIST_ITEMS = 200;
+/** Most distinct missing symbol identities one case-detail response may carry. */
+export const MAX_MISSING_SYMBOL_IDENTITIES = 4096;
+/** Most contributing dumps one missing symbol identity may name. */
+export const MAX_MISSING_SYMBOL_DUMP_IDS = 4096;
 
 /** One bounded row of the case search/dashboard recent list. */
 export interface CaseSummary {
@@ -253,6 +261,32 @@ export function encodeCaseDumpSummary(summary: CaseDumpSummary): Record<string, 
   };
 }
 
+/** One module debug identity with no artifact in the store, aggregated
+ * across the case's dumps so the operator sees which builds need ingest. */
+export interface MissingSymbolIdentity {
+  readonly debugFile: string;
+  readonly debugId: string;
+  readonly dumpIds: readonly string[];
+}
+
+export const decodeMissingSymbolIdentity: Decoder<MissingSymbolIdentity> = (value, path) => {
+  const decoded = object(
+    {
+      debugFile: field(text({ max: MAX_DEBUG_FILE_LENGTH, label: "debugFile" })),
+      debugId: field(text({ max: MAX_DEBUG_ID_LENGTH, label: "debugId" })),
+      dumpIds: field(
+        arrayOf(identifierField("dumpId"), { label: "dumpIds", maxLength: MAX_MISSING_SYMBOL_DUMP_IDS }),
+      ),
+    },
+    "missing symbol identity",
+  )(value, path);
+  return { debugFile: decoded.debugFile, debugId: decoded.debugId, dumpIds: decoded.dumpIds };
+};
+
+export function encodeMissingSymbolIdentity(identity: MissingSymbolIdentity): Record<string, unknown> {
+  return { debugFile: identity.debugFile, debugId: identity.debugId, dumpIds: identity.dumpIds };
+}
+
 export interface CaseCustomer {
   readonly customerId: string;
   readonly displayName: string;
@@ -269,6 +303,8 @@ export interface CaseDetailResponse {
   readonly allowedActions: readonly CaseAction[];
   readonly grants: readonly CaseGrantSummary[];
   readonly dumps: readonly CaseDumpSummary[];
+  /** Missing module identities aggregated across the case's available dumps. */
+  readonly missingSymbols: readonly MissingSymbolIdentity[];
   readonly activity: readonly ActivityItem[];
 }
 
@@ -293,6 +329,12 @@ export const decodeCaseDetailResponse: Decoder<CaseDetailResponse> = (value, pat
       allowedActions: field(arrayOf(caseActionDecoder, { label: "allowedActions", maxLength: 5 })),
       grants: field(arrayOf(decodeCaseGrantSummary, { label: "grants", maxLength: MAX_CASE_LIST_ITEMS })),
       dumps: field(arrayOf(decodeCaseDumpSummary, { label: "dumps", maxLength: MAX_CASE_LIST_ITEMS })),
+      missingSymbols: field(
+        arrayOf(decodeMissingSymbolIdentity, {
+          label: "missingSymbols",
+          maxLength: MAX_MISSING_SYMBOL_IDENTITIES,
+        }),
+      ),
       activity: field((entries, entriesPath) => decodeActivityItems(entries, entriesPath)),
     },
     "case detail response",
@@ -307,6 +349,7 @@ export const decodeCaseDetailResponse: Decoder<CaseDetailResponse> = (value, pat
     allowedActions: decoded.allowedActions,
     grants: decoded.grants,
     dumps: decoded.dumps,
+    missingSymbols: decoded.missingSymbols,
     activity: decoded.activity,
   };
 };
@@ -322,6 +365,7 @@ export function encodeCaseDetailResponse(detail: CaseDetailResponse): Record<str
     allowedActions: detail.allowedActions,
     grants: detail.grants.map(encodeCaseGrantSummary),
     dumps: detail.dumps.map(encodeCaseDumpSummary),
+    missingSymbols: detail.missingSymbols.map(encodeMissingSymbolIdentity),
     activity: detail.activity.map(encodeActivityItem),
   };
 }

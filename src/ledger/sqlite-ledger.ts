@@ -35,12 +35,15 @@ function dumpFromRow(row: Row): DumpProjection {
   const coverageValue = row.coverage;
   if (coverageValue !== null && !isCoverageKind(coverageValue)) throw new DumpLedgerError("integrity_failure", "invalid database coverage");
   const byteSize = nullableString(row, "byte_size");
+  const inspectionFactsJson = row.inspection_facts_json;
   return {
     dumpId: databaseValue("dump_id", parseDumpId, row.dump_id), caseId: databaseValue("case_id", parseCaseId, row.case_id),
     phase: databaseValue("phase", parseDumpPhase, row.phase), blobState: databaseValue("blob_state", parseBlobState, row.blob_state),
     originalName: requiredString(row, "original_name"), byteSize: byteSize === null ? null : BigInt(byteSize), sha256: nullableString(row, "sha256"),
     validation: databaseValue("validation", parseValidationState, row.validation), coverage: coverageValue, downloadable: booleanInteger(row, "downloadable"),
-    inspectionError: nullableString(row, "inspection_error"), receivedAt: requiredString(row, "received_at"),
+    inspectionError: nullableString(row, "inspection_error"),
+    inspectionFacts: inspectionFactsJson === null ? null : parseJsonObject(requiredString(row, "inspection_facts_json")),
+    receivedAt: requiredString(row, "received_at"),
     availableAt: nullableIsoTimestamp(row, "available_at"), purgeAt: nullableIsoTimestamp(row, "purge_at"), purgedAt: nullableIsoTimestamp(row, "purged_at"),
   };
 }

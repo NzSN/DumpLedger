@@ -10,7 +10,8 @@ export interface DumpProjection {
   readonly dumpId: DumpId; readonly caseId: CaseId; readonly phase: DumpPhase; readonly blobState: BlobState;
   readonly originalName: string; readonly byteSize: bigint | null; readonly sha256: string | null;
   readonly validation: ValidationState; readonly coverage: CoverageKind | null; readonly downloadable: boolean;
-  readonly inspectionError: string | null; readonly receivedAt: string; readonly availableAt: string | null;
+  readonly inspectionError: string | null; readonly inspectionFacts: Readonly<Record<string, unknown>> | null;
+  readonly receivedAt: string; readonly availableAt: string | null;
   readonly purgeAt: string | null; readonly purgedAt: string | null;
 }
 export interface SymbolArtifactProjection {

@@ -19,6 +19,9 @@
  *     grants the server revoked.
  *   - The manifest is an ordinary same-origin navigation/download to the raw
  *     JSON endpoint; bytes are never buffered through the React app.
+ *   - Missing symbols aggregate the debug identities referenced by this case's
+ *     dumps that the symbol store does not hold, so the operator sees exactly
+ *     which builds still need PDB ingestion.
  */
 
 import { useCallback, useState, type ReactNode } from "react";
@@ -47,6 +50,7 @@ import { caseActionLabel, caseStatusPresentation, dumpPhasePresentation } from "
 import { formatUtcDate, formatBytes } from "../../shared/format";
 import { ActivityTimeline } from "./activity-timeline";
 import { CreateGrantForm, GrantRow } from "../grants/grant-components";
+import { MissingSymbolsList } from "../symbols/SymbolLinkageLists";
 
 /** Canonical presentation order for the five lifecycle actions. */
 export const TRANSITION_ORDER: readonly CaseAction[] = [
@@ -293,6 +297,12 @@ function CaseDetailReady({
         <div className="stack">
           <Panel title="Crash dumps" subtitle="Original bytes are immutable after validation.">
             <DumpRows dumps={detail.dumps} />
+          </Panel>
+          <Panel
+            title="Missing symbols"
+            subtitle="Debug identities referenced by this case's dumps but not in the symbol store."
+          >
+            <MissingSymbolsList entries={detail.missingSymbols} />
           </Panel>
           <Panel title="Activity" subtitle="Most recent case events.">
             <ActivityTimeline items={detail.activity} />

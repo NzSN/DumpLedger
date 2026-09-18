@@ -95,6 +95,8 @@ import {
   type DumpDetailResponse,
   type ErrorResponse,
   type LoginRequest,
+  type MissingSymbolIdentity,
+  type ModuleSymbolCoverage,
   type OperationsResponse,
   type RetentionRequest,
   type RetentionResponse,
@@ -112,6 +114,10 @@ const ID_CASE = "case_01JTEST0000000000000000000";
 const ID_CUSTOMER = "customer_01JTEST0000000000000000000";
 const ID_GRANT = "grant_01JTEST0000000000000000000";
 const ID_DUMP = "dump_01JTEST0000000000000000000";
+const ID_DUMP_B = "dump_01JTEST0000000000000000001";
+const ID_SYMBOL_COVERAGE = "symbol_01JTEST0000000000000000001";
+const DEBUG_FILE = "electron.pdb";
+const DEBUG_ID = "3A9C1F2E4B5D6789012345678ABCDEF1";
 
 const NOW = "2026-01-15T10:30:00.123Z";
 const LATER = "2026-02-14T10:30:00.000Z";
@@ -309,6 +315,11 @@ describe("cases (7.3/7.4)", () => {
     byteSize: null,
     receivedAt: NOW,
   };
+  const missingSymbol: MissingSymbolIdentity = {
+    debugFile: "gpu.pdb",
+    debugId: "4B5D6789012345678ABCDEF13A9C1F2E",
+    dumpIds: [ID_DUMP, ID_DUMP_B],
+  };
   const detail: CaseDetailResponse = {
     caseId: ID_CASE,
     customerId: ID_CUSTOMER,
@@ -319,6 +330,7 @@ describe("cases (7.3/7.4)", () => {
     allowedActions: ["StartInvestigation", "WaitForCustomer", "ResumeInvestigation", "ResolveCase", "CloseCase"],
     grants: [grantRow],
     dumps: [dumpRow],
+    missingSymbols: [missingSymbol],
     activity: [{ occurredAt: NOW, action: "CaseCreated", outcome: "created" }],
   };
 
@@ -331,6 +343,26 @@ describe("cases (7.3/7.4)", () => {
     const decoded = roundTripJson(detail, encodeCaseDetailResponse, decodeCaseDetailResponse);
     assert.deepEqual(decoded, detail);
     assert.equal(decoded.grants[0]?.maxBytes, 1024n * 1024n * 1024n);
+  });
+  it("bounds the aggregated missing symbol identities", () => {
+    const encoded = encodeCaseDetailResponse(detail);
+    assert.deepEqual(encoded.missingSymbols, [
+      { debugFile: "gpu.pdb", debugId: missingSymbol.debugId, dumpIds: [ID_DUMP, ID_DUMP_B] },
+    ]);
+    expectDecodeError(
+      () => decodeCaseDetailResponse({
+        ...encoded,
+        missingSymbols: [{ debugFile: "gpu.pdb", debugId: "x".repeat(65), dumpIds: [ID_DUMP] }],
+      }, "$"),
+      /debugId exceeds 64 characters/,
+    );
+    expectDecodeError(
+      () => decodeCaseDetailResponse({
+        ...encoded,
+        missingSymbols: [{ debugFile: "gpu.pdb", debugId: missingSymbol.debugId, dumpIds: [7] }],
+      }, "$"),
+      /dumpId must be a string/,
+    );
   });
   it("keeps bigint byte sizes as canonical decimal strings on the wire", () => {
     const encoded = encodeCaseDetailResponse(detail);
@@ -554,6 +586,11 @@ describe("dumps and retention (7.7)", () => {
     purgeAt: null,
     purgedAt: null,
     inspectionError: null,
+    symbolCoverage: [
+      { name: "electron.exe", debugFile: DEBUG_FILE, debugId: DEBUG_ID, status: "present", artifactId: ID_SYMBOL_COVERAGE },
+      { name: "gpu.dll", debugFile: "gpu.pdb", debugId: "4B5D6789012345678ABCDEF13A9C1F2E", status: "missing", artifactId: null },
+      { name: "third_party.dll", debugFile: null, debugId: null, status: "unidentified", artifactId: null },
+    ] satisfies readonly ModuleSymbolCoverage[],
     activity: [{ occurredAt: NOW, action: "DumpReceived" }],
   };
   const retentionRequest: RetentionRequest = { days: 30 };
@@ -561,6 +598,28 @@ describe("dumps and retention (7.7)", () => {
 
   it("round-trips the dump detail response including nullable facts", () => {
     assert.deepEqual(roundTripJson(dumpDetail, encodeDumpDetailResponse, decodeDumpDetailResponse), dumpDetail);
+  });
+  it("bounds module symbol coverage on dump detail", () => {
+    const encoded = encodeDumpDetailResponse(dumpDetail);
+    assert.deepEqual(encoded.symbolCoverage, [
+      { name: "electron.exe", debugFile: DEBUG_FILE, debugId: DEBUG_ID, status: "present", artifactId: ID_SYMBOL_COVERAGE },
+      { name: "gpu.dll", debugFile: "gpu.pdb", debugId: "4B5D6789012345678ABCDEF13A9C1F2E", status: "missing", artifactId: null },
+      { name: "third_party.dll", debugFile: null, debugId: null, status: "unidentified", artifactId: null },
+    ]);
+    expectDecodeError(
+      () => decodeDumpDetailResponse({
+        ...encoded,
+        symbolCoverage: [{ name: null, debugFile: null, debugId: null, status: "unknown", artifactId: null }],
+      }, "$"),
+      /module symbol status is invalid/,
+    );
+    expectDecodeError(
+      () => decodeDumpDetailResponse({
+        ...encoded,
+        symbolCoverage: [{ name: "x".repeat(1025), debugFile: null, debugId: null, status: "unidentified", artifactId: null }],
+      }, "$"),
+      /name exceeds 1024 characters/,
+    );
   });
   it("round-trips retention request and response", () => {
     assert.deepEqual(roundTripJson(retentionRequest, encodeRetentionRequest, decodeRetentionRequest), retentionRequest);

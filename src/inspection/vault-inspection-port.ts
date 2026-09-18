@@ -70,6 +70,8 @@ function serializeFacts(facts: MinidumpFacts): Readonly<Record<string, unknown>>
             baseOfImage: module.baseOfImage.toString(),
             sizeOfImage: module.sizeOfImage,
             timestamp: module.timestamp,
+            ...(module.debugFile === undefined ? {} : { debugFile: module.debugFile }),
+            ...(module.debugId === undefined ? {} : { debugId: module.debugId }),
           })),
         }),
   };

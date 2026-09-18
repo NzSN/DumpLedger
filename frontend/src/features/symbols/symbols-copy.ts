@@ -1,5 +1,6 @@
 /**
- * Pure copy and formatting helpers for the Symbols page (no React, no HTTP).
+ * Pure copy and formatting helpers for the Symbols feature — the operator
+ * store page plus the dump/case linkage lists (no React, no HTTP).
  *
  * Known ingest failures get fixed operator copy — mirroring the backend's
  * stable messages for the symbol error codes — so the queue never renders an
@@ -9,6 +10,7 @@
 
 import {
   MAX_SYMBOL_BYTES,
+  type ModuleSymbolStatus,
   type SymbolIngestResponse,
   type SymbolKind,
 } from "@dump-ledger/http-contracts";
@@ -54,4 +56,40 @@ export function ingestFailureText(error: unknown): string {
     default:
       return errorText(error, "The file could not be ingested.");
   }
+}
+
+/** Display name for a module the inspector could not name. */
+export const UNNAMED_MODULE_LABEL = "unnamed module";
+
+export function moduleNameLabel(name: string | null): string {
+  return name ?? UNNAMED_MODULE_LABEL;
+}
+
+/** Short status word paired with the coverage glyph. */
+export function moduleSymbolStatusLabel(status: ModuleSymbolStatus): string {
+  switch (status) {
+    case "present":
+      return "present";
+    case "missing":
+      return "missing";
+    case "unidentified":
+      return "no debug identity";
+  }
+}
+
+/** Coverage glyph; `unidentified` is a dash, not a failure mark. */
+export function moduleSymbolStatusGlyph(status: ModuleSymbolStatus): string {
+  switch (status) {
+    case "present":
+      return "✓";
+    case "missing":
+      return "✗";
+    case "unidentified":
+      return "—";
+  }
+}
+
+/** Case-page aggregation line, e.g. `Referenced by 2 dumps`. */
+export function referencingDumpCountLabel(count: number): string {
+  return count === 1 ? "Referenced by 1 dump" : `Referenced by ${count} dumps`;
 }

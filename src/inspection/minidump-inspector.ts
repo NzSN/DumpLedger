@@ -1,3 +1,4 @@
+import { parseRsdsCodeViewRecord, type PdbIdentity } from "../symbols/identity.js";
 import type { RandomAccessSource } from "./random-access-source.js";
 
 const HEADER_SIZE = 32n;
@@ -10,6 +11,11 @@ const MAX_MEMORY_RANGES = 65_536;
 const MAX_MODULES = 4096;
 const MAX_STRING_BYTES = 65_536;
 const MAX_SINGLE_READ = 65_536;
+/** Cap on how much of a module's CvRecord is read for linkage facts. */
+const MAX_MODULE_CV_RECORD_BYTES = 65_536;
+/** `MINIDUMP_MODULE.CvRecord`: `DataSize` at +76, `Rva` at +80. */
+const MODULE_CV_DATA_SIZE_OFFSET = 76;
+const MODULE_CV_RVA_OFFSET = 80;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
 const STREAM_TYPE = {
@@ -30,6 +36,10 @@ export interface ModuleFact {
   readonly baseOfImage: bigint;
   readonly sizeOfImage: number;
   readonly timestamp: number;
+  /** PDB basename from the module's CodeView record; absent when unusable. */
+  readonly debugFile?: string;
+  /** SymSrv debug id from the module's CodeView record; absent when unusable. */
+  readonly debugId?: string;
 }
 
 export interface MinidumpFacts {
@@ -90,7 +100,11 @@ class InspectionFailure extends Error {
   }
 }
 
-/** Performs structural inspection only; it never reads captured memory payload bytes. */
+/**
+ * Performs structural inspection plus bounded, best-effort CodeView
+ * identity reads per module; captured memory payloads are otherwise never
+ * read.
+ */
 export class MinidumpInspector implements DumpInspector {
   inspect(source: RandomAccessSource): InspectionResult {
     try {
@@ -349,14 +363,44 @@ function inspectModules(source: RandomAccessSource, entry: DirectoryEntry): read
     const descriptor = readExact(source, offset, 108, "module descriptor");
     const nameRva = descriptor.readUInt32LE(20);
     const name = nameRva === 0 ? undefined : readMinidumpString(source, BigInt(nameRva));
+    const identity = readCodeViewIdentity(source, descriptor);
     modules.push({
       ...(name === undefined ? {} : { name }),
       baseOfImage: descriptor.readBigUInt64LE(0),
       sizeOfImage: descriptor.readUInt32LE(8),
       timestamp: descriptor.readUInt32LE(16),
+      ...(identity === undefined
+        ? {}
+        : { debugFile: identity.debugFile, debugId: identity.debugId }),
     });
   }
   return modules;
+}
+
+/**
+ * Best-effort linkage facts for one module: read up to 64 KiB of the declared
+ * CvRecord and parse its RSDS identity.
+ *
+ * Identity extraction is deliberately isolated from the structural strictness
+ * of the rest of the inspector -- a dump must not be rejected over symbol
+ * metadata -- so every failure (absent, out-of-range or truncated record,
+ * non-RSDS bytes) drops `debugFile`/`debugId` for this module only.
+ */
+function readCodeViewIdentity(source: RandomAccessSource, descriptor: Buffer): PdbIdentity | undefined {
+  const dataSize = descriptor.readUInt32LE(MODULE_CV_DATA_SIZE_OFFSET);
+  const rva = descriptor.readUInt32LE(MODULE_CV_RVA_OFFSET);
+  if (rva === 0 || dataSize === 0) return undefined;
+  try {
+    const record = readExact(
+      source,
+      BigInt(rva),
+      Math.min(dataSize, MAX_MODULE_CV_RECORD_BYTES),
+      "module CodeView record",
+    );
+    return parseRsdsCodeViewRecord(record);
+  } catch {
+    return undefined;
+  }
 }
 
 function readMinidumpString(source: RandomAccessSource, rva: bigint): string {

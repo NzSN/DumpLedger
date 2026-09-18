@@ -15,6 +15,11 @@ export interface SyntheticModule {
   readonly baseOfImage?: bigint;
   readonly sizeOfImage?: number;
   readonly timestamp?: number;
+  /**
+   * Raw CodeView record bytes to place at the module's CvRecord location (see
+   * `rsdsRecord`); absent leaves the descriptor's CvRecord zeroed.
+   */
+  readonly cvRecordBytes?: Uint8Array;
 }
 
 export interface SyntheticMinidumpOptions {
@@ -135,6 +140,11 @@ export function syntheticMinidump(options: SyntheticMinidumpOptions = {}): Buffe
           minidumpString.writeUInt32LE(encodedName.length, 0);
           encodedName.copy(minidumpString, 4);
           stream.writeUInt32LE(allocate(minidumpString), descriptor + 20);
+          if (module.cvRecordBytes !== undefined) {
+            const cvRecord = Buffer.from(module.cvRecordBytes);
+            stream.writeUInt32LE(cvRecord.length, descriptor + 76); // CvRecord.DataSize
+            stream.writeUInt32LE(allocate(cvRecord), descriptor + 80); // CvRecord.Rva
+          }
         });
         return stream;
       },
@@ -177,4 +187,19 @@ export function syntheticMinidump(options: SyntheticMinidumpOptions = {}): Buffe
 
 export function directoryOffset(index: number): number {
   return HEADER_SIZE + index * DIRECTORY_ENTRY_SIZE;
+}
+
+/**
+ * Canonical raw CodeView RSDS record: signature, 16-byte GUID (already in
+ * on-disk little-endian component order), little-endian age, and a
+ * NUL-terminated UTF-8 PDB path.
+ */
+export function rsdsRecord(pdbPath: string, guid: Uint8Array, age: number): Uint8Array {
+  const pathBytes = Buffer.from(pdbPath, "utf8");
+  const record = Buffer.alloc(4 + 16 + 4 + pathBytes.length + 1);
+  record.write("RSDS", 0, "latin1");
+  record.set(guid, 4);
+  record.writeUInt32LE(age >>> 0, 20);
+  pathBytes.copy(record, 24);
+  return record;
 }

@@ -239,4 +239,65 @@ describe("Dump detail operator page", () => {
     expect(await screen.findByText("Available")).toBeTruthy();
     expect(fake.queryCalls.filter((call) => call.path === DETAIL_PATH)).toHaveLength(2);
   });
+
+  it("renders symbol coverage per module for present, missing, and unidentified identities", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () =>
+      dumpDetailFixture({
+        symbolCoverage: [
+          {
+            name: "electron.exe",
+            debugFile: "electron.pdb",
+            debugId: "AAAA1B2C3D4E5F60718293A4B5C6D7E81",
+            status: "present",
+            artifactId: "symbol_K3M4N5P6Q7R8S9T0V1W2X3Y4Z5",
+          },
+          {
+            name: null,
+            debugFile: "renderer.pdb",
+            debugId: "3A9C1B2C3D4E5F60718293A4B5C6D7E81",
+            status: "missing",
+            artifactId: null,
+          },
+          {
+            name: "gdi32.dll",
+            debugFile: null,
+            debugId: null,
+            status: "unidentified",
+            artifactId: null,
+          },
+        ],
+      }),
+    );
+    renderDumpDetail(fake);
+
+    expect(await screen.findByText("Symbol coverage")).toBeTruthy();
+    // Present: checkmark plus the debug file and the shortened artifact reference.
+    expect(screen.getByText("electron.exe")).toBeTruthy();
+    expect(screen.getByText("electron.pdb")).toBeTruthy();
+    expect(screen.getByText("AAAA…1")).toBeTruthy();
+    expect(screen.getByText("symb…5").getAttribute("title")).toBe(
+      "Artifact symbol_K3M4N5P6Q7R8S9T0V1W2X3Y4Z5",
+    );
+    // Missing: cross plus the full debug file and debug identity, and a name
+    // fallback when the inspector recorded no module name.
+    expect(screen.getByText("✗")).toBeTruthy();
+    expect(screen.getByText("unnamed module")).toBeTruthy();
+    expect(screen.getByText("renderer.pdb")).toBeTruthy();
+    expect(screen.getByText("3A9C1B2C3D4E5F60718293A4B5C6D7E81")).toBeTruthy();
+    // Unidentified: muted "no debug identity" text instead of a failure mark.
+    const unidentified = screen.getByText("no debug identity");
+    expect(unidentified.closest(".symbol-coverage-status")?.className).toContain("is-unidentified");
+    expect(screen.getByText("gdi32.dll")).toBeTruthy();
+    expect(screen.getAllByText("✓")).toHaveLength(1);
+  });
+
+  it("shows the symbol coverage empty state when no module identities were recorded", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () => dumpDetailFixture());
+    renderDumpDetail(fake);
+
+    expect(await screen.findByText("No module identities recorded")).toBeTruthy();
+    expect(screen.getByText(/Coverage appears after intake inspection records the dump's module list/)).toBeTruthy();
+  });
 });
