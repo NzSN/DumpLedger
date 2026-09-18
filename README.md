@@ -161,6 +161,13 @@ PDBs ahead of it, or swap `.sympath` when OS frames matter. Leaving the
 variable unset keeps the listener disabled; see
 [`docs/security-model.md`](docs/security-model.md) for the threat model.
 
+Deployment example: the canonical live deployment sets
+`DUMP_LEDGER_SYMBOLS_PORT='4082'` with host `0.0.0.0`, so local CDB sessions
+use `http://127.0.0.1:4082/symbols` and analyst machines on the LAN use
+`http://192.168.150.219:4082/symbols`; the matching symbol path is
+`.sympath SRV*C:\symcache*http://<host>:4082/symbols`. The port and host are
+just that deployment's choice — any free port works.
+
 The default listener is `127.0.0.1:4080` and the default data directory is
 `./data`. The grant key must remain stable across restarts and must be backed up
 separately from the SQLite file. Do not place either secret in version control.
