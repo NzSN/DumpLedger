@@ -4,7 +4,9 @@
  *
  *   - "Create export bundle" runs POST /api/v1/operations/exports and is
  *     disabled while any bundle is running (the server allows one transfer
- *     at a time; a race still surfaces as the inline 409 notice),
+ *     at a time; a race still surfaces as the inline 409 notice); an opt-in
+ *     checkbox sends `{ "includeSymbols": true }` so the bundle also carries
+ *     the symbol artifacts the bundled dumps reference (default off),
  *   - the bounded list polls only while a bundle is running,
  *   - a sealed bundle downloads through a plain anchor so multi-GB tar
  *     bytes stream straight to disk without transiting fetch/blob memory,
@@ -12,7 +14,7 @@
  *     the ledger or the vault.
  */
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   decodeCreateExportResponse,
   decodeDeleteExportResponse,
@@ -142,6 +144,8 @@ export function ExportPanel({ pollIntervalMs = EXPORT_LIST_POLL_INTERVAL_MS }: E
   const client = useHttpClient();
   const { phase, busy, refresh } = useExportList(pollIntervalMs);
   const createFlow = useMutationFlow<CreateExportResponse>();
+  const includeSymbolsId = useId();
+  const [includeSymbols, setIncludeSymbols] = useState(false);
 
   const bundles = phase.status === "ready" ? phase.data.exports : [];
   const anyRunning = bundles.some((bundle) => bundle.status === "running");
@@ -151,6 +155,7 @@ export function ExportPanel({ pollIntervalMs = EXPORT_LIST_POLL_INTERVAL_MS }: E
       return client.mutate({
         path: EXPORTS_PATH,
         method: "POST",
+        ...(includeSymbols ? { body: { includeSymbols: true } } : {}),
         decoder: decodeCreateExportResponse,
         signal,
       });
@@ -177,6 +182,16 @@ export function ExportPanel({ pollIntervalMs = EXPORT_LIST_POLL_INTERVAL_MS }: E
       }
     >
       <div className="form-stack">
+        <label className="check-field" htmlFor={includeSymbolsId}>
+          <input
+            id={includeSymbolsId}
+            type="checkbox"
+            checked={includeSymbols}
+            onChange={(event) => setIncludeSymbols(event.target.checked)}
+            disabled={createFlow.pending || anyRunning}
+          />
+          <span>Include referenced symbol artifacts (PDBs the bundled dumps name in their module lists).</span>
+        </label>
         <div>
           <button
             type="button"

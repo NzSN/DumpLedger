@@ -108,6 +108,30 @@ describe("Export / Import section", () => {
     expect(listCalls).toBe(2);
   });
 
+  it("sends includeSymbols only when the operator opts in", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(EXPORTS_PATH, () => ({ exports: [] }));
+    fake.setMutationResponder("POST", EXPORTS_PATH, () => ({ exportId: "export-new" }));
+    const user = userEvent.setup();
+    renderTransfer(fake);
+    await screen.findByText("No export bundles");
+
+    // Default: the flag is off and the request carries no body.
+    await user.click(screen.getByRole("button", { name: "Create export bundle" }));
+    await screen.findByText(/export-new is being written/);
+    const defaultCall = fake.mutationCalls.find((call) => call.method === "POST" && call.path === EXPORTS_PATH);
+    expect(defaultCall !== undefined && !("body" in defaultCall)).toBe(true);
+
+    // Opt-in: the checkbox sends { includeSymbols: true }.
+    await user.click(screen.getByRole("checkbox", { name: /Include referenced symbol artifacts/ }));
+    await user.click(screen.getByRole("button", { name: "Create export bundle" }));
+    const flaggedCalls = fake.mutationCalls.filter(
+      (call) => call.method === "POST" && call.path === EXPORTS_PATH && "body" in call,
+    );
+    expect(flaggedCalls.length).toBe(1);
+    expect(flaggedCalls[0]?.body).toEqual({ includeSymbols: true });
+  });
+
   it("deletes an export bundle only after confirmation", async () => {
     const fake = new OperatorFakeHttpClient();
     let deleted = false;
