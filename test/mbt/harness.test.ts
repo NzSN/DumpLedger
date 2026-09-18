@@ -59,6 +59,26 @@ test("generated port drives the production engine and observes only its projecti
   assert.equal(probe.harnessDisposeCalls, 1, "harness cleanup is idempotent");
 });
 
+test("dedup re-ingest keeps the slot mapped to the surviving artifact", () => {
+  // Live-Apalache flake 2026-09-18: I1 I2 I1 P1 failed `not_found` because a
+  // dedup re-ingest re-pointed slot 1 at the staging object the engine had
+  // already discarded on seal; the slot must track the SEALED artifact id.
+  const probe = createMbtProbe();
+  const harness = new MbtHarness(probe);
+  const port = new DumpLedgerMbtPort(harness, probe);
+  const binding = bindDumpLedger(port, { paramVars: "parameters" });
+
+  let state = binding.computer("Init", initialPayload(), {});
+  state = binding.computer("IngestSymbol", stepPayload(0n, 1n, "NoCoverage"), state);
+  state = binding.computer("IngestSymbol", stepPayload(0n, 2n, "NoCoverage"), state);
+  state = binding.computer("IngestSymbol", stepPayload(0n, 1n, "NoCoverage"), state);
+  state = binding.computer("PurgeSymbol", stepPayload(0n, 1n, "NoCoverage"), state);
+  assert.deepEqual(state.symbolRegistered, { tag: "set", val: [{ tag: "int", val: 2n }] });
+  state = binding.computer("PurgeSymbol", stepPayload(0n, 2n, "NoCoverage"), state);
+  assert.deepEqual(state.symbolRegistered, { tag: "set", val: [] });
+  harness.dispose();
+});
+
 test("every concrete generated-port method returns exactly void", () => {
   const probe = createMbtProbe();
   const harness = new MbtHarness(probe);

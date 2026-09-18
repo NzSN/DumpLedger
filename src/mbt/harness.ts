@@ -401,8 +401,11 @@ export class MbtHarness {
       byteSize: BigInt(bytes.byteLength),
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
-    requireResult(sealed.artifactId, "artifactId");
-    session.symbols.set(symbolSlot, { artifactId });
+    // On a dedup re-ingest the engine discards the new staging object and
+    // returns the EXISTING artifact's id; storing the staging id here would
+    // point the slot at a purged-on-seal object and the next PurgeSymbol
+    // would fail not_found (live-Apalache flake 2026-09-18).
+    session.symbols.set(symbolSlot, { artifactId: requireResult(sealed.artifactId, "artifactId") });
   }
 
   purgeSymbol(dumpValue: bigint): void {
