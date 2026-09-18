@@ -523,6 +523,18 @@ function symbolIndex(symbols: readonly SymbolArtifactProjection[]): ReadonlyMap<
   return new Map(symbols.map(symbol => [symbolKey(symbol.debugFile, symbol.debugId), symbol]));
 }
 
+/** OS-owned module install roots (docs/symbols-design.md, D4's OS-module
+ * display hint): their symbols resolve from the Microsoft public server,
+ * never from this store. The minidump module name is the absolute path from
+ * the crashed machine; matching is case-insensitive and separator-agnostic. */
+const SYSTEM_MODULE_ROOTS = ["\\windows\\system32\\", "\\windows\\syswow64\\", "\\windows\\winsxs\\"] as const;
+
+function isSystemModulePath(name: string | null): boolean {
+  if (name === null) return false;
+  const normalized = name.toLowerCase().replaceAll("/", "\\");
+  return SYSTEM_MODULE_ROOTS.some(root => normalized.includes(root));
+}
+
 /** Per-module symbol coverage for one dump; stored order is preserved. */
 function symbolCoverageFor(
   facts: Readonly<Record<string, unknown>> | null,
@@ -533,13 +545,14 @@ function symbolCoverageFor(
   const index = symbolIndex(symbols);
   return modules.map((entry): ModuleSymbolCoverage => {
     const identity = moduleSymbolFacts(entry);
+    const system = isSystemModulePath(identity.name);
     if (identity.debugFile === null || identity.debugId === null) {
-      return { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "unidentified", artifactId: null };
+      return { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "unidentified", artifactId: null, system };
     }
     const artifact = index.get(symbolKey(identity.debugFile, identity.debugId));
     return artifact === undefined
-      ? { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "missing", artifactId: null }
-      : { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "present", artifactId: artifact.artifactId };
+      ? { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "missing", artifactId: null, system }
+      : { name: identity.name, debugFile: identity.debugFile, debugId: identity.debugId, status: "present", artifactId: artifact.artifactId, system };
   });
 }
 
@@ -556,6 +569,9 @@ function missingSymbolsFor(projection: DumpLedgerProjection, caseId: CaseId): re
     for (const entry of modules) {
       const identity = moduleSymbolFacts(entry);
       if (identity.debugFile === null || identity.debugId === null) continue;
+      // OS-module identities never need ingesting here; they resolve from
+      // the Microsoft public server downstream of the symsrv path.
+      if (isSystemModulePath(identity.name)) continue;
       const key = symbolKey(identity.debugFile, identity.debugId);
       if (index.has(key)) continue;
       const group = grouped.get(key);

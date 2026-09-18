@@ -62,6 +62,10 @@ export interface ModuleSymbolCoverage {
   readonly debugId: string | null;
   readonly status: ModuleSymbolStatus;
   readonly artifactId: string | null;
+  /** True for OS-owned modules (``\\Windows\\System32`` and siblings):
+   * their symbols come from the Microsoft public server, never from this
+   * store, so clients collapse them out of the operator's way. */
+  readonly system: boolean;
 }
 
 const moduleSymbolStatusDecoder = oneOf(MODULE_SYMBOL_STATUSES, "module symbol status");
@@ -74,6 +78,7 @@ export const decodeModuleSymbolCoverage: Decoder<ModuleSymbolCoverage> = (value,
       debugId: field(nullableField(text({ max: MAX_DEBUG_ID_LENGTH, label: "debugId" }))),
       status: field(moduleSymbolStatusDecoder),
       artifactId: field(nullableField(identifierField("artifactId"))),
+      system: field(booleanField()),
     },
     "module symbol coverage",
   )(value, path);
@@ -83,6 +88,7 @@ export const decodeModuleSymbolCoverage: Decoder<ModuleSymbolCoverage> = (value,
     debugId: decoded.debugId,
     status: decoded.status,
     artifactId: decoded.artifactId,
+    system: decoded.system,
   };
 };
 
@@ -93,6 +99,7 @@ export function encodeModuleSymbolCoverage(coverage: ModuleSymbolCoverage): Reco
     debugId: coverage.debugId,
     status: coverage.status,
     artifactId: coverage.artifactId,
+    system: coverage.system,
   };
 }
 

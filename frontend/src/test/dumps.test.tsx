@@ -251,6 +251,7 @@ describe("Dump detail operator page", () => {
             debugId: "AAAA1B2C3D4E5F60718293A4B5C6D7E81",
             status: "present",
             artifactId: "symbol_K3M4N5P6Q7R8S9T0V1W2X3Y4Z5",
+            system: false,
           },
           {
             name: null,
@@ -258,6 +259,7 @@ describe("Dump detail operator page", () => {
             debugId: "3A9C1B2C3D4E5F60718293A4B5C6D7E81",
             status: "missing",
             artifactId: null,
+            system: false,
           },
           {
             name: "gdi32.dll",
@@ -265,6 +267,7 @@ describe("Dump detail operator page", () => {
             debugId: null,
             status: "unidentified",
             artifactId: null,
+            system: false,
           },
         ],
       }),
@@ -290,6 +293,56 @@ describe("Dump detail operator page", () => {
     expect(unidentified.closest(".symbol-coverage-status")?.className).toContain("is-unidentified");
     expect(screen.getByText("gdi32.dll")).toBeTruthy();
     expect(screen.getAllByText("✓")).toHaveLength(1);
+  });
+
+  it("collapses Windows system modules behind a toggle", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () =>
+      dumpDetailFixture({
+        symbolCoverage: [
+          {
+            name: "electron.exe",
+            debugFile: "electron.pdb",
+            debugId: "AAAA1B2C3D4E5F60718293A4B5C6D7E81",
+            status: "present",
+            artifactId: "symbol_K3M4N5P6Q7R8S9T0V1W2X3Y4Z5",
+            system: false,
+          },
+          {
+            name: "C:\\Windows\\System32\\ntdll.dll",
+            debugFile: "ntdll.pdb",
+            debugId: "0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A1",
+            status: "missing",
+            artifactId: null,
+            system: true,
+          },
+          {
+            name: "C:\\Windows\\SysWOW64\\kernel32.dll",
+            debugFile: null,
+            debugId: null,
+            status: "unidentified",
+            artifactId: null,
+            system: true,
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderDumpDetail(fake);
+
+    expect(await screen.findByText("Symbol coverage")).toBeTruthy();
+    // Application modules render; system modules are hidden by default.
+    expect(screen.getByText("electron.exe")).toBeTruthy();
+    expect(screen.queryByText("C:\\Windows\\System32\\ntdll.dll")).toBeNull();
+    expect(screen.queryAllByText("missing")).toHaveLength(0);
+
+    const toggle = screen.getByRole("button", { name: "Show 2 Windows system modules (symbols served by Microsoft)" });
+    await user.click(toggle);
+    expect(screen.getByText("C:\\Windows\\System32\\ntdll.dll")).toBeTruthy();
+    expect(screen.getByText("C:\\Windows\\SysWOW64\\kernel32.dll")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Hide 2 Windows system modules" }));
+    expect(screen.queryByText("C:\\Windows\\System32\\ntdll.dll")).toBeNull();
   });
 
   it("shows the symbol coverage empty state when no module identities were recorded", async () => {

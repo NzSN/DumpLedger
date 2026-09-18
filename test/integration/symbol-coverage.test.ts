@@ -103,6 +103,9 @@ test("dump detail maps stored module facts onto symbol coverage", () => {
       // Non-object entries are skipped; invalid fields read as absent.
       "not-an-object",
       { name: 7, debugFile: false, debugId: null },
+      // OS-owned modules are flagged system so clients can collapse them.
+      { name: "C:\\Windows\\System32\\ntdll.dll", baseOfImage: "7FFE0000", sizeOfImage: 4096, timestamp: 4, debugFile: "ntdll.pdb", debugId: "0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A1" },
+      { name: "c:/windows/syswow64/kernel32.dll", baseOfImage: "7FFD0000", sizeOfImage: 4096, timestamp: 5 },
     ],
     memoryRangeCount: 1,
   };
@@ -116,12 +119,14 @@ test("dump detail maps stored module facts onto symbol coverage", () => {
   const detail = application.dumpDetail(dumpId);
   assert.ok(detail !== undefined);
   const expected = [
-    { name: "electron.exe", debugFile: ELECTRON.debugFile, debugId: ELECTRON.debugId, status: "present" as const, artifactId },
-    { name: "gpu.dll", debugFile: GPU.debugFile, debugId: GPU.debugId, status: "missing" as const, artifactId: null },
-    { name: "nodebug.dll", debugFile: null, debugId: null, status: "unidentified" as const, artifactId: null },
-    { name: "electron-upper.exe", debugFile: "ELECTRON.PDB", debugId: ELECTRON.debugId, status: "missing" as const, artifactId: null },
+    { name: "electron.exe", debugFile: ELECTRON.debugFile, debugId: ELECTRON.debugId, status: "present" as const, artifactId, system: false },
+    { name: "gpu.dll", debugFile: GPU.debugFile, debugId: GPU.debugId, status: "missing" as const, artifactId: null, system: false },
+    { name: "nodebug.dll", debugFile: null, debugId: null, status: "unidentified" as const, artifactId: null, system: false },
+    { name: "electron-upper.exe", debugFile: "ELECTRON.PDB", debugId: ELECTRON.debugId, status: "missing" as const, artifactId: null, system: false },
     // The non-object entry is skipped; the object with invalid fields is unidentified.
-    { name: null, debugFile: null, debugId: null, status: "unidentified" as const, artifactId: null },
+    { name: null, debugFile: null, debugId: null, status: "unidentified" as const, artifactId: null, system: false },
+    { name: "C:\\Windows\\System32\\ntdll.dll", debugFile: "ntdll.pdb", debugId: "0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A1", status: "missing" as const, artifactId: null, system: true },
+    { name: "c:/windows/syswow64/kernel32.dll", debugFile: null, debugId: null, status: "unidentified" as const, artifactId: null, system: true },
   ];
   assert.deepEqual(detail.symbolCoverage, expected);
   assert.deepEqual(
@@ -151,6 +156,10 @@ test("case detail aggregates missing identities across the case's available dump
       { name: "gpu.dll", ...GPU },
       { name: "gpu-copy.dll", ...GPU },
       { name: "audio.dll", ...AUDIO },
+      // OS-module identities never need ingesting here; excluded from the
+      // aggregation even though no store artifact matches them.
+      { name: "C:\\Windows\\System32\\ntdll.dll", debugFile: "ntdll.pdb", debugId: "0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A1" },
+      { name: "C:\\Windows\\WinSxS\\amd64_msvcrt\\msvcrt.dll", debugFile: "msvcrt.pdb", debugId: "1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1" },
     ],
   });
   assert.ok(engine.execute({ type: "AcceptDump", dumpId: dumpA }).ok);

@@ -587,9 +587,9 @@ describe("dumps and retention (7.7)", () => {
     purgedAt: null,
     inspectionError: null,
     symbolCoverage: [
-      { name: "electron.exe", debugFile: DEBUG_FILE, debugId: DEBUG_ID, status: "present", artifactId: ID_SYMBOL_COVERAGE },
-      { name: "gpu.dll", debugFile: "gpu.pdb", debugId: "4B5D6789012345678ABCDEF13A9C1F2E", status: "missing", artifactId: null },
-      { name: "third_party.dll", debugFile: null, debugId: null, status: "unidentified", artifactId: null },
+      { name: "electron.exe", debugFile: DEBUG_FILE, debugId: DEBUG_ID, status: "present", artifactId: ID_SYMBOL_COVERAGE, system: false },
+      { name: "gpu.dll", debugFile: "gpu.pdb", debugId: "4B5D6789012345678ABCDEF13A9C1F2E", status: "missing", artifactId: null, system: false },
+      { name: "C:\\Windows\\System32\\ntdll.dll", debugFile: null, debugId: null, status: "unidentified", artifactId: null, system: true },
     ] satisfies readonly ModuleSymbolCoverage[],
     activity: [{ occurredAt: NOW, action: "DumpReceived" }],
   };
@@ -602,21 +602,21 @@ describe("dumps and retention (7.7)", () => {
   it("bounds module symbol coverage on dump detail", () => {
     const encoded = encodeDumpDetailResponse(dumpDetail);
     assert.deepEqual(encoded.symbolCoverage, [
-      { name: "electron.exe", debugFile: DEBUG_FILE, debugId: DEBUG_ID, status: "present", artifactId: ID_SYMBOL_COVERAGE },
-      { name: "gpu.dll", debugFile: "gpu.pdb", debugId: "4B5D6789012345678ABCDEF13A9C1F2E", status: "missing", artifactId: null },
-      { name: "third_party.dll", debugFile: null, debugId: null, status: "unidentified", artifactId: null },
+      { name: "electron.exe", debugFile: DEBUG_FILE, debugId: DEBUG_ID, status: "present", artifactId: ID_SYMBOL_COVERAGE, system: false },
+      { name: "gpu.dll", debugFile: "gpu.pdb", debugId: "4B5D6789012345678ABCDEF13A9C1F2E", status: "missing", artifactId: null, system: false },
+      { name: "C:\\Windows\\System32\\ntdll.dll", debugFile: null, debugId: null, status: "unidentified", artifactId: null, system: true },
     ]);
     expectDecodeError(
       () => decodeDumpDetailResponse({
         ...encoded,
-        symbolCoverage: [{ name: null, debugFile: null, debugId: null, status: "unknown", artifactId: null }],
+        symbolCoverage: [{ name: null, debugFile: null, debugId: null, status: "unknown", artifactId: null, system: false }],
       }, "$"),
       /module symbol status is invalid/,
     );
     expectDecodeError(
       () => decodeDumpDetailResponse({
         ...encoded,
-        symbolCoverage: [{ name: "x".repeat(1025), debugFile: null, debugId: null, status: "unidentified", artifactId: null }],
+        symbolCoverage: [{ name: "x".repeat(1025), debugFile: null, debugId: null, status: "unidentified", artifactId: null, system: false }],
       }, "$"),
       /name exceeds 1024 characters/,
     );

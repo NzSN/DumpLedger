@@ -12,7 +12,7 @@
  * exactly that build.
  */
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { MissingSymbolIdentity, ModuleSymbolCoverage } from "@dump-ledger/http-contracts";
 import { EmptyState } from "../../shared/components/empty-state";
@@ -22,6 +22,7 @@ import {
   moduleSymbolStatusGlyph,
   moduleSymbolStatusLabel,
   referencingDumpCountLabel,
+  systemModulesToggleLabel,
   truncateDebugId,
 } from "./symbols-copy";
 import "./symbols.css";
@@ -68,6 +69,7 @@ export function SymbolCoverageList({
 }: {
   readonly entries: readonly ModuleSymbolCoverage[];
 }): ReactNode {
+  const [showSystem, setShowSystem] = useState(false);
   if (entries.length === 0) {
     return (
       <EmptyState title="No module identities recorded" icon="◇">
@@ -75,11 +77,34 @@ export function SymbolCoverageList({
       </EmptyState>
     );
   }
+  // OS-owned modules (System32 and siblings) never need symbols from this
+  // store — the Microsoft public server resolves them — so they collapse out
+  // of the operator's way by default.
+  const applicationEntries = entries.filter((entry) => !entry.system);
+  const systemEntries = entries.filter((entry) => entry.system);
+  const visible = showSystem ? systemEntries : [];
   return (
     <div className="record-list">
-      {entries.map((entry, index) => (
+      {applicationEntries.map((entry, index) => (
         <SymbolCoverageRow
           key={`${entry.status}-${entry.debugFile ?? "unnamed"}-${index}`}
+          entry={entry}
+        />
+      ))}
+      {systemEntries.length > 0 && (
+        <div>
+          <button
+            type="button"
+            className="button button-secondary button-small"
+            onClick={() => setShowSystem((current) => !current)}
+          >
+            {systemModulesToggleLabel(systemEntries.length, showSystem)}
+          </button>
+        </div>
+      )}
+      {visible.map((entry, index) => (
+        <SymbolCoverageRow
+          key={`system-${entry.status}-${entry.debugFile ?? "unnamed"}-${index}`}
           entry={entry}
         />
       ))}

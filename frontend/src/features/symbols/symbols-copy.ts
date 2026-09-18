@@ -112,3 +112,11 @@ export function moduleSymbolStatusGlyph(status: ModuleSymbolStatus): string {
 export function referencingDumpCountLabel(count: number): string {
   return count === 1 ? "Referenced by 1 dump" : `Referenced by ${count} dumps`;
 }
+
+/** Toggle collapsing OS-owned modules; their symbols resolve from Microsoft. */
+export function systemModulesToggleLabel(count: number, expanded: boolean): string {
+  const noun = count === 1 ? "module" : "modules";
+  return expanded
+    ? `Hide ${count} Windows system ${noun}`
+    : `Show ${count} Windows system ${noun} (symbols served by Microsoft)`;
+}
