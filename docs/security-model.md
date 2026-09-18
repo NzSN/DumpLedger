@@ -196,6 +196,14 @@ surface (implemented 2026-09-18; design decision D1 is unchanged).
   surface, and no directory listing — the ingest, list, and purge paths do
   not exist on this socket and answer the same uniform 404 as an unknown
   identity.
+- **Sole HTTP store in the path.** `symsrv.dll` accepts at most one HTTP
+  store and it must be last (verified 2026-09-18: a second HTTP store makes
+  it reject the path with "Any HTTP store must be the last store in the
+  list"), so this listener cannot chain in front of the Microsoft public
+  server. Where OS frames need Microsoft PDBs, they are fetched client-side
+  from a local directory store or a separate `.sympath`; Microsoft traffic
+  never transits this socket. That fits the unauthenticated read-only
+  design: the listener serves only DumpLedger artifacts.
 - **Plain HTTP by design.** symsrv.dll only trusts server certificates
   chaining to a trusted root on the analysis machine; a self-signed proxy
   cert made the shared HTTPS route friction for CDB. The dedicated listener

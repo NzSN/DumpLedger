@@ -149,11 +149,17 @@ export DUMP_LEDGER_INGEST_TOKEN_HASH='<64 lowercase hex characters>'
 Debuggers can fetch symbols without touching the operator surface: set
 `DUMP_LEDGER_SYMBOLS_PORT` (optionally `DUMP_LEDGER_SYMBOLS_HOST`, default
 `0.0.0.0`) to start a dedicated, unauthenticated, read-only symsrv listener
-over plain HTTP — `.sympath SRV*C:\\symcache*http://<host>:<port>/symbols*https://msdl.microsoft.com/download/symbols`
-then resolves ingested artifacts from DumpLedger and falls through to
-Microsoft for everything else. Leaving the variable unset keeps the listener
-disabled; see [`docs/security-model.md`](docs/security-model.md) for the
-threat model.
+over plain HTTP. The working symbol path is the single-store form
+`.sympath SRV*C:\symcache*http://<host>:<port>/symbols`: `symsrv.dll`
+accepts at most one HTTP store, and it must be the last store in the path —
+a second HTTP store (for example Microsoft's public server) makes it reject
+the whole path with "Any HTTP store must be the last store in the list".
+Local directory stores may precede the single HTTP store, but Microsoft OS
+symbols and DumpLedger artifacts cannot chain in one path: use DumpLedger
+alone for application symbols, pre-populate a local directory store of OS
+PDBs ahead of it, or swap `.sympath` when OS frames matter. Leaving the
+variable unset keeps the listener disabled; see
+[`docs/security-model.md`](docs/security-model.md) for the threat model.
 
 The default listener is `127.0.0.1:4080` and the default data directory is
 `./data`. The grant key must remain stable across restarts and must be backed up

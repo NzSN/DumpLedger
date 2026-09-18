@@ -15,7 +15,8 @@ Three capabilities over one new entity pair:
   the server derives symbol identity from the bytes and dedups by it.
 - **Serve** — a read-only, symsrv-protocol-compatible HTTP surface so
   CDB/WinDbg resolve application symbols straight from DumpLedger
-  (`.sympath SRV*C:\symcache*https://<host>/symbols*https://msdl.microsoft.com/download/symbols`).
+  (`.sympath SRV*C:\symcache*http://<host>:<port>/symbols` — the one HTTP
+  store symsrv.dll allows, and it must be last in the path).
 - **Link** — minidump intake extracts module debug identities, so every dump
   shows symbol coverage and every missing build is visible on the case page.
 
@@ -75,8 +76,12 @@ GET /symbols/<code_file>/<code_id>/<code_file>          (deferred with exe)
 Casing is preserved exactly as ingested (Microsoft's servers are
 case-insensitive; some third-party tooling is not — we stay literal). No
 directory listing. A miss is a clean 404, which symsrv reads as "try the
-next downstream server" — that makes the Microsoft public server a natural
-fallback in one symbol path.
+next store": local directory stores that precede the single HTTP store in
+the same path are still consulted, so a pre-populated local directory
+remains a working fallthrough. Two HTTP stores cannot chain — symsrv.dll
+accepts at most one, as the last store in the path, and otherwise rejects
+the entire path (verified against CDB, 2026-09-18), so the Microsoft public
+server cannot be the next store behind this one.
 
 ## Storage
 
@@ -230,6 +235,11 @@ boot (migration runs), verify.
   on-disk identity naming; v1 parses identity from bytes.
 - **Blocking availability on symbol presence**: symbols are analysis aids;
   coupling them to the dump lifecycle would reject perfectly good dumps.
+- **Server-side downstream proxy**: on a store miss, DumpLedger fetches the
+  artifact from the Microsoft public server, caches it, and serves it. That
+  would restore a single-URL world — the client path needs only the single,
+  last HTTP store — but it is deferred, not designed: it would pull outbound
+  fetching, cache lifecycle, and Microsoft availability into the service.
 
 ## Implementation milestones
 
