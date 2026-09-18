@@ -64,12 +64,13 @@ const BLOCK_SIZE = 4096;
 
 /** Minimal MSF 7.0 container (one tiny stream plus the PDB Info stream). */
 function syntheticPdb(pdbPath: string, guid: Buffer, age: number): Buffer {
-  const rsds = Buffer.alloc(4 + 16 + 4 + Buffer.byteLength(pdbPath, "utf8") + 1);
-  rsds.write("RSDS", 0, "latin1");
-  guid.copy(rsds, 4);
-  rsds.writeUInt32LE(age >>> 0, 20);
-  rsds.write(pdbPath, 24, "utf8");
-  const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), rsds];
+  // The real PDB Info stream header: version, signature, age, GUID (no path).
+  const header = Buffer.alloc(4 + 4 + 4 + 16);
+  header.writeUInt32LE(20140508, 0); // PdbImpV VC140
+  header.writeUInt32LE(0x5dc5d9be, 4);
+  header.writeUInt32LE(age >>> 0, 8);
+  guid.copy(header, 12);
+  const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), header];
 
   const streamStartBlocks: number[] = [];
   let nextBlock = 1;
@@ -278,7 +279,7 @@ describe("transfer bundles with symbols", () => {
     try {
       const a = makeInstance(join(root, "a"));
       const symbolBytes = syntheticPdb("C:\\build\\out\\electron.pdb", pdbGuid(), 7);
-      const identity = parsePdbIdentity(symbolBytes);
+      const identity = parsePdbIdentity(symbolBytes, "electron.pdb");
       assert.ok(identity !== undefined);
       const populated = populate(a, symbolBytes, identity);
 
@@ -340,7 +341,7 @@ describe("transfer bundles with symbols", () => {
     try {
       const a = makeInstance(join(root, "a"));
       const symbolBytes = syntheticPdb("C:\\build\\out\\electron.pdb", pdbGuid(), 7);
-      const identity = parsePdbIdentity(symbolBytes)!;
+      const identity = parsePdbIdentity(symbolBytes, "electron.pdb")!;
       const populated = populate(a, symbolBytes, identity);
 
       const { bundlePath } = await exportTo(a, join(root, "a-exports"));
@@ -371,7 +372,7 @@ describe("transfer bundles with symbols", () => {
     try {
       const a = makeInstance(join(root, "a"));
       const symbolBytes = syntheticPdb("C:\\build\\out\\electron.pdb", pdbGuid(), 7);
-      const identity = parsePdbIdentity(symbolBytes)!;
+      const identity = parsePdbIdentity(symbolBytes, "electron.pdb")!;
       populate(a, symbolBytes, identity);
       const { bundlePath } = await exportTo(a, join(root, "a-exports"), true);
 
@@ -399,7 +400,7 @@ describe("transfer bundles with symbols", () => {
     try {
       const a = makeInstance(join(root, "a"));
       const symbolBytes = syntheticPdb("C:\\build\\out\\electron.pdb", pdbGuid(), 7);
-      const identity = parsePdbIdentity(symbolBytes)!;
+      const identity = parsePdbIdentity(symbolBytes, "electron.pdb")!;
       const populated = populate(a, symbolBytes, identity);
       const { bundlePath } = await exportTo(a, join(root, "a-exports"), true);
 

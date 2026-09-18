@@ -13,8 +13,8 @@
  *
  * One deliberate exception to "unreadable input returns `undefined`": a file
  * that carries the MSF superblock magic claims to be a PDB, so a missing or
- * unreadable RSDS record is reported as `symbol_identity_unreadable`, not as
- * "not a PDB".
+ * unreadable PDB Info stream header is reported as
+ * `symbol_identity_unreadable`, not as "not a PDB".
  */
 import { DumpLedgerError, type ErrorCode } from "../domain/errors.js";
 
@@ -56,8 +56,28 @@ const MSF_MAX_BLOCK_SIZE = 1 << 30;
 const RSDS_SIGNATURE = "RSDS";
 /** "RSDS" signature + 16-byte GUID + 32-bit age. */
 const RSDS_HEADER_BYTES = 4 + 16 + 4;
-/** Upper bound on the region of the PDB Info stream scanned for the path. */
-const RSDS_PATH_SCAN_MAX = 64 * 1024;
+/**
+ * The PDB Info stream (stream 1) opens with this 28-byte header: version,
+ * signature (build timestamp), age, and the 16-byte GUID that — with the
+ * age — forms the artifact's debug identity. There is NO fourcc inside a
+ * real PDB; the "RSDS" signature lives only in the consumer-side CodeView
+ * record (the executable's debug directory, and the minidump's copy of it).
+ * Verified against the 3.5 GiB lld-written electron.exe.pdb (2026-09-18).
+ */
+const PDB_INFO_HEADER_BYTES = 4 + 4 + 4 + 16;
+/** Known PDB Info stream versions (PdbImpV), including LLD's VC70x. */
+const PDB_INFO_VERSIONS = new Set<number>([
+  19941610, // VC2
+  19950623, // VC4
+  19950814, // VC41
+  19960307, // VC50
+  19970604, // VC98
+  19990604, // VC70
+  20000404, // VC70x (lld)
+  20030902, // VC80
+  20091201, // VC110
+  20140508, // VC140
+]);
 /** Sanity bound on the MSF stream directory reassembled during identity
  * parsing: real multi-GB PDBs carry directories of a few MB; anything larger
  * is corrupt, not big. */
@@ -347,53 +367,39 @@ function readStreamPrefix(
 }
 
 /**
- * Reads the RSDS record at the start of the PDB Info stream (stream 1) out of
- * the already-reassembled stream directory.
+ * Reads the PDB Info stream header out of the reassembled stream directory
+ * and the staged bytes: version + signature + age + GUID. The `debugFile`
+ * name is caller-supplied (the PDB Info stream stores no name — the
+ * consumer-side RSDS record is what carries the linked path); `debugId` is
+ * the GUID+age in SymSrv byte order.
  */
-function readRsdsIdentity(directory: Uint8Array, reader: ByteReader, blockSize: number): PdbIdentity {
+function readPdbInfoIdentity(
+  directory: Uint8Array,
+  reader: ByteReader,
+  blockSize: number,
+  debugFile: string,
+): PdbIdentity {
   const view = toDataView(directory);
   const streamCount = readUint32(view, 0);
   if (streamCount === undefined) throw symbolIdentityUnreadable("stream directory is truncated");
   if (streamCount < 2) throw symbolIdentityUnreadable("PDB Info stream (stream 1) is missing");
   if (4 + streamCount * 4 > directory.length) throw symbolIdentityUnreadable("stream size table is truncated");
-  const stream0Size = readUint32(view, 4);
   const stream1Size = readUint32(view, 8);
-  if (stream0Size === undefined || stream1Size === undefined) {
-    throw symbolIdentityUnreadable("stream size table is truncated");
-  }
-  if (stream1Size < RSDS_HEADER_BYTES + 1) {
-    throw symbolIdentityUnreadable(`PDB Info stream is ${stream1Size} bytes; too small for an RSDS record`);
+  if (stream1Size === undefined) throw symbolIdentityUnreadable("stream size table is truncated");
+  if (stream1Size < PDB_INFO_HEADER_BYTES) {
+    throw symbolIdentityUnreadable(`PDB Info stream is ${stream1Size} bytes; too small for its header`);
   }
 
-  const scanBytes = Math.min(stream1Size, RSDS_PATH_SCAN_MAX);
-  const prefix = readStreamPrefix(directory, view, reader, blockSize, 1, streamCount, scanBytes);
+  const prefix = readStreamPrefix(directory, view, reader, blockSize, 1, streamCount, PDB_INFO_HEADER_BYTES);
   if (prefix === undefined) throw symbolIdentityUnreadable("PDB Info stream is out of range");
-  if (!matchesAscii(prefix, 0, RSDS_SIGNATURE)) {
-    throw symbolIdentityUnreadable('PDB Info stream does not start with an "RSDS" record');
+  const header = toDataView(prefix);
+  const version = readUint32(header, 0);
+  if (version === undefined || !PDB_INFO_VERSIONS.has(version)) {
+    throw symbolIdentityUnreadable(`PDB Info stream version ${version} is not a known PdbImpV`);
   }
-  const guid = prefix.subarray(4, 20);
-  const age = readUint32(toDataView(prefix), 20);
-  if (age === undefined) throw symbolIdentityUnreadable("RSDS record header is truncated");
-  const pathEnd = prefix.indexOf(0, RSDS_HEADER_BYTES);
-  if (pathEnd === -1) {
-    throw symbolIdentityUnreadable(`RSDS record path is not NUL-terminated within ${RSDS_PATH_SCAN_MAX} bytes`);
-  }
-  let path: string;
-  try {
-    path = UTF8_DECODER.decode(prefix.subarray(RSDS_HEADER_BYTES, pathEnd));
-  } catch {
-    throw symbolIdentityUnreadable("RSDS record path is not valid UTF-8");
-  }
-  const controlIndex = controlCharacterIndex(path);
-  if (controlIndex !== -1) {
-    throw symbolIdentityUnreadable(`RSDS record path contains a control character at index ${controlIndex}`);
-  }
-  const debugFile = fileNameFromPath(path);
-  if (debugFile === undefined) throw symbolIdentityUnreadable("RSDS record path has no file name");
-  const nameProblem = debugFileNameProblem(debugFile);
-  if (nameProblem !== undefined) {
-    throw symbolIdentityUnreadable(`RSDS record file name is unusable (${nameProblem})`);
-  }
+  const guid = prefix.subarray(12, 28);
+  const age = readUint32(header, 8);
+  if (age === undefined) throw symbolIdentityUnreadable("PDB Info stream header is truncated");
   return { debugFile, debugId: formatSymsrvDebugId(guid, age) };
 }
 
@@ -438,11 +444,11 @@ export function parseRsdsCodeViewRecord(bytes: Uint8Array): PdbIdentity | undefi
  *
  * Returns `undefined` when the bytes are not an MSF container. Throws
  * `DumpLedgerError("symbol_identity_unreadable")` when the MSF magic matches
- * (so the file claims to be a PDB) but no readable RSDS record can be
- * recovered from the PDB Info stream.
+ * (so the file claims to be a PDB) but its PDB Info stream header cannot be
+ * read.
  */
-export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
-  return parsePdbIdentityFrom(byteReaderOf(bytes));
+export function parsePdbIdentity(bytes: Uint8Array, debugFile: string): PdbIdentity | undefined {
+  return parsePdbIdentityFrom(byteReaderOf(bytes), debugFile);
 }
 
 /**
@@ -451,7 +457,15 @@ export function parsePdbIdentity(bytes: Uint8Array): PdbIdentity | undefined {
  * PDB Info stream — never the full file — so multi-GB artifacts parse in
  * bounded memory regardless of where their directory blocks live.
  */
-export function parsePdbIdentityFrom(reader: ByteReader): PdbIdentity | undefined {
+export function parsePdbIdentityFrom(reader: ByteReader, debugFile: string): PdbIdentity | undefined {
+  // The caller-supplied name becomes a store-path segment, exactly like the
+  // PE `codeFile` below, so it must satisfy the storage-side grammar: a name
+  // `decodeStorePath` rejects can never be served, and accepting it here
+  // would seal an artifact the read path can never hand back.
+  const debugFileProblem = storeSegmentProblem(debugFile);
+  if (debugFileProblem !== undefined) {
+    throw invalidInput(`debugFile is not a usable store path segment (${debugFileProblem})`);
+  }
   const probe = reader.readAt(0, Math.min(reader.size, 56));
   if (probe === undefined || !looksLikeMsf(probe)) return undefined;
   if (probe.length < 56) throw symbolIdentityUnreadable("superblock is truncated");
@@ -496,7 +510,7 @@ export function parsePdbIdentityFrom(reader: ByteReader): PdbIdentity | undefine
   }
   if (copied !== numDirectoryBytes) throw symbolIdentityUnreadable("stream directory is truncated");
 
-  return readRsdsIdentity(directory, reader, blockSize);
+  return readPdbInfoIdentity(directory, reader, blockSize, debugFile);
 }
 
 /**

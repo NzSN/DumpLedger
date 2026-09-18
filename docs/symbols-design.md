@@ -48,10 +48,18 @@ _Avoid_: symbol server, pdb folder
 Symbol resolution lives and dies by identity. The server — never the
 uploader — derives it from artifact bytes:
 
-- **Debug identity (PDB)**: parse the RSDS CodeView record → 16-byte GUID +
-  4-byte age. The store path segment formats the GUID per SymSrv byte-order
-  convention (first three components little-endian) followed by the age in
-  hex — verified against a live debugger in tests (see test plan).
+- **Debug identity (PDB)**: derive it from the PDB Info stream (stream 1)
+  header — version, signature, 4-byte age, and the 16-byte GUID; the version
+  is validated against the known PdbImpV set (including lld's VC70x). A PDB
+  stores no file name and no "RSDS" fourcc, so `debugFile` comes from the
+  ingest filename, the same rule as EXE `codeFile` — the consumer-side RSDS
+  record (the executable's debug directory; the minidump's CvRecord copy) is
+  what carries the linked path. The stream is found by walking the MSF
+  per-stream block lists, since real MSF does not lay streams out
+  consecutively. The store path segment formats the GUID per SymSrv
+  byte-order convention (first three components little-endian) followed by
+  the age in hex — verified against a live debugger in tests (see test
+  plan).
 - **Code identity (EXE, deferred)**: PE header `TimeDateStamp` +
   `SizeOfImage`, hex-concatenated.
 - Uploader-supplied fields (product, version, arch, notes) are annotations

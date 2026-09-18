@@ -42,6 +42,18 @@ function symbolKindForFilename(filename: string): SymbolKind | undefined {
   return undefined;
 }
 
+/** PDB identity parse; a filename the store-path grammar cannot carry degrades
+ * to the same unreadable-identity outcome as a non-PDB file (mirrors the PE
+ * helper below). */
+function parsePdbIdentityOrUndefined(reader: ByteReader, debugFile: string): ReturnType<typeof parsePdbIdentityFrom> {
+  try {
+    return parsePdbIdentityFrom(reader, debugFile);
+  } catch (error) {
+    if (error instanceof DumpLedgerError) return undefined;
+    throw error;
+  }
+}
+
 /** PE identity parse; a filename the store-path grammar cannot carry (e.g. a
  * leading dot) degrades to the same unreadable-identity outcome as a non-PE
  * file, mirroring the PDB path where a broken artifact is a 422, not a 400.
@@ -171,7 +183,7 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
     let identity: SymbolIngestIdentity;
     try {
       if (kind === "pdb") {
-        const parsed = parsePdbIdentityFrom(staged);
+        const parsed = parsePdbIdentityOrUndefined(staged, originalName);
         if (parsed === undefined) {
           options.application.failSymbolIngest(artifactId);
           return sendError(reply, "symbol_identity_unreadable");

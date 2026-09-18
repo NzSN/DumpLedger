@@ -59,15 +59,16 @@ function syntheticExe(timestamp = PE_TIMESTAMP, sizeOfImage = PE_SIZE_OF_IMAGE):
   return bytes;
 }
 
+/** The real PDB Info stream header: version, signature, age, GUID (no path). */
 function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1, gapBlocksBeforeDirectory = 0): Buffer {
   const blockSize = 4096;
-  const rsds = Buffer.alloc(4 + 16 + 4 + pdbPath.length + 1);
-  rsds.write("RSDS", 0, "latin1");
-  GUID_BYTES.copy(rsds, 4);
-  rsds.writeUInt32LE(age, 20);
-  rsds.write(pdbPath, 24, "latin1");
+  const header = Buffer.alloc(4 + 4 + 4 + 16);
+  header.writeUInt32LE(20140508, 0); // PdbImpV VC140
+  header.writeUInt32LE(0x5dc5d9be, 4);
+  header.writeUInt32LE(age, 8);
+  GUID_BYTES.copy(header, 12);
 
-  const streams = [Buffer.alloc(0), rsds];
+  const streams = [Buffer.alloc(0), header];
   const streamStartBlocks: number[] = [];
   let nextBlock = 1;
   for (const stream of streams) {

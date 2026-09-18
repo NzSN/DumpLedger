@@ -83,16 +83,16 @@ const SYMBOL_MSF_MAGIC = "Microsoft C/C++ MSF 7.00\r\n\u001aDS";
  * is always derived from bytes, never from the wire).
  */
 function symbolPdbBytes(slotValue: bigint): Buffer {
-  const pdbPath = `C:\\mbt\\model-symbol-${slotValue}.pdb`;
-  const rsds = Buffer.alloc(4 + 16 + 4 + Buffer.byteLength(pdbPath, "utf8") + 1);
-  rsds.write("RSDS", 0, "latin1");
-  rsds.writeUInt32LE(0x01234567 + Number(slotValue), 4);
-  rsds.writeUInt16LE(0x89ab, 8);
-  rsds.writeUInt16LE(0xcdef, 10);
-  Buffer.from([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]).copy(rsds, 12);
-  rsds.writeUInt32LE(Number(slotValue), 20);
-  rsds.write(pdbPath, 24, "utf8");
-  const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), rsds];
+  // The real PDB Info stream header: version, signature, age, GUID (no path).
+  const header = Buffer.alloc(4 + 4 + 4 + 16);
+  header.writeUInt32LE(20140508, 0); // PdbImpV VC140
+  header.writeUInt32LE(0x5dc5d9be, 4);
+  header.writeUInt32LE(Number(slotValue), 8);
+  header.writeUInt32LE(0x01234567 + Number(slotValue), 12);
+  header.writeUInt16LE(0x89ab, 16);
+  header.writeUInt16LE(0xcdef, 18);
+  Buffer.from([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]).copy(header, 20);
+  const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), header];
 
   const streamStartBlocks: number[] = [];
   let nextBlock = 1;
@@ -144,7 +144,7 @@ const SYMBOL_IDENTITIES = new Map<bigint, PdbIdentity>();
 function symbolIdentity(slotValue: bigint): PdbIdentity {
   const cached = SYMBOL_IDENTITIES.get(slotValue);
   if (cached !== undefined) return cached;
-  const identity = parsePdbIdentity(symbolPdbBytes(slotValue));
+  const identity = parsePdbIdentity(symbolPdbBytes(slotValue), `model-symbol-${slotValue}.pdb`);
   if (identity === undefined) throw new Error(`synthetic MBT symbol ${slotValue} carries no readable identity`);
   SYMBOL_IDENTITIES.set(slotValue, identity);
   return identity;

@@ -573,7 +573,10 @@ function importSymbolEntry(
       const staged = vault.openSymbolStagingReader(artifactId);
       if (staged === undefined) throw corrupt(`symbol ${symbol.artifactId} staging is not readable after sync`);
       try {
-        identity = parsePdbIdentityFrom(byteReaderOfVault(staged));
+        // The manifest's debugFile names the artifact (a PDB's own bytes
+        // carry no file name); the parser validates it and returns the
+        // byte-derived debugId, which must equal the manifest's.
+        identity = parsePdbIdentityFrom(byteReaderOfVault(staged), symbol.debugFile);
       } catch {
         identity = undefined;
       } finally {

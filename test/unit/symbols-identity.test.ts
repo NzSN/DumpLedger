@@ -40,17 +40,23 @@ function guidBytes(data1: number, data2: number, data3: number, data4: readonly 
   return bytes;
 }
 
-function buildRsdsRecord(guid: Buffer, age: number, pathBytes: Buffer, terminate: boolean): Buffer {
-  const record = Buffer.alloc(4 + 16 + 4 + pathBytes.length + (terminate ? 1 : 0));
-  record.write("RSDS", 0, "latin1");
-  guid.copy(record, 4);
-  record.writeUInt32LE(age >>> 0, 20);
-  pathBytes.copy(record, 24);
-  return record;
-}
+/** PDB Info stream versions (PdbImpV); VC70x is what lld writes. */
+const PDB_INFO_VERSION_VC140 = 20140508;
+const PDB_INFO_VERSION_VC70X = 20000404;
 
-function rsdsRecord(pdbPath: string, guid: Buffer, age: number, terminate = true): Buffer {
-  return buildRsdsRecord(guid, age, Buffer.from(pdbPath, "utf8"), terminate);
+/**
+ * The 28-byte header that opens the PDB Info stream (stream 1) of a real
+ * PDB: version, signature, age, GUID. There is no fourcc and no file path
+ * inside a PDB -- the "RSDS" record carrying the path lives in the consumer
+ * (the executable's debug directory; the minidump's CvRecord copy).
+ */
+function pdbInfoHeader(guid: Buffer, age: number, options: { readonly version?: number; readonly signature?: number } = {}): Buffer {
+  const header = Buffer.alloc(4 + 4 + 4 + 16);
+  header.writeUInt32LE(options.version ?? PDB_INFO_VERSION_VC140, 0);
+  header.writeUInt32LE(options.signature ?? 0x5dc5d9be, 4);
+  header.writeUInt32LE(age >>> 0, 8);
+  guid.copy(header, 12);
+  return header;
 }
 
 interface MsfLayout {
@@ -126,12 +132,12 @@ function buildMsf(
 }
 
 interface SyntheticPdbOptions {
-  readonly pdbPath?: string;
   readonly guid?: Buffer;
   readonly age?: number;
+  readonly version?: number;
+  readonly signature?: number;
   readonly blockSize?: number;
   readonly infoStream?: Buffer;
-  readonly terminatePath?: boolean;
   readonly gapBlocksBeforeDirectory?: number;
 }
 
@@ -139,7 +145,7 @@ function syntheticPdb(options: SyntheticPdbOptions = {}): MsfLayout {
   const guid = options.guid ?? canonicalGuidBytes();
   const infoStream =
     options.infoStream ??
-    rsdsRecord(options.pdbPath ?? "C:\\build\\out\\electron.pdb", guid, options.age ?? 1, options.terminatePath ?? true);
+    pdbInfoHeader(guid, options.age ?? 1, { ...(options.version === undefined ? {} : { version: options.version }), ...(options.signature === undefined ? {} : { signature: options.signature }) });
   const streams = [Buffer.from([0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]), infoStream];
   return buildMsf(streams, {
     blockSize: options.blockSize ?? DEFAULT_BLOCK_SIZE,
@@ -196,8 +202,8 @@ function assertInvalidInput(action: () => unknown): void {
 
 // --- PDB identity -----------------------------------------------------------
 
-test("parsePdbIdentity derives debugFile and SymSrv debugId from RSDS bytes", () => {
-  const identity = parsePdbIdentity(syntheticPdb().bytes);
+test("parsePdbIdentity derives debugId from the PDB Info stream header", () => {
+  const identity = parsePdbIdentity(syntheticPdb().bytes, "electron.pdb");
 
   assert.deepEqual(identity, {
     debugFile: "electron.pdb",
@@ -213,99 +219,73 @@ test("parsePdbIdentity reverses the first three GUID components", () => {
     [0x67, 0x45, 0x23, 0x01, 0xab, 0x89, 0xef, 0xcd],
   );
 
-  const identity = parsePdbIdentity(syntheticPdb({ guid }).bytes);
+  const identity = parsePdbIdentity(syntheticPdb({ guid }).bytes, "electron.pdb");
   assert.equal(identity?.debugId, "0123456789ABCDEF0123456789ABCDEF1");
 });
 
 test("parsePdbIdentity pads GUID components that lose leading zeros", () => {
   const guid = guidBytes(0x00000001, 0x0012, 0x0034, [0, 0, 0, 0, 0, 0, 0, 0xab]);
-  const identity = parsePdbIdentity(syntheticPdb({ guid, age: 0 }).bytes);
+  const identity = parsePdbIdentity(syntheticPdb({ guid, age: 0 }).bytes, "electron.pdb");
 
   assert.equal(identity?.debugId, "000000010012003400000000000000AB0");
 });
 
 for (const [age, suffix] of [[0, "0"], [1, "1"], [0x1234, "1234"], [0xabcdef01, "ABCDEF01"]] as const) {
   test(`parsePdbIdentity formats age ${age} as ${suffix}`, () => {
-    const identity = parsePdbIdentity(syntheticPdb({ age }).bytes);
+    const identity = parsePdbIdentity(syntheticPdb({ age }).bytes, "electron.pdb");
 
     assert.equal(identity?.debugId, `0123456789ABCDEF0123456789ABCDEF${suffix}`);
   });
 }
 
-test("parsePdbIdentity takes the file name from a Windows path", () => {
-  const identity = parsePdbIdentity(syntheticPdb({ pdbPath: "C:\\agents\\work\\5\\b\\electron.pdb" }).bytes);
-
-  assert.equal(identity?.debugFile, "electron.pdb");
+test("parsePdbIdentity takes the debug file name from the caller", () => {
+  // The PDB Info stream carries version/signature/age/GUID and NO path; the
+  // name comes from the ingest filename (mirroring EXE codeFile), because
+  // the consumer-side RSDS record is what carries the linked path.
+  const identity = parsePdbIdentity(syntheticPdb().bytes, "electron.exe.pdb");
+  assert.equal(identity?.debugFile, "electron.exe.pdb");
+  assert.equal(identity?.debugId, "0123456789ABCDEF0123456789ABCDEF1");
 });
 
-test("parsePdbIdentity takes the file name from a POSIX path", () => {
-  const identity = parsePdbIdentity(syntheticPdb({ pdbPath: "d:/src/out/electron.pdb" }).bytes);
-
-  assert.equal(identity?.debugFile, "electron.pdb");
-});
-
-test("parsePdbIdentity accepts a bare file name", () => {
-  const identity = parsePdbIdentity(syntheticPdb({ pdbPath: "electron.pdb" }).bytes);
-
-  assert.equal(identity?.debugFile, "electron.pdb");
-});
-
-test("parsePdbIdentity contains traversal to the file-name segment", () => {
-  const identity = parsePdbIdentity(syntheticPdb({ pdbPath: "..\\..\\evil.pdb" }).bytes);
-
-  assert.equal(identity?.debugFile, "evil.pdb");
-});
-
-test("parsePdbIdentity rejects a traversal-only path", () => {
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ pdbPath: "C:\\out\\.." }).bytes));
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ pdbPath: "..\\..\\" }).bytes));
-});
-
-test("parsePdbIdentity rejects control characters in the recorded path", () => {
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ pdbPath: "C:\\out\\bad\u0001name.pdb" }).bytes));
-});
-
-test("parsePdbIdentity bounds the file name length", () => {
-  const maxName = `${"a".repeat(251)}.pdb`; // exactly 255 characters
-  const maxIdentity = parsePdbIdentity(syntheticPdb({ pdbPath: `C:\\out\\${maxName}` }).bytes);
-  assert.equal(maxIdentity?.debugFile, maxName);
-
-  const tooLongName = `${"a".repeat(252)}.pdb`; // 256 characters
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ pdbPath: `C:\\out\\${tooLongName}` }).bytes));
+test("parsePdbIdentity rejects an unusable debug file name", () => {
+  const unusable = ["", ".", "..", ".hidden.pdb", "trail.", "a..b.pdb", "dir/file.pdb", "dir\\file.pdb", "bad\u0001.pdb", "a".repeat(256)];
+  for (const debugFile of unusable) {
+    assertInvalidInput(() => parsePdbIdentity(syntheticPdb().bytes, debugFile));
+  }
 });
 
 test("parsePdbIdentity returns undefined for bytes that are not an MSF container", () => {
-  assert.equal(parsePdbIdentity(Buffer.alloc(0)), undefined);
-  assert.equal(parsePdbIdentity(Buffer.from(MSF_MAGIC)), undefined); // magic only, 29 bytes
-  assert.equal(parsePdbIdentity(Buffer.alloc(64)), undefined);
-  assert.equal(parsePdbIdentity(Buffer.from("MZ not a pdb at all")), undefined);
+  assert.equal(parsePdbIdentity(Buffer.alloc(0), "electron.pdb"), undefined);
+  assert.equal(parsePdbIdentity(Buffer.from(MSF_MAGIC), "electron.pdb"), undefined); // magic only, 29 bytes
+  assert.equal(parsePdbIdentity(Buffer.alloc(64), "electron.pdb"), undefined);
+  assert.equal(parsePdbIdentity(Buffer.from("MZ not a pdb at all"), "electron.pdb"), undefined);
 
   const flipped = Buffer.from(syntheticPdb().bytes);
   flipped[27] = 0x45; // "DS" -> "ES" inside the magic
-  assert.equal(parsePdbIdentity(flipped), undefined);
+  assert.equal(parsePdbIdentity(flipped, "electron.pdb"), undefined);
 });
 
 test("parsePdbIdentity rejects a PDB whose superblock is truncated", () => {
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb().bytes.subarray(0, 40)));
+  assertUnreadable(() => parsePdbIdentity(syntheticPdb().bytes.subarray(0, 40), "electron.pdb"));
 });
 
 test("parsePdbIdentity rejects an unsupported block size", () => {
   for (const blockSize of [0, 24, 256, 3000]) {
     const bytes = Buffer.from(syntheticPdb().bytes);
     bytes.writeUInt32LE(blockSize, 32);
-    assertUnreadable(() => parsePdbIdentity(bytes));
+    assertUnreadable(() => parsePdbIdentity(bytes, "electron.pdb"));
   }
 
   const huge = Buffer.from(syntheticPdb().bytes);
   huge.writeUInt32LE(1 << 30, 32); // valid power of two, larger than the artifact
-  assertUnreadable(() => parsePdbIdentity(huge));
+  assertUnreadable(() => parsePdbIdentity(huge, "electron.pdb"));
 });
 
 test("parsePdbIdentity rejects a block map address outside the artifact", () => {
   const bytes = Buffer.from(syntheticPdb().bytes);
   bytes.writeUInt32LE(0xffffffff, 52);
 
-  assertUnreadable(() => parsePdbIdentity(bytes));
+  assertUnreadable(() => parsePdbIdentity(bytes, "electron.pdb"));
 });
 
 test("parsePdbIdentity rejects a directory block index outside the artifact", () => {
@@ -313,55 +293,43 @@ test("parsePdbIdentity rejects a directory block index outside the artifact", ()
   const bytes = Buffer.from(layout.bytes);
   bytes.writeUInt32LE(0xffffffff, layout.blockMapStartBlock * layout.blockSize);
 
-  assertUnreadable(() => parsePdbIdentity(bytes));
+  assertUnreadable(() => parsePdbIdentity(bytes, "electron.pdb"));
 });
 
 test("parsePdbIdentity rejects a container without a PDB Info stream", () => {
   const layout = buildMsf([Buffer.from([1, 2, 3, 4])]);
 
-  assertUnreadable(() => parsePdbIdentity(layout.bytes));
+  assertUnreadable(() => parsePdbIdentity(layout.bytes, "electron.pdb"));
 });
 
-test("parsePdbIdentity rejects a PDB Info stream that is not an RSDS record", () => {
-  const infoStream = Buffer.alloc(48, 0x41);
+test("parsePdbIdentity rejects an unknown PDB Info stream version", () => {
+  const infoStream = pdbInfoHeader(canonicalGuidBytes(), 1, { version: 0x01010101 });
 
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ infoStream }).bytes));
+  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ infoStream }).bytes, "electron.pdb"));
 });
 
-test("parsePdbIdentity rejects a PDB Info stream that is too small", () => {
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ infoStream: Buffer.from("RSDS") }).bytes));
-});
-
-test("parsePdbIdentity rejects an RSDS path without a NUL terminator", () => {
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ terminatePath: false }).bytes));
-});
-
-test("parsePdbIdentity rejects an RSDS path that is not valid UTF-8", () => {
-  const infoStream = buildRsdsRecord(canonicalGuidBytes(), 1, Buffer.from([0xc3, 0x28, 0x2e, 0x70, 0x64, 0x62]), true);
-
-  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ infoStream }).bytes));
+test("parsePdbIdentity rejects a PDB Info stream smaller than its 28-byte header", () => {
+  assertUnreadable(() => parsePdbIdentity(syntheticPdb({ infoStream: Buffer.alloc(27) }).bytes, "electron.pdb"));
 });
 
 test("parsePdbIdentity handles a zero-length stream 0", () => {
-  const infoStream = rsdsRecord("C:\\build\\out\\electron.pdb", canonicalGuidBytes(), 1);
+  const infoStream = pdbInfoHeader(canonicalGuidBytes(), 1);
   const layout = buildMsf([Buffer.alloc(0), infoStream]);
 
-  assert.deepEqual(parsePdbIdentity(layout.bytes), {
+  assert.deepEqual(parsePdbIdentity(layout.bytes, "electron.pdb"), {
     debugFile: "electron.pdb",
     debugId: "0123456789ABCDEF0123456789ABCDEF1",
   });
 });
 
 test("parsePdbIdentity walks a multi-block stream directory and block map", () => {
-  // A deep path makes the RSDS record (790 bytes) span two 512-byte blocks;
-  // 16384 streams make the 65540-byte directory span 129 blocks, so the
-  // 516-byte block-map prefix spans two blocks as well.
-  const deepPath = `C:\\${"deep\\".repeat(150)}electron.pdb`;
-  const infoStream = rsdsRecord(deepPath, canonicalGuidBytes(), 0x2a);
+  // 16384 streams make the 65540-byte directory span 129 512-byte blocks,
+  // so the 516-byte block-map prefix spans two blocks as well.
+  const infoStream = pdbInfoHeader(canonicalGuidBytes(), 0x2a);
   const streams = [Buffer.alloc(8), infoStream, ...Array.from({ length: 16382 }, () => Buffer.alloc(0))];
   const layout = buildMsf(streams, { blockSize: 512 });
 
-  assert.deepEqual(parsePdbIdentity(layout.bytes), {
+  assert.deepEqual(parsePdbIdentity(layout.bytes, "electron.pdb"), {
     debugFile: "electron.pdb",
     debugId: "0123456789ABCDEF0123456789ABCDEF2A",
   });
@@ -490,7 +458,7 @@ test("encodeStorePath rejects debug ids that are not 2..64 uppercase hex charact
 });
 
 test("a parsed PDB identity encodes into a decodable store path", () => {
-  const identity = parsePdbIdentity(syntheticPdb().bytes);
+  const identity = parsePdbIdentity(syntheticPdb().bytes, "electron.pdb");
   assert.ok(identity !== undefined);
 
   const path = encodeStorePath(identity.debugFile, identity.debugId);
@@ -509,20 +477,35 @@ test("parsePdbIdentityFrom resolves an identity whose stream directory lives bey
   // reader, never from a prefix window. 400 gap blocks at 4 KiB place the
   // directory past the 1 MiB mark the old window used to enforce.
   const sparse = syntheticPdb({
-    pdbPath: "C:\\build\\out\\electron.pdb",
     gapBlocksBeforeDirectory: 400,
     blockSize: 4096,
   });
   assert.ok(sparse.directoryStartBlock * 4096 > 1024 * 1024);
 
-  const identity = parsePdbIdentityFrom(byteReaderOf(sparse.bytes));
+  const identity = parsePdbIdentityFrom(byteReaderOf(sparse.bytes), "electron.pdb");
   assert.equal(identity?.debugFile, "electron.pdb");
   assert.equal(identity?.debugId, "0123456789ABCDEF0123456789ABCDEF1");
 
   // The buffer API parses the same bytes identically.
-  assert.deepEqual(parsePdbIdentity(sparse.bytes), identity);
+  assert.deepEqual(parsePdbIdentity(sparse.bytes, "electron.pdb"), identity);
 
   // ...while a 1 MiB prefix of the same artifact is unparseable, documenting
   // why prefix-window identity extraction cannot work for real PDBs.
-  assertUnreadable(() => parsePdbIdentity(sparse.bytes.subarray(0, 1024 * 1024)));
+  assertUnreadable(() => parsePdbIdentity(sparse.bytes.subarray(0, 1024 * 1024), "electron.pdb"));
+});
+
+test("parsePdbIdentity accepts the lld-written header shape of the real electron.exe.pdb", () => {
+  // Ground-truth layout captured from the 3.5 GiB lld PDB (2026-09-18):
+  // version VC70x, signature == GUID Data1, age 1, and the "LLD PDB." marker
+  // in the GUID's Data4. The debugId prints Data1/Data2/Data3 in on-disk
+  // little-endian order: bytes `fb 7f 87 a7` -> "A7877FFB", `f2 94` -> "94F2",
+  // `3e db` -> "DB3E", then Data4 literal -- the id CDB/symsrv will request.
+  const guid = Buffer.from([0xfb, 0x7f, 0x87, 0xa7, 0xf2, 0x94, 0x3e, 0xdb, 0x4c, 0x4c, 0x44, 0x20, 0x50, 0x44, 0x42, 0x2e]);
+  const infoStream = pdbInfoHeader(guid, 1, { version: PDB_INFO_VERSION_VC70X, signature: 0xfb7f87a7 });
+  const identity = parsePdbIdentity(syntheticPdb({ infoStream }).bytes, "electron.exe.pdb");
+
+  assert.deepEqual(identity, {
+    debugFile: "electron.exe.pdb",
+    debugId: "A7877FFB94F2DB3E4C4C44205044422E1",
+  });
 });
