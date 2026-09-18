@@ -1,10 +1,8 @@
 # Symbols design
 
-Status: milestones 1 and 2 implemented (2026-09-16 and 2026-09-18;
-decisions D1–D4 resolved 2026-09-16). Of milestone 3, the transfer-bundle
-`--include-symbols` flag is implemented (2026-09-18); CI ingest tokens and
-the EXE artifact kind are in flight; Breakpad `.sym` generation remains
-optional and unscheduled.
+Status: milestones 1–3 implemented (2026-09-16 through 2026-09-18;
+decisions D1–D4 resolved 2026-09-16, D2 superseded by milestone 3). Only
+the explicitly optional Breakpad `.sym` generation remains unscheduled.
 Manages minidump symbol artifacts (PDB/EXE) inside DumpLedger so dumps and
 their debugging symbols live in one place: one auth surface, one audit
 trail, one backup story, one deployment.
@@ -74,10 +72,12 @@ fallback in one symbol path.
 
 ## Storage
 
-- SQLite (migration 4): `modules` and `symbol_artifacts` tables.
-  `symbol_artifacts` has a uniqueness constraint on
-  `(debug_file, debug_id, kind)`; ingest is an UPSERT-no-op returning the
-  existing row — re-uploading the same PDB is cheap and idempotent.
+- SQLite: `modules` and `symbol_artifacts` tables (migration 4, rebuilt by
+  migration 5 for the EXE kind). `modules` carries a nullable debug
+  identity pair `UNIQUE(debug_file, debug_id)` and a nullable code identity
+  pair `UNIQUE(code_file, code_id)`; `symbol_artifacts` is unique on
+  `(module_id, kind)`. Ingest is an UPSERT-no-op returning the existing row —
+  re-uploading the same identity is cheap and idempotent.
 - Vault: a `symbols/` subtree keyed by a server-generated `artifactId`,
   with the same staging → promote crash-safety as dump intake. Bytes stay
   out of SQLite, honoring the existing rule.
@@ -231,10 +231,16 @@ boot (migration runs), verify.
    Dumps accepted before this milestone carry facts without debug
    identities and render their modules as "unidentified" until
    re-inspected; there is no retroactive backfill.
-3. **Scale-out**: transfer-bundle `--include-symbols` flag (done
-   2026-09-18, commit 849d47f; default off; importer re-ingests through
-   the engine symbol path). Remaining: CI ingest token, EXE artifact
-   kind, optional Breakpad `.sym` generation.
+3. **Scale-out** (done 2026-09-18): transfer-bundle `--include-symbols`
+   flag (commit 849d47f; default off; importer re-ingests through the
+   engine symbol path; DumpLedgerTransfer.tla + traces regenerated);
+   EXE artifact kind (commit 6311894; supersedes D2; migration 5 adds the
+   code-identity pair and widens the kind set; the symsrv route resolves
+   either identity); CI ingest token (bearer alternative on the ingest
+   route only, `DUMP_LEDGER_INGEST_TOKEN_HASH`, audit-attributed — see
+   security-model.md). Deferred as designed-optional: Breakpad `.sym`
+   generation. Transfer bundles carry PDB payloads only; EXE metadata
+   travels in the ledger copy.
 
 ## Resolved decisions (2026-09-16)
 
@@ -242,8 +248,9 @@ boot (migration runs), verify.
   cannot authenticate; the route is read-only, serves no listing, and exposes
   nothing but immutable symbol bytes. A proxy IP allowlist can be added later
   without moving the route.
-- **D2 PDB-only v1.** EXE artifacts ride the same entity later; CDB's normal
-  minidump workflow needs only PDBs.
+- **D2 PDB-first.** Chosen for v1 because CDB's normal minidump workflow
+  needs only PDBs; **superseded 2026-09-18** when milestone 3 added the EXE
+  artifact kind (`.exe`/`.dll` ingest, code identity from PE bytes).
 - **D3 Per-artifact ceiling: 8 GiB**, enforced mid-stream.
 - **D4 Accept all PDBs, with an OS-module display hint.** Rejecting would
   guess wrong occasionally; the operator knows their builds.
