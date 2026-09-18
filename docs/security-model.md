@@ -180,6 +180,38 @@ operator session. The token is bearer-equivalent and deliberately narrow.
   the process. There is no stateful revocation list; a replaced digest retires
   the old token immediately.
 
+### Dedicated symbols listener
+
+The symsrv read surface (`GET /symbols/<name>/<id>/<file>`) additionally runs
+on its own optional listener so debugger traffic is split from the operator
+surface (implemented 2026-09-18; design decision D1 is unchanged).
+
+- **Disabled by default.** The listener exists only while
+  `DUMP_LEDGER_SYMBOLS_PORT` carries a valid port
+  (`DUMP_LEDGER_SYMBOLS_HOST` selects the bind address, default `0.0.0.0`).
+  Unset or empty starts no second socket at all.
+- **Unauthenticated read-only by design.** symsrv.dll cannot present
+  credentials; the listener serves nothing but immutable symbol bytes and
+  grammar-validated 404 misses. There is no session surface, no admin
+  surface, and no directory listing — the ingest, list, and purge paths do
+  not exist on this socket and answer the same uniform 404 as an unknown
+  identity.
+- **Plain HTTP by design.** symsrv.dll only trusts server certificates
+  chaining to a trusted root on the analysis machine; a self-signed proxy
+  cert made the shared HTTPS route friction for CDB. The dedicated listener
+  is therefore plain HTTP, which is acceptable precisely because it
+  authenticates nothing and serves public-to-the-LAN bytes: the threat model
+  for this socket is disclosure of build identities (accepted by D1) and
+  tampering on the wire, mitigated by symbol identity being content-keyed —
+  a wrong-byte artifact cannot satisfy a GUID+age query for the right one,
+  and debuggers hash-check downloaded PDBs against the debug directory.
+  Keep the port on the analysis LAN; do not expose it untrusted networks,
+  and front it with an IP allowlist where the LAN is not already trusted.
+- **Availability isolation.** Debugger fetch patterns (many serial requests)
+  cannot starve the operator API: the listener is a separate socket with its
+  own connection pool, and it does no rate limiting, logging, or audit per
+  fetch.
+
 ### Full-memory handling
 
 - Display a customer warning before upload that process memory may contain

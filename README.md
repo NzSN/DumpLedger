@@ -146,6 +146,15 @@ npm run --silent generate:ingest-token
 export DUMP_LEDGER_INGEST_TOKEN_HASH='<64 lowercase hex characters>'
 ```
 
+Debuggers can fetch symbols without touching the operator surface: set
+`DUMP_LEDGER_SYMBOLS_PORT` (optionally `DUMP_LEDGER_SYMBOLS_HOST`, default
+`0.0.0.0`) to start a dedicated, unauthenticated, read-only symsrv listener
+over plain HTTP — `.sympath SRV*C:\\symcache*http://<host>:<port>/symbols*https://msdl.microsoft.com/download/symbols`
+then resolves ingested artifacts from DumpLedger and falls through to
+Microsoft for everything else. Leaving the variable unset keeps the listener
+disabled; see [`docs/security-model.md`](docs/security-model.md) for the
+threat model.
+
 The default listener is `127.0.0.1:4080` and the default data directory is
 `./data`. The grant key must remain stable across restarts and must be backed up
 separately from the SQLite file. Do not place either secret in version control.

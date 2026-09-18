@@ -127,6 +127,11 @@ GET /symbols/:name/:id/:file
   the analysis machine. Options: import the proxy's self-signed cert into
   the analyst box's root store, or serve this route plain-HTTP on the LAN
   interface. Both are documented; the route itself is transport-agnostic.
+  **Resolved 2026-09-18 by the dedicated symbols listener**
+  (`DUMP_LEDGER_SYMBOLS_PORT`, default off): the same store on a separate,
+  plain-HTTP, read-only socket whose only route is the store path (see
+  security-model.md, "Dedicated symbols listener"). The shared HTTPS route
+  remains for symmetry.
 
 ## Dump ↔ symbol linkage
 
