@@ -731,15 +731,31 @@ describe("symbols (symbols-design)", () => {
   const ID_SYMBOL = "symbol_01JTEST0000000000000000000";
   const DEBUG_ID = "3A9C8E1F9C9B4E4D8F0E1A2B3C4D5E601";
   const SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const CODE_FILE = "electron.exe";
+  const CODE_ID = "5F3759DF20000";
   const identity = {
     artifactId: ID_SYMBOL,
+    kind: "pdb" as const,
     debugFile: "electron.pdb",
     debugId: DEBUG_ID,
-    kind: "pdb" as const,
+    codeFile: null,
+    codeId: null,
+    byteSize: 8_589_934_592n,
+    sha256: SHA256,
+  } as const;
+  /** The EXE kind (milestone 3, decision D2 lifted): code identity, no debug identity. */
+  const exeIdentity = {
+    artifactId: ID_SYMBOL,
+    kind: "exe" as const,
+    debugFile: null,
+    debugId: null,
+    codeFile: CODE_FILE,
+    codeId: CODE_ID,
     byteSize: 8_589_934_592n,
     sha256: SHA256,
   } as const;
   const bare: SymbolRecord = { ...identity, ingestedAt: NOW };
+  const exeBare: SymbolRecord = { ...exeIdentity, ingestedAt: NOW };
   const annotated: SymbolRecord = { ...bare, product: "Electron", version: "41.10.6", arch: "x64" };
 
   it("round-trips the ingest response for new and deduplicated identities", () => {
@@ -750,7 +766,34 @@ describe("symbols (symbols-design)", () => {
     const json = toJsonText(encodeSymbolIngestResponse(fresh));
     assert.match(json, /"byteSize":"8589934592"/);
     assert.match(json, /"kind":"pdb"/);
+    assert.match(json, /"codeFile":null/);
     assert.match(json, /"deduplicated":false/);
+  });
+  it("round-trips an EXE ingest response and record (code identity, no debug identity)", () => {
+    const fresh: SymbolIngestResponse = { ...exeIdentity, deduplicated: false };
+    assert.deepEqual(roundTripJson(fresh, encodeSymbolIngestResponse, decodeSymbolIngestResponse), fresh);
+    const json = toJsonText(encodeSymbolIngestResponse(fresh));
+    assert.match(json, /"kind":"exe"/);
+    assert.match(json, /"debugFile":null/);
+    assert.match(json, /"codeFile":"electron\.exe"/);
+    assert.match(json, /"codeId":"5F3759DF20000"/);
+    assert.deepEqual(roundTripJson(exeBare, encodeSymbolRecord, decodeSymbolRecord), exeBare);
+  });
+  it("tolerates identity keys absent from the wire (absent normalizes to null)", () => {
+    const legacyPdb = {
+      artifactId: ID_SYMBOL,
+      debugFile: "electron.pdb",
+      debugId: DEBUG_ID,
+      kind: "pdb",
+      byteSize: "1024",
+      sha256: SHA256,
+      ingestedAt: NOW,
+    };
+    const decoded = decodeSymbolRecord(legacyPdb, "$");
+    assert.equal(decoded.codeFile, null);
+    assert.equal(decoded.codeId, null);
+    const legacyExe = { ...legacyPdb, debugFile: null, debugId: null, codeFile: CODE_FILE, codeId: CODE_ID, kind: "exe" };
+    assert.equal(decodeSymbolRecord(legacyExe, "$").debugFile, null);
   });
   it("round-trips symbol records with annotations absent or present", () => {
     const decodedBare = roundTripJson(bare, encodeSymbolRecord, decodeSymbolRecord);
@@ -764,7 +807,7 @@ describe("symbols (symbols-design)", () => {
     assert.deepEqual(roundTripJson(annotated, encodeSymbolRecord, decodeSymbolRecord), annotated);
   });
   it("round-trips the symbol list response", () => {
-    const list: SymbolListResponse = { symbols: [annotated, bare] };
+    const list: SymbolListResponse = { symbols: [annotated, bare, exeBare] };
     assert.deepEqual(roundTripJson(list, encodeSymbolListResponse, decodeSymbolListResponse), list);
     const empty: SymbolListResponse = { symbols: [] };
     assert.deepEqual(roundTripJson(empty, encodeSymbolListResponse, decodeSymbolListResponse), empty);
@@ -777,8 +820,14 @@ describe("symbols (symbols-design)", () => {
     expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, byteSize: 8_589_934_592 }, "$"), /byteSize must be a string/);
     expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, byteSize: "8589934592.0" }, "$"), /canonical decimal string/);
     expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, byteSize: "007" }, "$"), /canonical decimal string/);
-    // v1 ingests PDBs only (design decision D2).
-    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, kind: "exe" }, "$"), /symbol kind is invalid/);
+    // Both kinds decode (decision D2 lifted); an unknown kind does not, and
+    // the identity pair the kind resolves by must be present.
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, kind: "sym" }, "$"), /symbol kind is invalid/);
+    expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, kind: "exe" }, "$"), /an exe symbol must carry a code identity/);
+    expectDecodeError(
+      () => decodeSymbolIngestResponse({ ...encodeSymbolIngestResponse({ ...identity, deduplicated: false }), debugId: null }, "$"),
+      /a pdb symbol must carry a debug identity/,
+    );
     expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, deduplicated: "no" }, "$"), /must be a boolean/);
     expectDecodeError(() => decodeSymbolIngestResponse({ ...wire, extra: 1 }, "$"), /unexpected field/);
     const missing: Record<string, unknown> = {
@@ -806,7 +855,7 @@ describe("symbols (symbols-design)", () => {
     assert.equal(X_SYMBOL_FILENAME_HEADER, "x-symbol-filename-base64url");
     assert.equal(SYMBOLS_PATH, "/api/v1/symbols");
     assert.equal(symbolPathForArtifact(ID_SYMBOL), `/api/v1/symbols/${ID_SYMBOL}`);
-    assert.deepEqual([...SYMBOL_KINDS], ["pdb"]);
+    assert.deepEqual([...SYMBOL_KINDS], ["pdb", "exe"]);
     assert.equal(MAX_SYMBOL_BYTES, 8_589_934_592n);
     assert.equal(MAX_SYMBOL_FILENAME_LENGTH, 1024);
   });

@@ -1,5 +1,5 @@
 import type { AuditEventId, CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
-import type { CaseStatus, CoverageKind, TokenState, ValidationState } from "../domain/lifecycle.js";
+import type { CaseStatus, CoverageKind, SymbolArtifactKind, TokenState, ValidationState } from "../domain/lifecycle.js";
 
 /** Entity counts advertised by an export manifest and reported back at import completion. */
 export interface ImportCounts {
@@ -101,8 +101,12 @@ export type LifecycleCommand =
   | { readonly type: "SetRetention"; readonly dumpId: DumpId; readonly purgeAt: string }
   | { readonly type: "BeginPurge"; readonly dumpId: DumpId }
   | { readonly type: "FinishPurge"; readonly dumpId: DumpId }
-  | { readonly type: "IngestSymbol"; readonly kind: "pdb" }
-  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly debugFile: string; readonly debugId: string; readonly kind: "pdb"; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
+  | { readonly type: "IngestSymbol"; readonly kind: SymbolArtifactKind }
+  /* SealSymbol carries exactly the identity pair its kind resolves by
+   * (docs/symbols-design.md, "Identity model"): a PDB its RSDS debug identity,
+   * an EXE/DLL image its PE code identity. */
+  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
+  | { readonly type: "SealSymbol"; readonly artifactId: SymbolArtifactId; readonly kind: "exe"; readonly codeFile: string; readonly codeId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
   | { readonly type: "FailSymbol"; readonly artifactId: SymbolArtifactId }
   | { readonly type: "PurgeSymbol"; readonly artifactId: SymbolArtifactId }
   | { readonly type: "BeginImport"; readonly manifestDigest: string; readonly counts: ImportCounts }

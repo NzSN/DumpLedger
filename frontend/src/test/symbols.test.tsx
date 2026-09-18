@@ -56,15 +56,29 @@ interface SymbolRecordOverrides {
 function symbolRecord(overrides: SymbolRecordOverrides = {}): SymbolRecord {
   return {
     artifactId: overrides.artifactId ?? "sym-1",
+    kind: "pdb",
     debugFile: overrides.debugFile ?? "electron.pdb",
     debugId: overrides.debugId ?? DEBUG_ID,
-    kind: "pdb",
+    codeFile: null,
+    codeId: null,
     byteSize: overrides.byteSize ?? 224395264n, // 214 MiB
     sha256: SHA256_HEX,
     ...(overrides.product === undefined ? {} : { product: overrides.product }),
     ...(overrides.version === undefined ? {} : { version: overrides.version }),
     ...(overrides.arch === undefined ? {} : { arch: overrides.arch }),
     ingestedAt: overrides.ingestedAt ?? "2026-09-16T03:00:00.000Z",
+  };
+}
+
+/** An EXE-kind record (milestone 3): code identity, no debug identity. */
+function exeSymbolRecord(overrides: SymbolRecordOverrides = {}): SymbolRecord {
+  return {
+    ...symbolRecord(overrides),
+    kind: "exe",
+    debugFile: null,
+    debugId: null,
+    codeFile: "electron.exe",
+    codeId: "5F3759DF20000",
   };
 }
 
@@ -79,9 +93,11 @@ interface IngestOverrides {
 function ingestResponse(overrides: IngestOverrides = {}): SymbolIngestResponse {
   return {
     artifactId: overrides.artifactId ?? "sym-1",
+    kind: "pdb",
     debugFile: overrides.debugFile ?? "electron.pdb",
     debugId: overrides.debugId ?? DEBUG_ID,
-    kind: "pdb",
+    codeFile: null,
+    codeId: null,
     byteSize: overrides.byteSize ?? 224395264n,
     sha256: SHA256_HEX,
     deduplicated: overrides.deduplicated ?? false,
@@ -199,13 +215,23 @@ describe("Symbols page artifact list", () => {
     expect(symbolQueryCount(fake)).toBe(1);
   });
 
+  it("renders an EXE artifact with its code identity and kind", async () => {
+    const fake = new SymbolsFakeHttpClient();
+    fake.setQueryResponder(SYMBOLS_PATH, () => ({ symbols: [exeSymbolRecord()] }));
+    renderSymbols(fake);
+
+    expect(await screen.findByText("electron.exe")).toBeTruthy();
+    expect(screen.getByText("EXE")).toBeTruthy();
+    expect(screen.getByText("5F37…0")).toBeTruthy();
+  });
+
   it("renders the empty state when the store has no artifacts", async () => {
     const fake = new SymbolsFakeHttpClient();
     fake.setQueryResponder(SYMBOLS_PATH, () => ({ symbols: [] }));
     renderSymbols(fake);
 
     expect(await screen.findByText("No symbol artifacts")).toBeTruthy();
-    expect(screen.getByText(/Ingest a PDB below to serve it to debuggers/)).toBeTruthy();
+    expect(screen.getByText(/Ingest a PDB, EXE, or DLL below to serve it to debuggers/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Purge" })).toBeNull();
   });
 });
@@ -218,7 +244,7 @@ describe("Symbols page ingest queue", () => {
     renderSymbols(fake);
 
     await screen.findByText("No symbol artifacts");
-    await user.upload(screen.getByLabelText("Choose PDB files"), [
+    await user.upload(screen.getByLabelText("Choose symbol files"), [
       makePdb("outdated.pdb", 64),
       makePdb("current.pdb", 128),
     ]);
@@ -257,11 +283,11 @@ describe("Symbols page ingest queue", () => {
     renderSymbols(fake);
 
     await screen.findByText("No symbol artifacts");
-    await user.upload(screen.getByLabelText("Choose PDB files"), makePdb("mystery.pdb", 64));
+    await user.upload(screen.getByLabelText("Choose symbol files"), makePdb("mystery.pdb", 64));
     await waitFor(() => expect(fake.ingestCallCount()).toBe(1));
 
     await fake.failWith(
-      new HttpRequestError("The file is not a PDB or carries no readable RSDS record.", {
+      new HttpRequestError("The file carries no readable PDB or PE identity.", {
         code: "symbol_identity_unreadable",
         status: 422,
         retryable: false,
@@ -269,7 +295,7 @@ describe("Symbols page ingest queue", () => {
       }),
     );
 
-    expect(await screen.findByText("Not a PDB or no RSDS record.")).toBeTruthy();
+    expect(await screen.findByText("No readable PDB or PE identity.")).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
     // No automatic retry and nothing else was sent for the rejected file.
     await settle(() => undefined);
@@ -288,7 +314,7 @@ describe("Symbols page ingest queue", () => {
     renderFeaturePage(fake, <SymbolsPage />, { entry: "/symbols" });
 
     await screen.findByText("No symbol artifacts");
-    await user.upload(screen.getByLabelText("Choose PDB files"), makePdb("electron.pdb", 64));
+    await user.upload(screen.getByLabelText("Choose symbol files"), makePdb("electron.pdb", 64));
 
     expect(await screen.findByText(SYMBOL_INGEST_UNAVAILABLE_MESSAGE)).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
@@ -301,7 +327,7 @@ describe("Symbols page ingest queue", () => {
     renderSymbols(fake);
 
     await screen.findByText("No symbol artifacts");
-    await user.upload(screen.getByLabelText("Choose PDB files"), makePdb("huge.pdb", 64));
+    await user.upload(screen.getByLabelText("Choose symbol files"), makePdb("huge.pdb", 64));
     await waitFor(() => expect(fake.ingestCallCount()).toBe(1));
 
     await fake.failWith(

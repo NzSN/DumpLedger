@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import BetterSqlite3 from "better-sqlite3";
 import { DumpLedgerError } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type SymbolArtifactId } from "../domain/ids.js";
-import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type TokenState, type ValidationState } from "../domain/lifecycle.js";
-import type { AuditEventProjection, DumpLedgerProjection, DumpProjection, GrantProjection, SymbolArtifactProjection } from "../engine/projection.js";
+import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type SymbolArtifactKind, type TokenState, type ValidationState } from "../domain/lifecycle.js";
+import { isDebugSymbolArtifact, type AuditEventProjection, type DumpLedgerProjection, type DumpProjection, type GrantProjection, type StoredSymbolArtifact } from "../engine/projection.js";
 import { applyMigrations } from "./migrations.js";
 
 /** Mirrors the contract cap; kept local so the ledger imports no HTTP module. */
@@ -60,9 +60,13 @@ function grantFromRow(row: Row): GrantRecord {
 
 export interface SymbolArtifactInsert {
   readonly artifactId: SymbolArtifactId;
-  readonly debugFile: string;
-  readonly debugId: string;
-  readonly kind: "pdb";
+  readonly kind: SymbolArtifactKind;
+  /** Debug identity (PDB); null exactly when the kind is `exe`. */
+  readonly debugFile: string | null;
+  readonly debugId: string | null;
+  /** Code identity (EXE/DLL); null exactly when the kind is `pdb`. */
+  readonly codeFile: string | null;
+  readonly codeId: string | null;
   readonly byteSize: bigint;
   readonly sha256: string;
   readonly product: string | null;
@@ -70,10 +74,10 @@ export interface SymbolArtifactInsert {
   readonly arch: string | null;
 }
 
-/** module_id is deterministic: the same debug identity always maps to the
- * same module row, which makes ingest idempotent by construction. */
-function moduleIdFor(debugFile: string, debugId: string): string {
-  const digest = createHash("sha256").update(`${debugFile}\0${debugId}`, "utf8").digest("hex").toUpperCase();
+/** module_id is deterministic: the same stored identity pair always maps to
+ * the same module row, which makes ingest idempotent by construction. */
+function moduleIdFor(file: string, id: string): string {
+  const digest = createHash("sha256").update(`${file}\0${id}`, "utf8").digest("hex").toUpperCase();
   const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
   let value = BigInt(`0x${digest.slice(0, 32)}`);
   let body = "";
@@ -84,14 +88,34 @@ function moduleIdFor(debugFile: string, debugId: string): string {
   return `module_${body}`;
 }
 
-function symbolArtifactFromRow(row: Row): SymbolArtifactProjection {
+/** Every symbol read joins the module row; the four identity columns are
+ * nullable and exactly one pair applies to a stored artifact. */
+const SYMBOL_ARTIFACT_COLUMNS = "a.artifact_id, a.kind, a.byte_size, a.sha256, a.created_at, m.debug_file, m.debug_id, m.code_file, m.code_id, m.product, m.version, m.arch";
+const SYMBOL_ARTIFACT_SELECT = `SELECT ${SYMBOL_ARTIFACT_COLUMNS} FROM symbol_artifacts a JOIN modules m ON m.module_id = a.module_id`;
+
+function symbolArtifactFromRow(row: Row): StoredSymbolArtifact {
   return {
     artifactId: databaseValue("artifact_id", parseSymbolArtifactId, row.artifact_id),
-    debugFile: requiredString(row, "debug_file"), debugId: requiredString(row, "debug_id"),
-    kind: "pdb", byteSize: BigInt(requiredString(row, "byte_size")), sha256: requiredString(row, "sha256"),
+    kind: databaseValue("symbol artifact kind", parseSymbolArtifactKind, row.kind),
+    debugFile: nullableString(row, "debug_file"), debugId: nullableString(row, "debug_id"),
+    codeFile: nullableString(row, "code_file"), codeId: nullableString(row, "code_id"),
+    byteSize: BigInt(requiredString(row, "byte_size")), sha256: requiredString(row, "sha256"),
     product: nullableString(row, "product"), version: nullableString(row, "version"), arch: nullableString(row, "arch"),
     createdAt: requiredString(row, "created_at"),
   };
+}
+
+/** The identity pair an artifact resolves by, per kind; ingest and purge agree
+ * on it, and a row that violates it is a database integrity failure. */
+function artifactIdentityPair(artifact: {
+  readonly kind: SymbolArtifactKind;
+  readonly debugFile: string | null; readonly debugId: string | null;
+  readonly codeFile: string | null; readonly codeId: string | null;
+}): { readonly name: string; readonly id: string } {
+  const name = artifact.kind === "pdb" ? artifact.debugFile : artifact.codeFile;
+  const id = artifact.kind === "pdb" ? artifact.debugId : artifact.codeId;
+  if (name === null || id === null) throw new DumpLedgerError("integrity_failure", `${artifact.kind} symbol artifact has no ${artifact.kind === "pdb" ? "debug" : "code"} identity`);
+  return { name, id };
 }
 
 export class SqliteLedger {
@@ -247,44 +271,70 @@ export class SqliteLedger {
   }
   /** Idempotent symbol ingest: returns the stored artifact and whether the
    * identity was already registered (docs/symbols-design.md). */
-  sealSymbolArtifact(insert: SymbolArtifactInsert, event: EventIdentity): { readonly artifact: SymbolArtifactProjection; readonly deduplicated: boolean } {
+  sealSymbolArtifact(insert: SymbolArtifactInsert, event: EventIdentity): { readonly artifact: StoredSymbolArtifact; readonly deduplicated: boolean } {
     return this.database.transaction(() => {
-      const existing = this.findSymbolArtifact(insert.debugFile, insert.debugId, insert.kind);
+      const identity = artifactIdentityPair(insert);
+      const existing = this.findSymbolArtifact(identity.name, identity.id, insert.kind);
       if (existing !== undefined) return { artifact: existing, deduplicated: true };
-      this.prepare("INSERT INTO modules(module_id, debug_file, debug_id, product, version, arch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (debug_file, debug_id) DO NOTHING")
-        .run(moduleIdFor(insert.debugFile, insert.debugId), insert.debugFile, insert.debugId, insert.product, insert.version, insert.arch, event.occurredAt);
+      const moduleId = moduleIdFor(identity.name, identity.id);
+      if (insert.kind === "pdb") {
+        this.prepare("INSERT INTO modules(module_id, debug_file, debug_id, product, version, arch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (debug_file, debug_id) DO NOTHING")
+          .run(moduleId, insert.debugFile, insert.debugId, insert.product, insert.version, insert.arch, event.occurredAt);
+      } else {
+        this.prepare("INSERT INTO modules(module_id, code_file, code_id, product, version, arch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (code_file, code_id) DO NOTHING")
+          .run(moduleId, insert.codeFile, insert.codeId, insert.product, insert.version, insert.arch, event.occurredAt);
+      }
       this.prepare("INSERT INTO symbol_artifacts(artifact_id, module_id, kind, byte_size, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(insert.artifactId, moduleIdFor(insert.debugFile, insert.debugId), insert.kind, insert.byteSize.toString(), insert.sha256, event.occurredAt);
-      this.insertAudit(event, "IngestSymbol", null, null, null, { artifactId: insert.artifactId, debugFile: insert.debugFile, debugId: insert.debugId, kind: insert.kind, deduplicated: false });
-      const artifact = this.findSymbolArtifact(insert.debugFile, insert.debugId, insert.kind);
+        .run(insert.artifactId, moduleId, insert.kind, insert.byteSize.toString(), insert.sha256, event.occurredAt);
+      this.insertAudit(event, "IngestSymbol", null, null, null, insert.kind === "pdb"
+        ? { artifactId: insert.artifactId, kind: insert.kind, debugFile: insert.debugFile, debugId: insert.debugId, deduplicated: false }
+        : { artifactId: insert.artifactId, kind: insert.kind, codeFile: insert.codeFile, codeId: insert.codeId, deduplicated: false });
+      const artifact = this.findSymbolArtifact(identity.name, identity.id, insert.kind);
       if (artifact === undefined || artifact.artifactId !== insert.artifactId) throw new DumpLedgerError("integrity_failure", "sealed symbol artifact was not found after insert");
       return { artifact, deduplicated: false };
     })();
   }
 
-  findSymbolArtifact(debugFile: string, debugId: string, kind: "pdb"): SymbolArtifactProjection | undefined {
-    const row = this.prepare("SELECT a.artifact_id, a.kind, a.byte_size, a.sha256, a.created_at, m.debug_file, m.debug_id, m.product, m.version, m.arch FROM symbol_artifacts a JOIN modules m ON m.module_id = a.module_id WHERE m.debug_file = ? AND m.debug_id = ? AND a.kind = ?").get(debugFile, debugId, kind) as Row | undefined;
+  /** Identity lookup by the pair `kind` resolves by (debug identity for `pdb`,
+   * code identity for `exe`); served by that pair's unique index. */
+  findSymbolArtifact(name: string, id: string, kind: SymbolArtifactKind): StoredSymbolArtifact | undefined {
+    const row = (kind === "pdb"
+      ? this.prepare(`${SYMBOL_ARTIFACT_SELECT} WHERE a.kind = 'pdb' AND m.debug_file = ? AND m.debug_id = ?`)
+      : this.prepare(`${SYMBOL_ARTIFACT_SELECT} WHERE a.kind = 'exe' AND m.code_file = ? AND m.code_id = ?`)
+    ).get(name, id) as Row | undefined;
     return row === undefined ? undefined : symbolArtifactFromRow(row);
   }
 
-  findSymbolArtifactById(artifactId: SymbolArtifactId): SymbolArtifactProjection | undefined {
-    const row = this.prepare("SELECT a.artifact_id, a.kind, a.byte_size, a.sha256, a.created_at, m.debug_file, m.debug_id, m.product, m.version, m.arch FROM symbol_artifacts a JOIN modules m ON m.module_id = a.module_id WHERE a.artifact_id = ?").get(artifactId) as Row | undefined;
+  /** Store-path lookup for the symsrv read route: matches either identity pair
+   * in one query, both identity indexes eligible. When both pairs match (a
+   * pathological name collision), the lowest artifact id wins deterministically. */
+  findSymbolArtifactByStorePath(name: string, id: string): StoredSymbolArtifact | undefined {
+    const row = this.prepare(`${SYMBOL_ARTIFACT_SELECT} WHERE (a.kind = 'pdb' AND m.debug_file = ? AND m.debug_id = ?) OR (a.kind = 'exe' AND m.code_file = ? AND m.code_id = ?) ORDER BY a.artifact_id LIMIT 1`).get(name, id, name, id) as Row | undefined;
     return row === undefined ? undefined : symbolArtifactFromRow(row);
   }
 
-  listSymbolArtifacts(): readonly SymbolArtifactProjection[] {
-    return (this.prepare("SELECT a.artifact_id, a.kind, a.byte_size, a.sha256, a.created_at, m.debug_file, m.debug_id, m.product, m.version, m.arch FROM symbol_artifacts a JOIN modules m ON m.module_id = a.module_id ORDER BY m.debug_file, m.debug_id").all() as Row[]).map(symbolArtifactFromRow);
+  findSymbolArtifactById(artifactId: SymbolArtifactId): StoredSymbolArtifact | undefined {
+    const row = this.prepare(`${SYMBOL_ARTIFACT_SELECT} WHERE a.artifact_id = ?`).get(artifactId) as Row | undefined;
+    return row === undefined ? undefined : symbolArtifactFromRow(row);
+  }
+
+  listSymbolArtifacts(): readonly StoredSymbolArtifact[] {
+    return (this.prepare(`${SYMBOL_ARTIFACT_SELECT} ORDER BY COALESCE(m.debug_file, m.code_file), COALESCE(m.debug_id, m.code_id)`).all() as Row[]).map(symbolArtifactFromRow);
   }
 
   purgeSymbolArtifact(artifactId: SymbolArtifactId, event: EventIdentity): void {
     this.database.transaction(() => {
       const artifact = this.findSymbolArtifactById(artifactId);
       if (artifact === undefined) throw new DumpLedgerError("not_found", "symbol artifact was not found");
+      const identity = artifactIdentityPair(artifact);
       if (this.prepare("DELETE FROM symbol_artifacts WHERE artifact_id = ?").run(artifactId).changes !== 1) throw new DumpLedgerError("integrity_failure", "symbol artifact could not be purged");
-      if ((this.prepare("SELECT COUNT(*) AS remaining FROM symbol_artifacts WHERE module_id = ?").get(moduleIdFor(artifact.debugFile, artifact.debugId)) as { remaining: number }).remaining === 0) {
-        this.prepare("DELETE FROM modules WHERE module_id = ?").run(moduleIdFor(artifact.debugFile, artifact.debugId));
+      const moduleId = moduleIdFor(identity.name, identity.id);
+      if ((this.prepare("SELECT COUNT(*) AS remaining FROM symbol_artifacts WHERE module_id = ?").get(moduleId) as { remaining: number }).remaining === 0) {
+        this.prepare("DELETE FROM modules WHERE module_id = ?").run(moduleId);
       }
-      this.insertAudit(event, "PurgeSymbol", null, null, null, { artifactId, debugFile: artifact.debugFile, debugId: artifact.debugId });
+      this.insertAudit(event, "PurgeSymbol", null, null, null, artifact.kind === "pdb"
+        ? { artifactId, kind: artifact.kind, debugFile: artifact.debugFile, debugId: artifact.debugId }
+        : { artifactId, kind: artifact.kind, codeFile: artifact.codeFile, codeId: artifact.codeId });
     })();
   }
 
@@ -293,7 +343,7 @@ export class SqliteLedger {
     const cases = (this.prepare("SELECT * FROM cases ORDER BY case_id").all() as Row[]).map(row => ({ caseId: databaseValue("case_id", parseCaseId, row.case_id), customerId: databaseValue("customer_id", parseCustomerId, row.customer_id), title: requiredString(row, "title"), status: databaseValue("case status", parseCaseStatus, row.status), createdAt: requiredString(row, "created_at") }));
     const grants = (this.prepare("SELECT * FROM upload_grants ORDER BY grant_id").all() as Row[]).map(grantFromRow).map(({secretDigest: _secretDigest, ...grant}) => grant);
     const dumps = (this.prepare("SELECT * FROM dumps ORDER BY dump_id").all() as Row[]).map(dumpFromRow);
-    const symbols = this.listSymbolArtifacts();
+    const symbols = this.listSymbolArtifacts().filter(isDebugSymbolArtifact);
     const auditEvents: AuditEventProjection[] = (this.prepare("SELECT * FROM audit_events ORDER BY rowid").all() as Row[]).map(row => ({
       eventId: databaseValue("event_id", parseAuditEventId, row.event_id), occurredAt: requiredString(row, "occurred_at"), action: requiredString(row, "action"),
       customerId: row.customer_id === null ? null : databaseValue("customer_id", parseCustomerId, row.customer_id),

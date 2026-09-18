@@ -37,6 +37,27 @@ const GUID_BYTES = Buffer.from([
 const EXPECTED_DEBUG_ID = "0123456789ABCDEF0123456789ABCDEF1";
 const EXPECTED_DEBUG_FILE = "electron.pdb";
 
+/* Synthetic minimal PE image: DOS stub, PE signature at e_lfanew, COFF header
+ * with a TimeDateStamp, and an optional header carrying SizeOfImage. */
+const PE_E_LFANEW = 0x80;
+const PE_TIMESTAMP = 0x5f3759df;
+const PE_SIZE_OF_IMAGE = 0x20000;
+const EXPECTED_CODE_ID = "5F3759DF20000";
+const EXPECTED_CODE_FILE = "electron.exe";
+
+function syntheticExe(timestamp = PE_TIMESTAMP, sizeOfImage = PE_SIZE_OF_IMAGE): Buffer {
+  const bytes = Buffer.alloc(PE_E_LFANEW + 4 + 20 + 0xf0 + 16);
+  bytes.write("MZ", 0, "latin1");
+  bytes.writeUInt32LE(PE_E_LFANEW, 0x3c);
+  bytes.write("PE\0\0", PE_E_LFANEW, "latin1");
+  const coff = PE_E_LFANEW + 4;
+  bytes.writeUInt16LE(0x8664, coff); // machine: x64
+  bytes.writeUInt32LE(timestamp >>> 0, coff + 4);
+  bytes.writeUInt16LE(0xf0, coff + 16); // SizeOfOptionalHeader
+  bytes.writeUInt32LE(sizeOfImage >>> 0, coff + 20 + 56); // SizeOfImage
+  return bytes;
+}
+
 function syntheticPdb(pdbPath = `C:\\build\\${EXPECTED_DEBUG_FILE}`, age = 1): Buffer {
   const blockSize = 4096;
   const rsds = Buffer.alloc(4 + 16 + 4 + pdbPath.length + 1);
@@ -203,11 +224,21 @@ test("symbol store: ingest, symsrv read, dedup, purge, and auth boundaries", asy
 
   const wrongKind = await server.inject({
     method: "POST", url: "/api/v1/symbols",
-    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url("electron.exe"), ...mutationHeaders },
+    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url("electron.sym"), ...mutationHeaders },
     payload: pdb,
   });
   assert.equal(wrongKind.statusCode, 409);
   assert.equal(errorCode(wrongKind), "symbol_kind_unsupported");
+
+  // The suffix picks the kind, so PDB bytes under an .exe name are an
+  // unreadable PE identity (same 422 as a corrupt PDB), not a kind error.
+  const mismatchedKind = await server.inject({
+    method: "POST", url: "/api/v1/symbols",
+    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url("electron.exe"), ...mutationHeaders },
+    payload: pdb,
+  });
+  assert.equal(mismatchedKind.statusCode, 422);
+  assert.equal(errorCode(mismatchedKind), "symbol_identity_unreadable");
 
   const tooLarge = await server.inject({
     method: "POST", url: "/api/v1/symbols",
@@ -229,4 +260,94 @@ test("symbol store: ingest, symsrv read, dedup, purge, and auth boundaries", asy
   assert.equal(gone.statusCode, 404);
   const emptyAgain = decodeSymbolListResponse((await server.inject({ method: "GET", url: "/api/v1/symbols", headers: { cookie } })).json(), "$");
   assert.deepEqual(emptyAgain, { symbols: [] });
+});
+
+test("EXE symbol store: ingest, code-identity symsrv read, dedup, DLL kind, and list", async t => {
+  const { server, engine, cookie, mutationHeaders } = await makeFixture();
+  t.after(async () => { await server.close(); engine.close(); });
+
+  const exe = syntheticExe();
+  const ingest = (filename: string, payload: Buffer) => server.inject({
+    method: "POST", url: "/api/v1/symbols",
+    headers: { "content-type": "application/octet-stream", [X_SYMBOL_FILENAME_HEADER]: encodeSymbolFilenameBase64url(filename), ...mutationHeaders },
+    payload,
+  });
+
+  // Ingest: 201 with the server-parsed code identity and no debug identity.
+  const ingested = await ingest(EXPECTED_CODE_FILE, exe);
+  assert.equal(ingested.statusCode, 201);
+  const receipt = decodeSymbolIngestResponse(ingested.json(), "$");
+  assert.equal(receipt.kind, "exe");
+  assert.equal(receipt.codeFile, EXPECTED_CODE_FILE);
+  assert.equal(receipt.codeId, EXPECTED_CODE_ID);
+  assert.equal(receipt.debugFile, null);
+  assert.equal(receipt.debugId, null);
+  assert.equal(receipt.byteSize, BigInt(exe.byteLength));
+  assert.equal(receipt.deduplicated, false);
+
+  // The symsrv read route serves the code identity path byte-identically with
+  // immutable caching; a wrong code id stays a clean 404.
+  const fetched = await server.inject({ method: "GET", url: `/symbols/${EXPECTED_CODE_FILE}/${EXPECTED_CODE_ID}/${EXPECTED_CODE_FILE}` });
+  assert.equal(fetched.statusCode, 200);
+  assert.equal(fetched.headers["cache-control"], "public, max-age=31536000, immutable");
+  assert.deepEqual(fetched.rawPayload, exe);
+  const miss = await server.inject({ method: "GET", url: `/symbols/${EXPECTED_CODE_FILE}/0000000012345678/${EXPECTED_CODE_FILE}` });
+  assert.equal(miss.statusCode, 404);
+
+  // Re-ingesting the same identity is an idempotent no-op naming the original artifact.
+  const again = await ingest(EXPECTED_CODE_FILE, exe);
+  assert.equal(again.statusCode, 201);
+  const dedup = decodeSymbolIngestResponse(again.json(), "$");
+  assert.equal(dedup.deduplicated, true);
+  assert.equal(dedup.artifactId, receipt.artifactId);
+
+  // `.dll` is the same kind with its own identity (different timestamp).
+  const dll = syntheticExe(0x12345678, 0x8000);
+  const dllIngest = await ingest("electron.dll", dll);
+  assert.equal(dllIngest.statusCode, 201);
+  const dllReceipt = decodeSymbolIngestResponse(dllIngest.json(), "$");
+  assert.equal(dllReceipt.kind, "exe");
+  assert.equal(dllReceipt.codeFile, "electron.dll");
+  assert.equal(dllReceipt.codeId, "123456788000");
+
+  // A PDB artifact still ingests and resolves through its debug identity
+  // while EXE artifacts share the store.
+  const pdb = syntheticPdb();
+  const pdbIngest = await ingest(EXPECTED_DEBUG_FILE, pdb);
+  assert.equal(pdbIngest.statusCode, 201);
+  const pdbReceipt = decodeSymbolIngestResponse(pdbIngest.json(), "$");
+  assert.equal(pdbReceipt.kind, "pdb");
+  assert.equal(pdbReceipt.debugFile, EXPECTED_DEBUG_FILE);
+  assert.equal(pdbReceipt.codeFile, null);
+  const pdbFetched = await server.inject({ method: "GET", url: `/symbols/${pdbReceipt.debugFile}/${pdbReceipt.debugId}/${pdbReceipt.debugFile}` });
+  assert.equal(pdbFetched.statusCode, 200);
+  assert.deepEqual(pdbFetched.rawPayload, pdb);
+
+  // The operator list carries both kinds with the identity pair each resolves by.
+  const listed = decodeSymbolListResponse((await server.inject({ method: "GET", url: "/api/v1/symbols", headers: { cookie } })).json(), "$");
+  assert.equal(listed.symbols.length, 3);
+  const listedExe = listed.symbols.find(symbol => symbol.artifactId === receipt.artifactId);
+  assert.deepEqual(listedExe, {
+    artifactId: receipt.artifactId,
+    kind: "exe",
+    debugFile: null,
+    debugId: null,
+    codeFile: EXPECTED_CODE_FILE,
+    codeId: EXPECTED_CODE_ID,
+    byteSize: BigInt(exe.byteLength),
+    sha256: receipt.sha256,
+    ingestedAt: "2026-09-16T08:00:00.000Z",
+  });
+  const listedPdb = listed.symbols.find(symbol => symbol.kind === "pdb");
+  assert.equal(listedPdb?.debugFile, EXPECTED_DEBUG_FILE);
+  assert.equal(listedPdb?.codeFile, null);
+
+  // Purging the EXE removes only it: the code identity stops resolving while
+  // the other artifacts keep serving.
+  const purged = await server.inject({ method: "DELETE", url: `/api/v1/symbols/${receipt.artifactId}`, headers: mutationHeaders });
+  assert.equal(purged.statusCode, 204);
+  const gone = await server.inject({ method: "GET", url: `/symbols/${EXPECTED_CODE_FILE}/${EXPECTED_CODE_ID}/${EXPECTED_CODE_FILE}` });
+  assert.equal(gone.statusCode, 404);
+  const stillThere = await server.inject({ method: "GET", url: `/symbols/${pdbReceipt.debugFile}/${pdbReceipt.debugId}/${pdbReceipt.debugFile}` });
+  assert.equal(stillThere.statusCode, 200);
 });

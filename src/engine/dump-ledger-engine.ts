@@ -1,19 +1,19 @@
 import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
-import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase } from "../domain/lifecycle.js";
+import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase, type SymbolArtifactKind } from "../domain/lifecycle.js";
 import { MAX_GRANT_UPLOAD_SLOTS, SqliteLedger } from "../ledger/sqlite-ledger.js";
 import type { SymbolVault, Vault } from "../vault/vault.js";
 import type { ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
 import { CryptoEntropy, NoFailpoints, RandomIds, SystemClock, type Clock, type EntropySource, type FailpointPort } from "./dependencies.js";
 import type { InspectionPort } from "./inspection-port.js";
-import type { BackupInventory, DumpLedgerProjection, SymbolArtifactProjection, TransitionReceipt, TransitionSuccess } from "./projection.js";
+import type { BackupInventory, DumpLedgerProjection, StoredSymbolArtifact, TransitionReceipt, TransitionSuccess } from "./projection.js";
 
 export { DeterministicClock, DeterministicEntropy, DeterministicIds, ScriptedFailpoints } from "./dependencies.js";
 export type { DurableCheckpoint } from "./dependencies.js";
 export type { InspectionOutcome, InspectionPort } from "./inspection-port.js";
 export type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCustomerRecord, ImportDumpRecord, ImportGrantRecord, ImportSummary, LifecycleCommand } from "./commands.js";
-export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, SymbolArtifactProjection, TransitionReceipt } from "./projection.js";
+export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, StoredSymbolArtifact, TransitionReceipt } from "./projection.js";
 
 export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly symbolVault?: SymbolVault; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
 /** Public grant-quota answer (batch upload design): what the holder of a valid secret may still upload. */
@@ -27,8 +27,12 @@ export interface GrantQuota {
 export interface DumpLedgerEngine {
   execute(command: LifecycleCommand): TransitionReceipt;
   grantKeyFingerprint(): string;
-  /** Bounded symbol-artifact lookup by debug identity (docs/symbols-design.md). */
-  findSymbolArtifact(debugFile: string, debugId: string, kind: "pdb"): SymbolArtifactProjection | undefined;
+  /** Bounded symbol-artifact lookup by the identity pair `kind` resolves by (docs/symbols-design.md). */
+  findSymbolArtifact(name: string, id: string, kind: SymbolArtifactKind): StoredSymbolArtifact | undefined;
+  /** Store-path lookup (symsrv read route): the debug identity of a PDB or the code identity of an EXE. */
+  findSymbolArtifactByStorePath(name: string, id: string): StoredSymbolArtifact | undefined;
+  /** Every stored artifact, both kinds (the operator Symbols list). */
+  listSymbolArtifacts(): readonly StoredSymbolArtifact[];
   /** Returns quota for issued or consumed grants; undefined for unknown, revoked, or expired secrets. */
   grantQuota(grantSecret: string): GrantQuota | undefined;
   snapshot(): DumpLedgerProjection;
@@ -106,7 +110,9 @@ class Engine implements DumpLedgerEngine {
     }
   }
   snapshot(): DumpLedgerProjection { return this.ledger.snapshot(); }
-  findSymbolArtifact(debugFile: string, debugId: string, kind: "pdb"): SymbolArtifactProjection | undefined { return this.ledger.findSymbolArtifact(debugFile, debugId, kind); }
+  findSymbolArtifact(name: string, id: string, kind: SymbolArtifactKind): StoredSymbolArtifact | undefined { return this.ledger.findSymbolArtifact(name, id, kind); }
+  findSymbolArtifactByStorePath(name: string, id: string): StoredSymbolArtifact | undefined { return this.ledger.findSymbolArtifactByStorePath(name, id); }
+  listSymbolArtifacts(): readonly StoredSymbolArtifact[] { return this.ledger.listSymbolArtifacts(); }
   grantKeyFingerprint(): string { return createHash("sha256").update(this.grantSecretKey).digest("base64url"); }
   grantQuota(grantSecret: string): GrantQuota | undefined {
     const grant = this.ledger.findGrantByDigest(digestSecret(assertText(grantSecret, "grantSecret", 1024), this.grantSecretKey));
@@ -165,22 +171,28 @@ class Engine implements DumpLedgerEngine {
       case "FinishPurge": { const dumpId=parseDumpId(command.dumpId); this.requirePhase(dumpId,"deleting"); this.options.vault.remove(dumpId); this.failpoints.hit("after_vault_remove"); this.ledger.finishPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,phase:"deleted"}; }
       case "IngestSymbol": {
         const vault=this.requireSymbolVault();
+        parseSymbolArtifactKind(command.kind);
         const artifactId=this.ids.next("symbol");
         vault.createSymbolStaging(artifactId);
         return {ok:true,action:command.type,occurredAt,artifactId};
       }
       case "SealSymbol": {
         const vault=this.requireSymbolVault();
-        const artifactId=parseSymbolArtifactId(command.artifactId), debugFile=assertText(command.debugFile,"debugFile",255), debugId=assertText(command.debugId,"debugId",64), sha256=assertSha256(command.sha256);
+        const artifactId=parseSymbolArtifactId(command.artifactId), sha256=assertSha256(command.sha256);
         const byteSize=assertPositiveBigint(command.byteSize,"byteSize");
         const product=command.product===undefined?null:assertText(command.product,"product",200), version=command.version===undefined?null:assertText(command.version,"version",200), arch=command.arch===undefined?null:assertText(command.arch,"arch",64);
-        const existing=this.ledger.findSymbolArtifact(debugFile,debugId,"pdb");
+        // The identity pair is fixed by the kind: a PDB resolves by its RSDS
+        // debug identity, an EXE/DLL image by its PE code identity.
+        const identity=command.kind==="pdb"
+          ? {name:assertText(command.debugFile,"debugFile",255),id:assertText(command.debugId,"debugId",64)}
+          : {name:assertText(command.codeFile,"codeFile",255),id:assertText(command.codeId,"codeId",64)};
+        const existing=this.ledger.findSymbolArtifact(identity.name,identity.id,command.kind);
         if (existing!==undefined) {
           vault.removeSymbolStaging(artifactId);
           return {ok:true,action:command.type,occurredAt,artifactId:existing.artifactId,deduplicated:true};
         }
         vault.promoteSymbol(artifactId); this.failpoints.hit("after_symbol_vault_promote");
-        const sealed=this.ledger.sealSymbolArtifact({artifactId,debugFile,debugId,kind:"pdb",byteSize,sha256,product,version,arch},event());
+        const sealed=this.ledger.sealSymbolArtifact({artifactId,kind:command.kind,debugFile:command.kind==="pdb"?identity.name:null,debugId:command.kind==="pdb"?identity.id:null,codeFile:command.kind==="exe"?identity.name:null,codeId:command.kind==="exe"?identity.id:null,byteSize,sha256,product,version,arch},event());
         return {ok:true,action:command.type,occurredAt,artifactId:sealed.artifact.artifactId,deduplicated:sealed.deduplicated};
       }
       case "FailSymbol": {

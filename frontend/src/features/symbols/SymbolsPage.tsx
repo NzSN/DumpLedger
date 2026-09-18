@@ -28,7 +28,7 @@ import { ConfirmationDialog } from "../../shared/components/confirmation-dialog"
 import { formatBytes, formatUtcTimestamp } from "../../shared/format";
 import { SymbolIngestQueue } from "./SymbolIngestQueue";
 import { createSymbolsApi } from "./symbols-api";
-import { symbolKindLabel, truncateDebugId } from "./symbols-copy";
+import { symbolIdentityId, symbolIdentityName, symbolKindLabel, truncateDebugId } from "./symbols-copy";
 import "./symbols.css";
 
 interface SymbolRowProps {
@@ -37,16 +37,22 @@ interface SymbolRowProps {
   readonly onPurge: () => void;
 }
 
-/** One stored artifact: debug file + truncated identity, kind, size, metadata. */
+/** One stored artifact: file name + truncated identity, kind, size, metadata.
+ * The identity pair is the one the record's kind resolves by (PDB: RSDS debug
+ * identity; EXE/DLL: PE code identity). */
 function SymbolRow({ record, purgePending, onPurge }: SymbolRowProps): ReactNode {
+  const name = symbolIdentityName(record) ?? record.artifactId;
+  const identity = symbolIdentityId(record);
   return (
     <div className="record-row">
       <div className="record-main">
-        <span className="record-title mono">{record.debugFile}</span>
+        <span className="record-title mono">{name}</span>
         <div className="record-meta">
-          <span className="mono" title={record.debugId}>
-            {truncateDebugId(record.debugId)}
-          </span>
+          {identity !== null && (
+            <span className="mono" title={identity}>
+              {truncateDebugId(identity)}
+            </span>
+          )}
           <span>{formatBytes(record.byteSize)}</span>
           <span>Ingested {formatUtcTimestamp(record.ingestedAt)}</span>
           {record.product !== undefined && <span>{record.product}</span>}
@@ -89,11 +95,13 @@ export function SymbolsPage(): ReactNode {
   }
 
   const symbols = state.status === "ready" ? state.data.symbols : null;
+  const purgeName = purgeTarget === null ? "" : symbolIdentityName(purgeTarget) ?? purgeTarget.artifactId;
+  const purgeIdentity = purgeTarget === null ? null : symbolIdentityId(purgeTarget);
 
   return (
     <FeaturePage
       title="Symbols"
-      subtitle="PDB artifacts registered by debug identity and served to debuggers through the symbol store."
+      subtitle="PDB and PE-image artifacts registered by their parsed identity and served to debuggers through the symbol store."
     >
       <Panel
         title="Symbol artifacts"
@@ -121,8 +129,8 @@ export function SymbolsPage(): ReactNode {
         {symbols !== null &&
           (symbols.length === 0 ? (
             <EmptyState title="No symbol artifacts" icon="◇">
-              Ingest a PDB below to serve it to debuggers from this store. Artifacts stay until an
-              operator purges them.
+              Ingest a PDB, EXE, or DLL below to serve it to debuggers from this store. Artifacts
+              stay until an operator purges them.
             </EmptyState>
           ) : (
             <div className="record-list">
@@ -146,7 +154,7 @@ export function SymbolsPage(): ReactNode {
         message={
           purgeTarget === null
             ? ""
-            : `Purge ${purgeTarget.debugFile} (${truncateDebugId(purgeTarget.debugId)})? Debuggers stop resolving this module until it is ingested again; dumps that reference it keep their recorded module facts.`
+            : `Purge ${purgeName} (${purgeIdentity === null ? "no identity" : truncateDebugId(purgeIdentity)})? Debuggers stop resolving this module until it is ingested again; dumps that reference it keep their recorded module facts.`
         }
         confirmLabel="Purge artifact"
         cancelLabel="Cancel"

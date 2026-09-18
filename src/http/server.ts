@@ -12,6 +12,7 @@ import type {
   DumpDetailResponse,
   GrantQuotaResponse,
   GrantRecord,
+  SymbolKind,
   SymbolListResponse,
   TransitionResponse,
 } from "@dump-ledger/http-contracts";
@@ -37,6 +38,18 @@ import { registerSymbolAdminRoutes } from "./routes/symbol-admin-routes.js";
 import { registerStaticWeb } from "./static-web.js";
 
 type MutationResult = { readonly ok: true; readonly id?: string; readonly secret?: string } | { readonly ok: false; readonly code: string };
+
+/** The identity pair one symbol ingest carries, fixed by the artifact kind
+ * (docs/symbols-design.md, "Identity model"): a PDB its RSDS debug identity,
+ * an EXE/DLL image its PE code identity. */
+export type SymbolIngestIdentity =
+  | { readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string }
+  | { readonly kind: "exe"; readonly codeFile: string; readonly codeId: string };
+
+/** One sealed symbol ingest: the parsed identity plus the byte facts. */
+export type SymbolIngestInput =
+  | { readonly kind: "pdb"; readonly debugFile: string; readonly debugId: string; readonly artifactId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string }
+  | { readonly kind: "exe"; readonly codeFile: string; readonly codeId: string; readonly artifactId: string; readonly byteSize: bigint; readonly sha256: string; readonly product?: string; readonly version?: string; readonly arch?: string };
 
 export type CaseTransitionOutcome =
   | { readonly ok: true; readonly response: TransitionResponse }
@@ -70,22 +83,14 @@ export interface HttpApplicationPort {
   /* Symbol store (docs/symbols-design.md): operator list + ingest lifecycle
    * + purge, and the unauthenticated symsrv read surface. */
   listSymbols(): SymbolListResponse;
-  beginSymbolIngest(): MutationResult;
-  sealSymbolIngest(input: {
-    readonly artifactId: string;
-    readonly debugFile: string;
-    readonly debugId: string;
-    readonly byteSize: bigint;
-    readonly sha256: string;
-    readonly product?: string;
-    readonly version?: string;
-    readonly arch?: string;
-  }): MutationResult & { readonly deduplicated?: boolean };
+  beginSymbolIngest(kind: SymbolKind): MutationResult;
+  sealSymbolIngest(input: SymbolIngestInput): MutationResult & { readonly deduplicated?: boolean };
   failSymbolIngest(artifactId: string): void;
   appendSymbolBytes(artifactId: string, chunk: Uint8Array): void;
   syncSymbolStaging(artifactId: string): void;
   purgeSymbol(artifactId: string): MutationResult;
-  openSymbolArtifact(debugFile: string, debugId: string):
+  /** Symsrv read lookup: matches either identity pair (debug or code). */
+  openSymbolArtifact(name: string, id: string):
     | { readonly byteSize: bigint; readonly stream: Readable }
     | undefined;
 }

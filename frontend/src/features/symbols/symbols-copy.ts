@@ -11,6 +11,7 @@
 import {
   MAX_SYMBOL_BYTES,
   type ModuleSymbolStatus,
+  type SymbolIdentityFields,
   type SymbolIngestResponse,
   type SymbolKind,
 } from "@dump-ledger/http-contracts";
@@ -30,7 +31,23 @@ export function symbolKindLabel(kind: SymbolKind): string {
   switch (kind) {
     case "pdb":
       return "PDB";
+    case "exe":
+      return "EXE";
   }
+}
+
+/**
+ * The identity pair a record or ingest response resolves by, fixed by kind:
+ * a PDB carries the debug identity, an EXE/DLL image the code identity. The
+ * contract guarantees the applicable pair on the wire; the helpers keep a
+ * defensive `null` so a malformed hand-written fixture cannot crash a row.
+ */
+export function symbolIdentityName(identity: SymbolIdentityFields & { readonly kind: SymbolKind }): string | null {
+  return identity.kind === "exe" ? identity.codeFile : identity.debugFile;
+}
+
+export function symbolIdentityId(identity: SymbolIdentityFields & { readonly kind: SymbolKind }): string | null {
+  return identity.kind === "exe" ? identity.codeId : identity.debugId;
 }
 
 /**
@@ -40,16 +57,18 @@ export function symbolKindLabel(kind: SymbolKind): string {
  */
 export function ingestResultText(response: SymbolIngestResponse): string {
   const verdict = response.deduplicated ? "already registered" : "registered";
-  return `${response.debugFile} ${truncateDebugId(response.debugId)} ${verdict} (${formatBytes(response.byteSize)})`;
+  const name = symbolIdentityName(response) ?? "symbol file";
+  const identity = symbolIdentityId(response);
+  return `${name} ${identity === null ? "?" : truncateDebugId(identity)} ${verdict} (${formatBytes(response.byteSize)})`;
 }
 
 export function ingestFailureText(error: unknown): string {
   const code = error instanceof HttpRequestError ? error.code : undefined;
   switch (code) {
     case "symbol_identity_unreadable":
-      return "Not a PDB or no RSDS record.";
+      return "No readable PDB or PE identity.";
     case "symbol_kind_unsupported":
-      return "Only PDB files are supported.";
+      return "Only PDB, EXE, and DLL files are supported.";
     case "symbol_too_large":
     case "upload_too_large":
       return `Larger than the ${formatBytes(MAX_SYMBOL_BYTES)} symbol artifact ceiling.`;

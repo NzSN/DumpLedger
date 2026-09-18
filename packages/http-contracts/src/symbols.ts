@@ -10,7 +10,7 @@
  *
  * Raw-stream convention like dump upload: no multipart, no base64 body, and the
  * server — never the uploader — derives the artifact identity from the bytes
- * (PDB RSDS GUID+age; decision D2 keeps v1 PDB-only). The client-supplied
+ * (PDB RSDS GUID+age; EXE/DLL PE TimeDateStamp+SizeOfImage). The client-supplied
  * filename is a display-only annotation bounded like dump filenames, so the
  * base64url header helpers are reused from `uploads.js` instead of being
  * duplicated here. Re-ingesting a known identity is an UPSERT-no-op: the
@@ -22,6 +22,7 @@ import {
   booleanField,
   canonicalDecimal,
   canonicalTimestamp,
+  fail,
   field,
   identifierField,
   object,
@@ -30,6 +31,7 @@ import {
   sha256Hex,
   text,
   type Decoder,
+  nullableField,
 } from "./decode.js";
 import { decodeFilenameBase64url, encodeFilenameBase64url, MAX_UPLOAD_FILENAME_LENGTH } from "./uploads.js";
 
@@ -54,9 +56,53 @@ export const MAX_SYMBOL_ANNOTATION_LENGTH = 200;
 /** Most artifacts one list response may carry (bounded like the other list contracts). */
 export const MAX_SYMBOL_LIST_ITEMS = 200;
 
-/** v1 ingests PDBs only (decision D2); the EXE kind rides the same entity later. */
-export const SYMBOL_KINDS = ["pdb"] as const;
+/**
+ * Artifact kinds: `pdb` resolves by its RSDS debug identity (GUID+age),
+ * `exe` (EXE/DLL images) by its PE code identity (TimeDateStamp + SizeOfImage).
+ * Decision D2's PDB-only v1 was lifted by milestone 3 of the design.
+ */
+export const SYMBOL_KINDS = ["pdb", "exe"] as const;
 export type SymbolKind = (typeof SYMBOL_KINDS)[number];
+
+/**
+ * The identity pair one artifact carries, fixed by its kind. `debugFile`/
+ * `codeFile` are basenames; `debugId` is the SymSrv GUID+age encoding and
+ * `codeId` the PE `%08X%X` timestamp+size encoding.
+ */
+export interface SymbolIdentityFields {
+  /** Debug identity (RSDS); non-null for `pdb` records, null otherwise. */
+  readonly debugFile: string | null;
+  readonly debugId: string | null;
+  /** Code identity (PE); non-null for `exe` records, null otherwise. */
+  readonly codeFile: string | null;
+  readonly codeId: string | null;
+}
+
+/** Normalizes the four identity keys (absent and null both mean "not carried"). */
+type SymbolIdentityShape = {
+  readonly debugFile: { readonly optional: true; readonly decode: Decoder<string | null> };
+  readonly debugId: { readonly optional: true; readonly decode: Decoder<string | null> };
+  readonly codeFile: { readonly optional: true; readonly decode: Decoder<string | null> };
+  readonly codeId: { readonly optional: true; readonly decode: Decoder<string | null> };
+};
+
+const symbolIdentityShape: SymbolIdentityShape = {
+  debugFile: optional(nullableField(identifierField("debugFile"))),
+  debugId: optional(nullableField(identifierField("debugId"))),
+  codeFile: optional(nullableField(identifierField("codeFile"))),
+  codeId: optional(nullableField(identifierField("codeId"))),
+};
+
+/** Cross-field invariant: the identity pair the kind resolves by must be present. */
+function requireKindIdentity(kind: SymbolKind, identity: SymbolIdentityFields, path: string): SymbolIdentityFields {
+  if (kind === "pdb" && (identity.debugFile === null || identity.debugId === null)) {
+    fail(path, "a pdb symbol must carry a debug identity");
+  }
+  if (kind === "exe" && (identity.codeFile === null || identity.codeId === null)) {
+    fail(path, "an exe symbol must carry a code identity");
+  }
+  return identity;
+}
 
 /** Encodes a display-only symbol filename for {@link X_SYMBOL_FILENAME_HEADER}. */
 export function encodeSymbolFilenameBase64url(filename: string): string {
@@ -82,10 +128,8 @@ export function symbolPathForArtifact(artifactId: string): string {
  * `deduplicated` is true when the identity already existed, in which case
  * `artifactId` names the original artifact (re-ingest is idempotent).
  */
-export interface SymbolIngestResponse {
+export interface SymbolIngestResponse extends SymbolIdentityFields {
   readonly artifactId: string;
-  readonly debugFile: string;
-  readonly debugId: string;
   readonly kind: SymbolKind;
   readonly byteSize: bigint;
   readonly sha256: string;
@@ -96,8 +140,7 @@ export const decodeSymbolIngestResponse: Decoder<SymbolIngestResponse> = (value,
   const decoded = object(
     {
       artifactId: field(identifierField("artifactId")),
-      debugFile: field(identifierField("debugFile")),
-      debugId: field(identifierField("debugId")),
+      ...symbolIdentityShape,
       kind: field(oneOf(SYMBOL_KINDS, "symbol kind")),
       byteSize: field(canonicalDecimal({ label: "byteSize" })),
       sha256: field(sha256Hex("sha256")),
@@ -107,21 +150,27 @@ export const decodeSymbolIngestResponse: Decoder<SymbolIngestResponse> = (value,
   )(value, path);
   return {
     artifactId: decoded.artifactId,
-    debugFile: decoded.debugFile,
-    debugId: decoded.debugId,
     kind: decoded.kind,
     byteSize: decoded.byteSize,
     sha256: decoded.sha256,
     deduplicated: decoded.deduplicated,
+    ...requireKindIdentity(decoded.kind, {
+      debugFile: decoded.debugFile ?? null,
+      debugId: decoded.debugId ?? null,
+      codeFile: decoded.codeFile ?? null,
+      codeId: decoded.codeId ?? null,
+    }, path),
   };
 };
 
 export function encodeSymbolIngestResponse(response: SymbolIngestResponse): Record<string, unknown> {
   return {
     artifactId: response.artifactId,
+    kind: response.kind,
     debugFile: response.debugFile,
     debugId: response.debugId,
-    kind: response.kind,
+    codeFile: response.codeFile,
+    codeId: response.codeId,
     byteSize: response.byteSize.toString(),
     sha256: response.sha256,
     deduplicated: response.deduplicated,
@@ -134,10 +183,8 @@ export function encodeSymbolIngestResponse(response: SymbolIngestResponse): Reco
  * uploader annotations for browsing and filtering and never participate in
  * resolution, so they stay optional.
  */
-export interface SymbolRecord {
+export interface SymbolRecord extends SymbolIdentityFields {
   readonly artifactId: string;
-  readonly debugFile: string;
-  readonly debugId: string;
   readonly kind: SymbolKind;
   readonly byteSize: bigint;
   readonly sha256: string;
@@ -151,8 +198,7 @@ export const decodeSymbolRecord: Decoder<SymbolRecord> = (value, path) => {
   const decoded = object(
     {
       artifactId: field(identifierField("artifactId")),
-      debugFile: field(identifierField("debugFile")),
-      debugId: field(identifierField("debugId")),
+      ...symbolIdentityShape,
       kind: field(oneOf(SYMBOL_KINDS, "symbol kind")),
       byteSize: field(canonicalDecimal({ label: "byteSize" })),
       sha256: field(sha256Hex("sha256")),
@@ -165,11 +211,15 @@ export const decodeSymbolRecord: Decoder<SymbolRecord> = (value, path) => {
   )(value, path);
   return {
     artifactId: decoded.artifactId,
-    debugFile: decoded.debugFile,
-    debugId: decoded.debugId,
     kind: decoded.kind,
     byteSize: decoded.byteSize,
     sha256: decoded.sha256,
+    ...requireKindIdentity(decoded.kind, {
+      debugFile: decoded.debugFile ?? null,
+      debugId: decoded.debugId ?? null,
+      codeFile: decoded.codeFile ?? null,
+      codeId: decoded.codeId ?? null,
+    }, path),
     ...(decoded.product === undefined ? {} : { product: decoded.product }),
     ...(decoded.version === undefined ? {} : { version: decoded.version }),
     ...(decoded.arch === undefined ? {} : { arch: decoded.arch }),
@@ -180,9 +230,11 @@ export const decodeSymbolRecord: Decoder<SymbolRecord> = (value, path) => {
 export function encodeSymbolRecord(record: SymbolRecord): Record<string, unknown> {
   return {
     artifactId: record.artifactId,
+    kind: record.kind,
     debugFile: record.debugFile,
     debugId: record.debugId,
-    kind: record.kind,
+    codeFile: record.codeFile,
+    codeId: record.codeId,
     byteSize: record.byteSize.toString(),
     sha256: record.sha256,
     ...(record.product === undefined ? {} : { product: record.product }),

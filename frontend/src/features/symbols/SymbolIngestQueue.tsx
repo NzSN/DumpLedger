@@ -1,6 +1,6 @@
 /**
- * SymbolIngestQueue — multi-file PDB ingest with a strictly sequential queue
- * (docs/symbols-design.md, "Ingest (operator surface)").
+ * SymbolIngestQueue — multi-file PDB/EXE/DLL ingest with a strictly sequential
+ * queue (docs/symbols-design.md, "Ingest (operator surface)").
  *
  * Structure follows the public uploader's batch queue (UploadPage) but owns
  * its markup and copy: selection through a native file input and a drop zone,
@@ -187,7 +187,7 @@ export function SymbolIngestQueue({ api, onIngested }: SymbolIngestQueueProps): 
       ? `Ingesting file ${currentIndex + 1} of ${entries.length}… ${percent}%`
       : `Ingesting… ${percent}%`
     : entries.length === 0
-      ? "Select PDB files to ingest"
+      ? "Select symbol files to ingest"
       : `${settledCount} of ${entries.length} files processed`;
 
   return (
@@ -203,7 +203,7 @@ export function SymbolIngestQueue({ api, onIngested }: SymbolIngestQueueProps): 
           entries.length > 0 ? "has-file" : undefined,
           dragging ? "is-dragging" : undefined,
         )}
-        aria-label="Choose PDB files or drop them here"
+        aria-label="Choose symbol files or drop them here"
         disabled={busy}
         onClick={openPicker}
         onDragEnter={handleDragOver}
@@ -214,9 +214,9 @@ export function SymbolIngestQueue({ api, onIngested }: SymbolIngestQueueProps): 
         <span className="drop-icon" aria-hidden="true">
           ⇧
         </span>
-        <span className="drop-title">Choose PDB files or drop them here</span>
+        <span className="drop-title">Choose symbol files or drop them here</span>
         <span className="drop-copy">
-          The filename is display-only; the server derives the debug identity from the file
+          PDB, EXE, and DLL; the filename is display-only and the server derives the identity from the file
         </span>
       </button>
 
@@ -227,8 +227,8 @@ export function SymbolIngestQueue({ api, onIngested }: SymbolIngestQueueProps): 
         id="symbol-files"
         className="symbol-file-input"
         type="file"
-        accept=".pdb,application/octet-stream"
-        aria-label="Choose PDB files"
+        accept=".pdb,.exe,.dll,application/octet-stream"
+        aria-label="Choose symbol files"
         tabIndex={-1}
         multiple
         onChange={handleFileChange}

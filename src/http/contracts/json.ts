@@ -59,7 +59,7 @@ const MESSAGES: Readonly<Record<HttpErrorCode, string>> = {
   storage_unavailable: "Storage is temporarily unavailable.",
   integrity_failure: "An internal integrity check failed.",
   internal_error: "An internal error occurred.",
-  symbol_identity_unreadable: "The file is not a PDB or carries no readable RSDS record.",
+  symbol_identity_unreadable: "The file carries no readable PDB or PE identity.",
   symbol_kind_unsupported: "That symbol artifact kind is not supported.",
   symbol_too_large: "The symbol artifact exceeds its allowed byte size.",
 };

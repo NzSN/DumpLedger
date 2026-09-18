@@ -10,9 +10,17 @@ export const CoverageKinds = ["partial", "full-memory-declared", "unknown"] as c
 export type CoverageKind = (typeof CoverageKinds)[number];
 export const CaseStatuses = ["new", "investigating", "waiting-for-customer", "resolved", "closed"] as const;
 export type CaseStatus = (typeof CaseStatuses)[number];
+/* Symbol artifact kinds (docs/symbols-design.md): `pdb` resolves by its RSDS
+ * debug identity, `exe` (EXE/DLL images) by its PE code identity. */
+export const SymbolArtifactKinds = ["pdb", "exe"] as const;
+export type SymbolArtifactKind = (typeof SymbolArtifactKinds)[number];
 
 export function isCoverageKind(value: unknown): value is CoverageKind {
   return typeof value === "string" && CoverageKinds.includes(value as CoverageKind);
+}
+
+export function isSymbolArtifactKind(value: unknown): value is SymbolArtifactKind {
+  return typeof value === "string" && SymbolArtifactKinds.includes(value as SymbolArtifactKind);
 }
 
 function parseMember<T extends string>(values: readonly T[], value: unknown, label: string): T {
@@ -25,3 +33,4 @@ export const parseDumpPhase = (value: unknown): DumpPhase => parseMember(DumpPha
 export const parseBlobState = (value: unknown): BlobState => parseMember(BlobStates, value, "blob state");
 export const parseValidationState = (value: unknown): ValidationState => parseMember(ValidationStates, value, "validation state");
 export const parseCaseStatus = (value: unknown): CaseStatus => parseMember(CaseStatuses, value, "case status");
+export const parseSymbolArtifactKind = (value: unknown): SymbolArtifactKind => parseMember(SymbolArtifactKinds, value, "symbol artifact kind");

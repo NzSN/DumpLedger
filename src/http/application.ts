@@ -19,12 +19,13 @@ import {
   MAX_DEBUG_FILE_LENGTH,
   MAX_DEBUG_ID_LENGTH,
   MAX_MODULE_NAME_LENGTH,
+  type SymbolKind,
 } from "@dump-ledger/http-contracts";
 import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type CaseId } from "../domain/ids.js";
 import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
 import type { DumpLedgerProjection, SymbolArtifactProjection } from "../engine/projection.js";
 import type { SymbolVault, Vault, VaultReader } from "../vault/vault.js";
-import type { CaseTransitionOutcome, HttpApplicationPort } from "./server.js";
+import type { CaseTransitionOutcome, HttpApplicationPort, SymbolIngestInput } from "./server.js";
 
 function readerStream(reader: VaultReader): Readable {
   return Readable.from((async function* () {
@@ -114,11 +115,13 @@ export class EngineHttpApplication implements HttpApplicationPort {
 
   listSymbols() {
     return {
-      symbols: this.engine.snapshot().symbols.map((artifact) => ({
+      symbols: this.engine.listSymbolArtifacts().map((artifact) => ({
         artifactId: artifact.artifactId,
+        kind: artifact.kind,
         debugFile: artifact.debugFile,
         debugId: artifact.debugId,
-        kind: artifact.kind,
+        codeFile: artifact.codeFile,
+        codeId: artifact.codeId,
         byteSize: artifact.byteSize,
         sha256: artifact.sha256,
         ...(artifact.product === null ? {} : { product: artifact.product }),
@@ -129,35 +132,22 @@ export class EngineHttpApplication implements HttpApplicationPort {
     };
   }
 
-  beginSymbolIngest() {
-    const receipt = this.engine.execute({ type: "IngestSymbol", kind: "pdb" });
+  beginSymbolIngest(kind: SymbolKind) {
+    const receipt = this.engine.execute({ type: "IngestSymbol", kind });
     return receipt.ok && receipt.artifactId !== undefined
       ? { ok: true as const, id: receipt.artifactId }
       : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
   }
 
-  sealSymbolIngest(input: {
-    readonly artifactId: string;
-    readonly debugFile: string;
-    readonly debugId: string;
-    readonly byteSize: bigint;
-    readonly sha256: string;
-    readonly product?: string;
-    readonly version?: string;
-    readonly arch?: string;
-  }) {
-    const receipt = this.engine.execute({
-      type: "SealSymbol",
-      artifactId: input.artifactId as never,
-      debugFile: input.debugFile,
-      debugId: input.debugId,
-      kind: "pdb",
-      byteSize: input.byteSize,
-      sha256: input.sha256,
+  sealSymbolIngest(input: SymbolIngestInput) {
+    const annotations = {
       ...(input.product === undefined ? {} : { product: input.product }),
       ...(input.version === undefined ? {} : { version: input.version }),
       ...(input.arch === undefined ? {} : { arch: input.arch }),
-    });
+    };
+    const receipt = this.engine.execute(input.kind === "pdb"
+      ? { type: "SealSymbol", artifactId: input.artifactId as never, kind: "pdb", debugFile: input.debugFile, debugId: input.debugId, byteSize: input.byteSize, sha256: input.sha256, ...annotations }
+      : { type: "SealSymbol", artifactId: input.artifactId as never, kind: "exe", codeFile: input.codeFile, codeId: input.codeId, byteSize: input.byteSize, sha256: input.sha256, ...annotations });
     return receipt.ok && receipt.artifactId !== undefined
       ? { ok: true as const, id: receipt.artifactId, deduplicated: receipt.deduplicated === true }
       : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
@@ -184,9 +174,9 @@ export class EngineHttpApplication implements HttpApplicationPort {
     return receipt.ok ? { ok: true as const } : { ok: false as const, code: receipt.error.code };
   }
 
-  openSymbolArtifact(debugFile: string, debugId: string) {
+  openSymbolArtifact(name: string, id: string) {
     if (this.symbolVault === undefined) return undefined;
-    const artifact = this.engine.findSymbolArtifact(debugFile, debugId, "pdb");
+    const artifact = this.engine.findSymbolArtifactByStorePath(name, id);
     if (artifact === undefined) return undefined;
     const reader = this.symbolVault.openSymbol(artifact.artifactId);
     if (reader === undefined) return undefined;
