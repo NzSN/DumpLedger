@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -9,6 +9,8 @@ import { EngineHttpApplication } from "./http/application.js";
 import { PeriodicRuntimeJob } from "./http/runtime-jobs.js";
 import { buildHttpServer } from "./http/server.js";
 import { buildSymbolsListener } from "./http/symbols-listener.js";
+import { symbolsListenerConfig, trustedProxyAddresses } from "./http/listener-config.js";
+import { DEFAULT_UPLOAD_TIMEOUTS, validateUploadTimeouts } from "./intake/bounded-pipeline.js";
 import { createVaultMinidumpInspectionPort } from "./inspection/index.js";
 import { EngineUploadLifecycle, EngineUploadPostProcessor, VaultUploadSink } from "./intake/intake-facade.js";
 import { PostProcessingQueue } from "./intake/post-processing-queue.js";
@@ -32,17 +34,6 @@ function grantKey(): Buffer {
   return key;
 }
 
-/** Optional TCP port: unset or empty disables the feature; anything else must be a valid port. */
-function optionalPortEnvironment(name: string): number | undefined {
-  const raw = process.env[name];
-  if (raw === undefined || raw.length === 0) return undefined;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
-    throw new Error(`${name} must be an integer from 1 through 65535`);
-  }
-  return value;
-}
-
 function positiveIntegerEnvironment(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? String(fallback));
   if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
@@ -57,17 +48,22 @@ export async function main(): Promise<void> {
   // disables token auth entirely; a malformed digest fails boot fast.
   const ingestTokenHash = parseIngestTokenHash(process.env.DUMP_LEDGER_INGEST_TOKEN_HASH);
   const maxConcurrentUploads = positiveIntegerEnvironment("DUMP_LEDGER_MAX_CONCURRENT_UPLOADS", 2);
+  const uploadTimeouts = validateUploadTimeouts({
+    idleMs: positiveIntegerEnvironment("DUMP_LEDGER_UPLOAD_IDLE_TIMEOUT_MS", DEFAULT_UPLOAD_TIMEOUTS.idleMs),
+    totalMs: positiveIntegerEnvironment("DUMP_LEDGER_UPLOAD_TOTAL_TIMEOUT_MS", DEFAULT_UPLOAD_TIMEOUTS.totalMs),
+  });
   const postProcessingCapacity = positiveIntegerEnvironment("DUMP_LEDGER_POST_PROCESSING_QUEUE", 128);
   const postProcessingAttempts = positiveIntegerEnvironment("DUMP_LEDGER_POST_PROCESSING_ATTEMPTS", 5);
   const retentionIntervalMs = positiveIntegerEnvironment("DUMP_LEDGER_RETENTION_INTERVAL_MS", 60_000);
   const retentionBatchSize = positiveIntegerEnvironment("DUMP_LEDGER_RETENTION_BATCH_SIZE", 32);
   const https = process.env.DUMP_LEDGER_HTTPS === "true";
   const host = process.env.DUMP_LEDGER_HOST ?? "127.0.0.1";
-  // Dedicated symsrv listener (docs/security-model.md, "Dedicated symbols
-  // listener"): plain HTTP, unauthenticated read-only, disabled unless a
-  // port is configured.
-  const symbolsPort = optionalPortEnvironment("DUMP_LEDGER_SYMBOLS_PORT");
-  const symbolsHost = process.env.DUMP_LEDGER_SYMBOLS_HOST ?? "0.0.0.0";
+  const trustedProxies = https ? trustedProxyAddresses(process.env.DUMP_LEDGER_TRUSTED_PROXIES) : [];
+  const symbolsConfig = symbolsListenerConfig(process.env);
+  const symbolsTls = symbolsConfig?.tls === undefined ? undefined : {
+    cert: readFileSync(symbolsConfig.tls.certFile),
+    key: readFileSync(symbolsConfig.tls.keyFile),
+  };
   if (!https && host !== "127.0.0.1" && host !== "::1" && host !== "localhost") {
     throw new Error("non-loopback listening requires DUMP_LEDGER_HTTPS=true behind a trusted HTTPS endpoint");
   }
@@ -111,11 +107,11 @@ export async function main(): Promise<void> {
   const transferExportsDir = join(dataRoot, "exports");
   const transfer = new TransferManager({ engine, vault, exportsDir: transferExportsDir });
   const application = new EngineHttpApplication(engine, vault);
-  const symbolsListener = symbolsPort === undefined
+  const symbolsListener = symbolsConfig === undefined
     ? undefined
     : buildSymbolsListener({
         openArtifact: (name, id) => application.openSymbolArtifact(name, id),
-      });
+      }, symbolsTls);
   const server = buildHttpServer({
     application,
     sessions,
@@ -125,10 +121,9 @@ export async function main(): Promise<void> {
     uploadPostProcessor: postProcessor,
     postProcessingQueue,
     maxConcurrentUploads,
+    uploadTimeouts,
     secureDeployment: https,
-    // DUMP_LEDGER_HTTPS=true asserts a trusted HTTPS endpoint in front; honor
-    // its X-Forwarded-Proto so the Origin check sees the browser's https URL.
-    trustProxy: https,
+    trustedProxies,
     transfer,
     transferExportsDir,
     runtimeJobs: [retentionJob],
@@ -147,10 +142,10 @@ export async function main(): Promise<void> {
   process.once("SIGTERM", () => { void close(); });
   try {
     await server.listen({ host, port });
-    if (symbolsListener !== undefined && symbolsPort !== undefined) {
-      await symbolsListener.listen({ host: symbolsHost, port: symbolsPort });
+    if (symbolsListener !== undefined && symbolsConfig !== undefined) {
+      await symbolsListener.listen({ host: symbolsConfig.host, port: symbolsConfig.port });
       process.stdout.write(
-        `DumpLedger symbols listener on http://${symbolsHost}:${symbolsPort} ` +
+        `DumpLedger symbols listener on ${symbolsTls === undefined ? "http" : "https"}://${symbolsConfig.host}:${symbolsConfig.port} ` +
         "(symsrv protocol, unauthenticated read-only)\n",
       );
     }

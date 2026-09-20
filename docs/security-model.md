@@ -24,7 +24,7 @@ download gating, audit rows, startup reconciliation, explicit retention
 scheduling, two-phase deletion, and digest-only CI symbol-ingest tokens
 ("CI symbol-ingest tokens" below).
 
-This is not yet an internet-deployment approval. DumpLedger does not terminate
+This is not yet an internet-deployment approval. The operator API does not terminate
 TLS; a trusted reverse proxy and its network controls must be configured and
 tested. Rate-limit state is process-local and resets on restart. Automatic
 coverage-specific retention defaults, coordinated vault backup/restore and
@@ -103,6 +103,20 @@ overflow checks.
 - Protect state-changing operator requests against CSRF.
 - Apply request-header, idle, and total-duration timeouts that still permit
   expected full-memory upload sizes.
+- Dump and symbol streams enforce 60-second idle and one-hour total deadlines
+  by default, configured with `DUMP_LEDGER_UPLOAD_IDLE_TIMEOUT_MS` and
+  `DUMP_LEDGER_UPLOAD_TOTAL_TIMEOUT_MS` (positive milliseconds, at most
+  2147483647). A timeout aborts the pipeline and closes its HTTP socket;
+  normal failure cleanup removes staging and releases dump admission. A
+  trickle resets only the idle deadline, and consumed grant slots are not
+  restored. Socket/request timeouts also protect reception before handlers;
+  header reception is bounded to at most 60 seconds.
+- HTTPS mode trusts forwarded headers only from explicit proxy addresses,
+  defaulting to `127.0.0.1` and `::1`. `DUMP_LEDGER_TRUSTED_PROXIES` accepts
+  comma-separated IP addresses or nonzero CIDRs, never blanket boolean trust.
+  The nearest untrusted address determines the rate-limit key. Trusted proxies
+  must overwrite protocol/host and either replace the forwarded-for chain or
+  append the real peer; merely preserving attacker-controlled headers is unsafe.
 - Rate-limit grant verification independently from bulk upload bandwidth.
 - Do not load third-party scripts, fonts, analytics, or content on pages that
   contain a grant secret or dump metadata.
@@ -125,6 +139,12 @@ overflow checks.
 - Reject any referenced range outside the sealed file.
 - Bound stream count, module count, thread count, string length, and derived
   metadata size independently of the upload limit.
+- Module metadata has a 4 MiB aggregate budget, charged before variable-length
+  reads/decoding using worst-case JSON escaping and fixed-field reservations.
+  Every reference consumes budget even when multiple modules alias the same
+  name or CodeView RVA. Budget exhaustion rejects inspection; the best-effort
+  CodeView parser cannot swallow it. This prevents a small dump from producing
+  hundreds of MiB of repeated metadata in SQLite and later ledger snapshots.
 - Parse through random-access reads; never allocate based only on an untrusted
   count.
 - Do not execute debuggers, symbol extensions, binaries, scripts, or commands
@@ -173,8 +193,8 @@ operator session. The token is bearer-equivalent and deliberately narrow.
   `ingestAuth: "token"` for a pipeline and `"operator"` for an interactive
   session (`null` for transfer-imported artifacts, which have no HTTP auth
   channel) — so token ingests are distinguishable from interactive ones.
-- **Unchanged ingest discipline.** Kind-by-suffix, the mid-stream ceiling, the
-  single-ingest guard, and identity parsed from bytes (never from uploader
+- **Unchanged ingest discipline.** Kind-by-suffix, the mid-stream ceiling,
+  upload deadlines, and identity parsed from bytes (never from uploader
   input) apply identically on both channels.
 - **Rotation.** Generate a new token, replace the configured hash, and restart
   the process. There is no stateful revocation list; a replaced digest retires
@@ -188,7 +208,7 @@ surface (implemented 2026-09-18; design decision D1 is unchanged).
 
 - **Disabled by default.** The listener exists only while
   `DUMP_LEDGER_SYMBOLS_PORT` carries a valid port
-  (`DUMP_LEDGER_SYMBOLS_HOST` selects the bind address, default `0.0.0.0`).
+  (`DUMP_LEDGER_SYMBOLS_HOST` selects the bind address, default `127.0.0.1`).
   Unset or empty starts no second socket at all.
 - **Unauthenticated read-only by design.** symsrv.dll cannot present
   credentials; the listener serves nothing but immutable symbol bytes and
@@ -205,21 +225,28 @@ surface (implemented 2026-09-18; design decision D1 is unchanged).
   from a local directory store or a separate `.sympath`; Microsoft traffic
   never transits this socket. That fits the unauthenticated read-only
   design: the listener serves only DumpLedger artifacts.
-- **Plain HTTP by design.** symsrv.dll only trusts server certificates
-  chaining to a trusted root on the analysis machine; a self-signed proxy
-  cert made the shared HTTPS route friction for CDB. The dedicated listener
-  is therefore plain HTTP, which is acceptable precisely because it
-  authenticates nothing and serves public-to-the-LAN bytes: the threat model
-  for this socket is disclosure of build identities (accepted by D1) and
-  tampering on the wire, mitigated by symbol identity being content-keyed —
-  a wrong-byte artifact cannot satisfy a GUID+age query for the right one,
-  and debuggers hash-check downloaded PDBs against the debug directory.
-  Keep the port on the analysis LAN; do not expose it untrusted networks,
-  and front it with an IP allowlist where the LAN is not already trusted.
-- **Availability isolation.** Debugger fetch patterns (many serial requests)
-  cannot starve the operator API: the listener is a separate socket with its
-  own connection pool, and it does no rate limiting, logging, or audit per
-  fetch.
+- **Authenticated transport for remote access.** Non-loopback binds require
+  `DUMP_LEDGER_SYMBOLS_TLS_CERT` and `DUMP_LEDGER_SYMBOLS_TLS_KEY`, paths to
+  PEM certificate-chain and private-key files. The dedicated listener then
+  terminates TLS 1.2 or newer. Analyst machines must trust the issuing CA;
+  certificate validation must not be disabled. Plain HTTP is allowed only on
+  literal `127.0.0.1` or `::1`, for local debuggers, a local TLS proxy, or an
+  authenticated tunnel. The operator API's `DUMP_LEDGER_HTTPS` assertion does
+  not authorize a plaintext network symbol listener. Existing network binds
+  without TLS fail startup and must be reconfigured before upgrading.
+- **Identity is not authenticity.** PDB GUID/age and image timestamp/size are
+  lookup fields that can remain unchanged when other bytes change. The stored
+  SHA-256 is not an independently authenticated client-side trust anchor.
+  Microsoft documents that public and private PDB variants can share signature
+  and age ([Using SymStore](https://learn.microsoft.com/en-us/windows/win32/debug/using-symstore)).
+  Identity matching therefore cannot replace TLS or a protected tunnel against
+  on-path substitution. The earlier plaintext-LAN exception is superseded.
+- **Shared availability boundary.** The sockets share a process, event loop,
+  filesystem, and ledger. A separate listener does not isolate resource
+  exhaustion. Symbol requests have 60-second request/socket-idle limits;
+  deployment network controls must still bound connection and bandwidth abuse.
+  Keep remote symbol access on the analysis network and use an IP allowlist
+  where that network is not fully trusted.
 
 ### Full-memory handling
 

@@ -43,9 +43,27 @@ The dump bytes are never stored in SQLite. SQLite contains metadata and
 associations; the vault contains immutable dump objects addressed by opaque
 dump identifiers.
 
-DumpLedger does not currently terminate TLS itself. `DUMP_LEDGER_HTTPS=true`
+The operator API requires an external TLS endpoint. `DUMP_LEDGER_HTTPS=true`
 enables secure-cookie/HSTS behavior and asserts that a trusted HTTPS endpoint
-is in front of the process; it is not a TLS implementation.
+is in front of that API; it does not enable TLS on the API socket. The optional
+dedicated symbol listener supports its own TLS certificates (below).
+
+In HTTPS mode, forwarded headers are trusted only from `127.0.0.1` and `::1`
+by default. Set `DUMP_LEDGER_TRUSTED_PROXIES` to a comma-separated list of
+proxy IP addresses or narrow CIDRs for a different topology; an empty value
+trusts none. The proxy must overwrite `X-Forwarded-Proto` and
+`X-Forwarded-Host`, and overwrite `X-Forwarded-For` with the client address or
+append the actual peer address. Never forward an unchecked client-supplied
+chain unchanged. Keep the API socket inaccessible except through the proxy.
+
+Dump and symbol uploads default to a 60-second idle deadline and a one-hour
+total deadline. Configure `DUMP_LEDGER_UPLOAD_IDLE_TIMEOUT_MS` and
+`DUMP_LEDGER_UPLOAD_TOTAL_TIMEOUT_MS` in milliseconds for large/slow transfers
+(positive integers through 2147483647; zero cannot disable them). A trickle
+does not reset the total deadline. Expiry closes the connection, removes
+staging bytes, and releases upload admission; a consumed grant slot stays
+consumed. These values also bound HTTP socket idle time and request reception;
+headers have a maximum 60-second deadline, shortened by a smaller total limit.
 
 ## Implementation status
 
@@ -75,7 +93,7 @@ until that work is performed as one reviewed change.
 Deferred before a production release:
 
 - selection of the repository's open-source license;
-- in-process TLS termination or a packaged, verified reverse-proxy setup;
+- operator-API TLS termination or a packaged, verified reverse-proxy setup;
 - automatic coverage-specific retention defaults;
 - coordinated vault copy, restore verification, and tombstone replay;
 - grant-key rotation, local operator import, Windows service/installer
@@ -147,10 +165,22 @@ export DUMP_LEDGER_INGEST_TOKEN_HASH='<64 lowercase hex characters>'
 ```
 
 Debuggers can fetch symbols without touching the operator surface: set
-`DUMP_LEDGER_SYMBOLS_PORT` (optionally `DUMP_LEDGER_SYMBOLS_HOST`, default
-`0.0.0.0`) to start a dedicated, unauthenticated, read-only symsrv listener
-over plain HTTP. The working symbol path is the single-store form
-`.sympath SRV*C:\symcache*http://<host>:<port>/symbols`: `symsrv.dll`
+`DUMP_LEDGER_SYMBOLS_PORT` to start a dedicated, unauthenticated, read-only
+symsrv listener. Its default bind is **127.0.0.1**, for local debugger access
+over HTTP. Remote access requires trusted HTTPS or an authenticated tunnel.
+To bind on a network interface, set `DUMP_LEDGER_SYMBOLS_HOST` and both
+`DUMP_LEDGER_SYMBOLS_TLS_CERT` (PEM certificate chain file) and
+`DUMP_LEDGER_SYMBOLS_TLS_KEY` (PEM private key file). The listener then uses
+TLS 1.2 or newer. Install the issuing CA on analyst machines so certificate
+validation succeeds. A non-loopback bind without both files fails startup;
+`DUMP_LEDGER_HTTPS=true` cannot override that check.
+
+Alternatively, keep the symbol socket on loopback behind a local TLS proxy
+or an authenticated tunnel. Symbol GUID/age and image timestamp/size are
+lookup metadata, not cryptographic authentication of the downloaded bytes.
+
+The remote symbol path is the single-store form
+`.sympath SRV*C:\symcache*https://<host>:<port>/symbols`: `symsrv.dll`
 accepts at most one HTTP store, and it must be the last store in the path —
 a second HTTP store (for example Microsoft's public server) makes it reject
 the whole path with "Any HTTP store must be the last store in the list".
@@ -161,12 +191,11 @@ PDBs ahead of it, or swap `.sympath` when OS frames matter. Leaving the
 variable unset keeps the listener disabled; see
 [`docs/security-model.md`](docs/security-model.md) for the threat model.
 
-Deployment example: the canonical live deployment sets
-`DUMP_LEDGER_SYMBOLS_PORT='4082'` with host `0.0.0.0`, so local CDB sessions
-use `http://127.0.0.1:4082/symbols` and analyst machines on the LAN use
-`http://192.168.150.219:4082/symbols`; the matching symbol path is
-`.sympath SRV*C:\symcache*http://<host>:4082/symbols`. The port and host are
-just that deployment's choice — any free port works.
+For local CDB, set `DUMP_LEDGER_SYMBOLS_PORT='4082'`, leave the host unset,
+and use `.sympath SRV*C:\symcache*http://127.0.0.1:4082/symbols`.
+**Upgrade note:** deployments previously using `DUMP_LEDGER_SYMBOLS_HOST=0.0.0.0`
+must configure the TLS files or change to loopback and a protected transport
+before restarting. These settings require no ledger migration or vault rewrite.
 
 The default listener is `127.0.0.1:4080` and the default data directory is
 `./data`. The grant key must remain stable across restarts and must be backed up

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Writable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { boundedPipeline, DEFAULT_UPLOAD_TIMEOUTS, type UploadTimeouts } from "./bounded-pipeline.js";
 
 export type IntakeErrorCode =
   | "grant_invalid"
@@ -39,6 +39,7 @@ export interface ReceiveUpload {
   readonly originalName: string;
   readonly contentLength?: bigint;
   readonly bytes: NodeJS.ReadableStream;
+  readonly onTimeout?: () => void;
 }
 
 export interface UploadReceipt {
@@ -54,6 +55,7 @@ export class UploadSession {
   constructor(
     private readonly lifecycle: UploadLifecyclePort,
     private readonly sink: UploadByteSink,
+    private readonly timeouts: UploadTimeouts = DEFAULT_UPLOAD_TIMEOUTS,
   ) {}
 
   async receive(input: ReceiveUpload): Promise<UploadReceipt> {
@@ -93,7 +95,7 @@ export class UploadSession {
     });
 
     try {
-      await pipeline(input.bytes, destination);
+      await boundedPipeline(input.bytes, destination, this.timeouts, input.onTimeout);
       try {
         this.sink.syncAndClose(dumpId);
       } catch (error) {

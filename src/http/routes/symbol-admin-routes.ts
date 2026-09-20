@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Writable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { boundedPipeline } from "../../intake/bounded-pipeline.js";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
@@ -161,8 +161,9 @@ export function registerSymbolAdminRoutes(server: FastifyInstance, ctx: RouteCon
       },
     });
 
+    const uploadSocket = request.raw.socket;
     try {
-      await pipeline(request.body as NodeJS.ReadableStream, destination);
+      await boundedPipeline(request.body as NodeJS.ReadableStream, destination, options.uploadTimeouts, () => { uploadSocket.destroy(); });
     } catch {
       options.application.failSymbolIngest(artifactId);
       return sendError(reply, failed ?? "storage_unavailable");

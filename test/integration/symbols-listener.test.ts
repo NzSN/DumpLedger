@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { get } from "node:https";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 
@@ -18,6 +20,30 @@ const DEBUG_FILE = "electron.pdb";
 const DEBUG_ID = "3A9C1F2E4B5D6789012345678ABCDEF1";
 const BYTES = Buffer.from("fake-pdb-bytes-for-the-listener-test");
 const IMMUTABLE = "public, max-age=31536000, immutable";
+
+test("TLS symbols listener requires client certificate trust and serves verified HTTPS bytes", async t => {
+  const tls = {
+    cert: readFileSync("test/fixtures/tls/localhost-cert.pem"),
+    key: readFileSync("test/fixtures/tls/localhost-key.pem"),
+  };
+  const server = buildSymbolsListener({ openArtifact: () => ({ byteSize: BigInt(BYTES.length), stream: Readable.from(BYTES) }) }, tls);
+  await server.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => server.close());
+  const address = server.server.address();
+  assert.ok(address !== null && typeof address === "object");
+  const url = `https://127.0.0.1:${address.port}/symbols/${DEBUG_FILE}/${DEBUG_ID}/${DEBUG_FILE}`;
+  const download = (ca?: Buffer): Promise<Buffer> => new Promise((resolve, reject) => {
+    get(url, ca === undefined ? {} : { ca }, response => {
+      assert.equal(response.statusCode, 200);
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve(Buffer.concat(chunks)));
+      response.on("error", reject);
+    }).on("error", reject);
+  });
+  await assert.rejects(download(), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" });
+  assert.deepEqual(await download(tls.cert), BYTES);
+});
 
 async function withListener(
   run: (baseUrl: string, seen: string[]) => Promise<void>,

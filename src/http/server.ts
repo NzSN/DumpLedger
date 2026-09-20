@@ -20,6 +20,7 @@ import { FixedWindowRateLimiter } from "../auth/rate-limiter.js";
 import { OperatorSessions } from "../auth/sessions.js";
 import type { SymbolIngestAuthChannel } from "../domain/lifecycle.js";
 import { UploadAdmission } from "../intake/upload-admission.js";
+import { DEFAULT_UPLOAD_TIMEOUTS, validateUploadTimeouts, type UploadTimeouts } from "../intake/bounded-pipeline.js";
 import type { UploadPostProcessor } from "../intake/intake-facade.js";
 import type { PostProcessingQueue } from "../intake/post-processing-queue.js";
 import { UploadSession, type UploadByteSink, type UploadLifecyclePort } from "../intake/upload-session.js";
@@ -116,19 +117,18 @@ export interface HttpServerOptions {
   readonly postProcessingQueue?: PostProcessingQueue;
   readonly uploadAdmission?: UploadAdmission;
   readonly maxConcurrentUploads?: number;
+  readonly uploadTimeouts?: UploadTimeouts;
   readonly loginRateLimiter?: FixedWindowRateLimiter;
   readonly uploadGrantRateLimiter?: FixedWindowRateLimiter;
   readonly secureDeployment?: boolean;
   /**
-   * Trust X-Forwarded-Proto/Host from the immediately connected peer (design
-   * section 7.2's trusted reverse proxy). Required in the production topology
-   * where the proxy terminates TLS: without it `request.protocol` is `http`
-   * and the Origin defense-in-depth check rejects every browser mutation,
-   * since the browser's origin is `https://`. Enable only when the process
-   * is reachable solely through that proxy (the HTTPS assertion in main.ts
-   * keeps the listener on loopback unless the operator overrides it).
+   * Explicit proxy IP/CIDR allowlist. Empty/absent trusts no forwarding
+   * headers. Fastify stops at the nearest untrusted address in the chain;
+   * never enable blanket boolean trust, which lets a client-supplied prefix
+   * change the IP used for rate limiting. Proxies must overwrite proto/host
+   * and append the real peer to X-Forwarded-For (or overwrite it entirely).
    */
-  readonly trustProxy?: boolean;
+  readonly trustedProxies?: readonly string[];
   /**
    * Transfer manager backing the import/export operations routes
    * (import/export design, "HTTP and UI surface"), plus the exports directory
@@ -171,8 +171,17 @@ const PRODUCTION_CSP = [
 ].join("; ");
 
 export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
-  const server = Fastify({ logger: false, bodyLimit: 16 * 1024, trustProxy: options.trustProxy ?? false, routerOptions: { maxParamLength: 512 } });
-  const upload = new UploadSession(options.uploadLifecycle, options.uploadSink);
+  const timeouts = validateUploadTimeouts(options.uploadTimeouts ?? DEFAULT_UPLOAD_TIMEOUTS);
+  const server = Fastify({
+    logger: false,
+    bodyLimit: 16 * 1024,
+    trustProxy: options.trustedProxies === undefined ? false : [...options.trustedProxies],
+    connectionTimeout: timeouts.idleMs,
+    requestTimeout: timeouts.totalMs,
+    routerOptions: { maxParamLength: 512 },
+  });
+  server.server.headersTimeout = Math.min(60_000, timeouts.totalMs);
+  const upload = new UploadSession(options.uploadLifecycle, options.uploadSink, timeouts);
   const now = options.now ?? Date.now;
   const uploadAdmission = options.uploadAdmission ?? new UploadAdmission(options.maxConcurrentUploads ?? 2);
   const loginRateLimiter = options.loginRateLimiter ?? new FixedWindowRateLimiter({ limit: 10, windowMs: 5 * 60_000, maxKeys: 2_048, now });

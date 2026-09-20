@@ -127,12 +127,13 @@ Delivered:
 - security headers and rejection of non-loopback listening unless the operator
   asserts a secure deployment.
 
-The rate limiters are process-local and reset on restart. Actual TLS
-termination is not implemented: non-loopback service requires a trusted HTTPS
-reverse proxy, and `DUMP_LEDGER_HTTPS=true` only selects secure-cookie/HSTS
-behavior. Proxy configuration, end-to-end TLS validation, request-duration
-timeouts, storage-exhaustion drills, and resumable multi-gigabyte uploads remain
-release work.
+The rate limiters are process-local and reset on restart. The operator API
+requires a trusted HTTPS reverse proxy for non-loopback service;
+`DUMP_LEDGER_HTTPS=true` only selects secure-cookie/HSTS behavior. Security
+hardening adds an explicit proxy address allowlist, upload idle/total deadlines,
+and native TLS for non-loopback dedicated symbol listeners. Deployment-specific
+proxy configuration and end-to-end TLS validation, storage-exhaustion drills,
+and resumable multi-gigabyte uploads remain release work.
 
 ## M4 — Retention, purge, and operations: partially implemented
 

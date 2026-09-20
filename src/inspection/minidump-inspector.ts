@@ -13,6 +13,11 @@ const MAX_STRING_BYTES = 65_536;
 const MAX_SINGLE_READ = 65_536;
 /** Cap on how much of a module's CvRecord is read for linkage facts. */
 const MAX_MODULE_CV_RECORD_BYTES = 65_536;
+// Bound the aggregate output BEFORE reading/decoding variable-length fields.
+// Charge every reference, including aliases of the same RVA. JSON can expand
+// a UTF-16 code unit to six ASCII bytes; CodeView UTF-8 needs at most six per
+// input byte. Fixed fields and property names have a separate reservation.
+const MAX_MODULE_METADATA_BYTES = 4 * 1024 * 1024;
 /** `MINIDUMP_MODULE.CvRecord`: `DataSize` at +76, `Rva` at +80. */
 const MODULE_CV_DATA_SIZE_OFFSET = 76;
 const MODULE_CV_RVA_OFFSET = 80;
@@ -97,6 +102,15 @@ class InspectionFailure extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+class MetadataBudget {
+  private remaining = MAX_MODULE_METADATA_BYTES - 1024;
+
+  consume(bytes: number): void {
+    if (bytes > this.remaining) fail("resource-limit", "aggregate module metadata exceeds its byte budget");
+    this.remaining -= bytes;
   }
 }
 
@@ -354,6 +368,8 @@ function inspectModules(source: RandomAccessSource, entry: DirectoryEntry): read
   );
 
   const modules: ModuleFact[] = [];
+  const budget = new MetadataBudget();
+  budget.consume(count * 256);
   for (let index = 0; index < count; index += 1) {
     const offset = checkedAdd(
       entry.rva,
@@ -362,8 +378,8 @@ function inspectModules(source: RandomAccessSource, entry: DirectoryEntry): read
     );
     const descriptor = readExact(source, offset, 108, "module descriptor");
     const nameRva = descriptor.readUInt32LE(20);
-    const name = nameRva === 0 ? undefined : readMinidumpString(source, BigInt(nameRva));
-    const identity = readCodeViewIdentity(source, descriptor);
+    const name = nameRva === 0 ? undefined : readMinidumpString(source, BigInt(nameRva), budget);
+    const identity = readCodeViewIdentity(source, descriptor, budget);
     modules.push({
       ...(name === undefined ? {} : { name }),
       baseOfImage: descriptor.readBigUInt64LE(0),
@@ -381,20 +397,23 @@ function inspectModules(source: RandomAccessSource, entry: DirectoryEntry): read
  * Best-effort linkage facts for one module: read up to 64 KiB of the declared
  * CvRecord and parse its RSDS identity.
  *
- * Identity extraction is deliberately isolated from the structural strictness
- * of the rest of the inspector -- a dump must not be rejected over symbol
- * metadata -- so every failure (absent, out-of-range or truncated record,
- * non-RSDS bytes) drops `debugFile`/`debugId` for this module only.
+ * Unusable identities (absent, out-of-range or truncated records, non-RSDS
+ * bytes) drop `debugFile`/`debugId` for this module only. Aggregate resource
+ * exhaustion remains a rejection, just like other structural resource limits.
  */
-function readCodeViewIdentity(source: RandomAccessSource, descriptor: Buffer): PdbIdentity | undefined {
+function readCodeViewIdentity(source: RandomAccessSource, descriptor: Buffer, budget: MetadataBudget): PdbIdentity | undefined {
   const dataSize = descriptor.readUInt32LE(MODULE_CV_DATA_SIZE_OFFSET);
   const rva = descriptor.readUInt32LE(MODULE_CV_RVA_OFFSET);
   if (rva === 0 || dataSize === 0) return undefined;
+  const length = Math.min(dataSize, MAX_MODULE_CV_RECORD_BYTES);
+  // Exhaustion is a structural resource failure, never swallowed by the
+  // best-effort identity parser below (even malformed records consume work).
+  budget.consume(length * 6);
   try {
     const record = readExact(
       source,
       BigInt(rva),
-      Math.min(dataSize, MAX_MODULE_CV_RECORD_BYTES),
+      length,
       "module CodeView record",
     );
     return parseRsdsCodeViewRecord(record);
@@ -403,7 +422,7 @@ function readCodeViewIdentity(source: RandomAccessSource, descriptor: Buffer): P
   }
 }
 
-function readMinidumpString(source: RandomAccessSource, rva: bigint): string {
+function readMinidumpString(source: RandomAccessSource, rva: bigint, budget: MetadataBudget): string {
   const byteLength = readExact(source, rva, 4, "module name length").readUInt32LE(0);
   if (byteLength > MAX_STRING_BYTES) {
     fail("resource-limit", `module name length ${byteLength} exceeds ${MAX_STRING_BYTES}`);
@@ -412,6 +431,7 @@ function readMinidumpString(source: RandomAccessSource, rva: bigint): string {
     fail("malformed-stream", "module name has an odd UTF-16 byte length");
   }
   const contentsRva = checkedAdd(rva, 4n, "module name offset");
+  budget.consume(byteLength * 3);
   return readExact(source, contentsRva, byteLength, "module name").toString("utf16le");
 }
 

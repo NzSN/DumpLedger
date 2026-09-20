@@ -147,15 +147,16 @@ GET /symbols/:name/:id/:file
   cookies or CSRF headers, so the route is either LAN-open (read-only,
   no listing, nothing but symbol bytes) or fronted by an IP allowlist at the
   TLS proxy. The security model section records the decision explicitly.
-- HTTPS caveat: `symsrv.dll` trusts only certs chaining to a trusted root on
-  the analysis machine. Options: import the proxy's self-signed cert into
-  the analyst box's root store, or serve this route plain-HTTP on the LAN
-  interface. Both are documented; the route itself is transport-agnostic.
-  **Resolved 2026-09-18 by the dedicated symbols listener**
-  (`DUMP_LEDGER_SYMBOLS_PORT`, default off): the same store on a separate,
-  plain-HTTP, read-only socket whose only route is the store path (see
-  security-model.md, "Dedicated symbols listener"). The shared HTTPS route
-  remains for symmetry.
+- Transport: `symsrv.dll` must trust the certificate's issuing CA on the
+  analysis machine. The optional dedicated listener (`DUMP_LEDGER_SYMBOLS_PORT`,
+  default off) defaults to loopback HTTP for local access. A non-loopback bind
+  requires PEM files in `DUMP_LEDGER_SYMBOLS_TLS_CERT` and
+  `DUMP_LEDGER_SYMBOLS_TLS_KEY` and enables TLS 1.2 or newer. A local TLS proxy
+  or authenticated tunnel may instead protect the loopback listener. The
+  shared operator HTTPS route remains available. The 2026-09-20 security review
+  supersedes the earlier plaintext-LAN exception: GUID/age and timestamp/size
+  do not cryptographically authenticate bytes (see security-model.md,
+  "Dedicated symbols listener").
 
 ## Dump ↔ symbol linkage
 

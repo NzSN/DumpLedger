@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { aliasedModules } from "../fixtures/minidump/aliased-modules.js";
 
 import {
   BufferRandomAccessSource,
@@ -16,6 +17,30 @@ const inspector = new MinidumpInspector();
 function inspect(bytes: Buffer) {
   return inspector.inspect(new BufferRandomAccessSource(bytes));
 }
+
+for (const field of ["name", "codeview"] as const) {
+  test(`rejects aliased ${field} amplification before reading the aggregate payload`, () => {
+    const bytes = aliasedModules(field);
+    let payloadReads = 0;
+    const result = inspector.inspect({
+      size: BigInt(bytes.length),
+      readAt(offset, length) {
+        if (length === 65_536) payloadReads += 1;
+        return bytes.subarray(Number(offset), Number(offset) + length);
+      },
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, "resource-limit");
+    assert.ok(payloadReads > 0 && payloadReads < 32, `read ${payloadReads} aliased fields`);
+  });
+}
+
+test("accepts small alias sets within the aggregate metadata budget", () => {
+  const result = inspect(aliasedModules("name", 2));
+  assert.ok(result.ok);
+  assert.equal(result.facts.modules?.length, 2);
+  assert.equal(result.facts.modules?.[0]?.name?.length, 32_768);
+});
 
 test("classifies selected MemoryList bytes as partial", () => {
   const result = inspect(syntheticMinidump({ memoryListSizes: [3, 5] }));

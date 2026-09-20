@@ -80,12 +80,14 @@ export function registerUploadRoutes(server: FastifyInstance, ctx: RouteContext)
       reply.header("Retry-After", "5");
       return sendError(reply, "upload_busy");
     }
+    const uploadSocket = request.raw.socket;
     try {
       const receipt = await upload.receive({
         grantSecret,
         originalName,
         ...(contentLength === undefined ? {} : { contentLength }),
         bytes: request.body as NodeJS.ReadableStream,
+        onTimeout: () => { uploadSocket.destroy(); },
       });
       let phase: "sealed" | "available" | "rejected" = "sealed";
       if (options.uploadPostProcessor !== undefined) {

@@ -37,10 +37,12 @@ trusted reverse proxy
 
 The TypeScript build emits JavaScript run by Node.js. HTML, CSS, and the small
 upload script are served by the same Fastify process, so there is no separate
-frontend process or database daemon. TLS termination is not implemented in
-DumpLedger: a non-loopback deployment requires a trusted HTTPS endpoint in
-front of it. `DUMP_LEDGER_HTTPS=true` selects secure-cookie/HSTS behavior and
-is an operator assertion about that endpoint, not proof that TLS exists.
+frontend process or database daemon. The operator API requires a trusted HTTPS
+endpoint in front of non-loopback deployments. `DUMP_LEDGER_HTTPS=true` selects
+secure-cookie/HSTS behavior and is an operator assertion about that endpoint,
+not proof that TLS exists. Forwarding trust is restricted to configured proxy
+addresses. The optional dedicated symbol listener can terminate TLS itself;
+its plaintext mode is confined to loopback (see `docs/security-model.md`).
 
 ## Module design
 

@@ -216,7 +216,7 @@ test("authenticated mutations reject foreign origins and cross-site fetch metada
 });
 
 test("authenticated mutations accept the browser HTTPS origin behind a trusted TLS proxy", async t => {
-  const { server, cleanup } = await makeFixture({ trustProxy: true });
+  const { server, cleanup } = await makeFixture({ trustedProxies: ["127.0.0.1", "::1"] });
   t.after(cleanup);
   const auth = await loginJson(server);
   const headers = { cookie: auth.cookie, "content-type": "application/json", "x-csrf-token": auth.csrf, host: "ledger.example" };
@@ -236,7 +236,7 @@ test("authenticated mutations accept the browser HTTPS origin behind a trusted T
 });
 
 test("authenticated mutations keep rejecting foreign origins behind a trusted proxy", async t => {
-  const { server, cleanup } = await makeFixture({ trustProxy: true });
+  const { server, cleanup } = await makeFixture({ trustedProxies: ["127.0.0.1", "::1"] });
   t.after(cleanup);
   const auth = await loginJson(server);
   const headers = { cookie: auth.cookie, "content-type": "application/json", "x-csrf-token": auth.csrf, host: "ledger.example" };
