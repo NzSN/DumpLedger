@@ -178,6 +178,31 @@ The first release contains only these pages:
 The case detail page is the home screen for an investigation. A separate
 general-purpose project board is deliberately absent.
 
+### Theming
+
+The interface ships two palettes over one token set
+(`frontend/src/styles/tokens.css`): the dark "evidence vault" identity it
+launched with, and a light theme for bright desktops. Every colour the
+interface paints resolves through a token, so switching themes is one
+attribute on the document root (`data-theme="light" | "dark"`) and nothing
+else changes.
+
+- The header carries a `Theme` control with three preferences: **System** (the
+  default, following `prefers-color-scheme` and re-resolving live when the OS
+  flips), **Light**, and **Dark**. Operator and public chrome both carry it.
+- An explicit choice is stored in `localStorage` under `dump-ledger.theme`;
+  picking System clears the key so the OS decides again. Blocked storage
+  degrades to the in-memory choice for that session.
+- `frontend/src/shared/theme.ts` resolves and applies the theme before React's
+  first render (called from `main.tsx`), and keeps the `theme-color` meta in
+  step. It is part of the module graph rather than an inline snippet in the
+  HTML shell because the production CSP admits same-origin scripts only
+  (`docs/security-model.md`).
+- Filled shapes (primary buttons, the copy-confirmation chip, the health-ok
+  badge) paint with `*-solid` tokens that keep a fixed dark ink in both
+  palettes; text, icons, and borders paint with the matching ink token. A new
+  colour that bypasses the tokens is the one way to break a theme.
+
 ## Case and dump states
 
 Case status:

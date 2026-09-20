@@ -17,6 +17,7 @@ import {
   SiteFooter,
 } from "../shared/components/navigation";
 import { Notice } from "../shared/components/notice";
+import { ThemeToggle } from "../shared/components/theme-toggle";
 import { errorText, HttpRequestError } from "../shared/http-client";
 import { useSession } from "./SessionProvider";
 
@@ -47,8 +48,11 @@ function OperatorHeader(): ReactNode {
     <>
       <header className="topbar">
         <Brand href="/" />
-        <PrimaryNav />
-        <SignOutButton onSignOut={() => void handleSignOut()} pending={signingOut} />
+        <div className="topbar-actions">
+          <PrimaryNav />
+          <ThemeToggle />
+          <SignOutButton onSignOut={() => void handleSignOut()} pending={signingOut} />
+        </div>
       </header>
       {signOutError !== null && (
         <div className="header-error">
@@ -88,7 +92,10 @@ export function PublicLayout({ children }: { readonly children: ReactNode }): Re
       <div className="ambient ambient-two" aria-hidden="true" />
       <header className="topbar">
         <Brand href="/login" />
-        <PublicTrustChip />
+        <div className="topbar-actions">
+          <PublicTrustChip />
+          <ThemeToggle />
+        </div>
       </header>
       <main id="content" className="page-frame">
         {children}

@@ -35,7 +35,7 @@ describe("keyboard navigation", () => {
     capture();
     expect(order[0]).toBe("Skip to content");
 
-    // Brand link, then the two primary nav links, then sign out.
+    // Brand link, then the primary nav links, the theme control, then sign out.
     await user.tab();
     capture();
     expect(order[1]).toContain("DumpLedger");
@@ -53,7 +53,10 @@ describe("keyboard navigation", () => {
     expect(order[5]).toBe("Symbols");
     await user.tab();
     capture();
-    expect(order[6]).toBe("Sign out");
+    expect(order[6]).toBe("Theme");
+    await user.tab();
+    capture();
+    expect(order[7]).toBe("Sign out");
   });
 
   it("signs in entirely from the keyboard (auto-focused field, Enter submits)", async () => {
