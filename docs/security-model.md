@@ -192,7 +192,8 @@ surface (implemented 2026-09-18; design decision D1 is unchanged).
   Unset or empty starts no second socket at all.
 - **Unauthenticated read-only by design.** symsrv.dll cannot present
   credentials; the listener serves nothing but immutable symbol bytes and
-  grammar-validated 404 misses. There is no session surface, no admin
+  uniform 404 misses (a malformed store path and an unknown identity are
+  indistinguishable). There is no session surface, no admin
   surface, and no directory listing — the ingest, list, and purge paths do
   not exist on this socket and answer the same uniform 404 as an unknown
   identity.

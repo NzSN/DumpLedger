@@ -145,12 +145,11 @@ test("unknown artifact, mismatched file, and case-different file are 404 not_fou
   assert.deepEqual(store.calls.slice(callsBeforeMismatches), [["other.pdb", DEBUG_ID, "other.pdb"]]);
 });
 
-test("malformed segments are 400 invalid_request and never reach the store", async (t) => {
+test("malformed segments are uniform 404 misses and never reach the store", async (t) => {
   const { server, store } = makeFixture();
   t.after(async () => { await server.close(); });
 
   const malformed: ReadonlyArray<readonly [string, string]> = [
-    ["lowercase hex id", symbolsUrl(DEBUG_FILE, DEBUG_ID.toLowerCase(), DEBUG_FILE)],
     ["one-character id", symbolsUrl(DEBUG_FILE, "A", DEBUG_FILE)],
     ["oversized id", symbolsUrl(DEBUG_FILE, "A".repeat(65), DEBUG_FILE)],
     ["non-hex id", symbolsUrl(DEBUG_FILE, "Z".repeat(32), DEBUG_FILE)],
@@ -167,18 +166,35 @@ test("malformed segments are 400 invalid_request and never reach the store", asy
 
   for (const [label, url] of malformed) {
     const response = await server.inject({ method: "GET", url });
-    assert.equal(response.statusCode, 400, `${label} must be rejected: ${url}`);
-    assertErrorEnvelope("invalid_request", response.json(), response.headers as Record<string, unknown>);
+    assert.equal(response.statusCode, 404, `${label} must be a miss: ${url}`);
+    assertErrorEnvelope("not_found", response.json(), response.headers as Record<string, unknown>);
   }
   assert.equal(store.calls.length, 0, "malformed paths must not reach the store");
 
-  // Boundary: 255 chars is the last grammar-valid segment length, so it is a
-  // store miss (404), while 256 chars is rejected by the route's own grammar
-  // (the "oversized name" case above).
+  // Boundary: 255 chars is the last grammar-valid segment length; 256 chars is
+  // outside the grammar (the "oversized name" case above). Both are 404.
   const boundaryName = "e".repeat(255);
   const boundary = await server.inject({ method: "GET", url: symbolsUrl(boundaryName, DEBUG_ID, boundaryName) });
   assert.equal(boundary.statusCode, 404);
   assertErrorEnvelope("not_found", boundary.json(), boundary.headers as Record<string, unknown>);
+});
+
+test("id segments match case-insensitively and reach the store uppercase", async (t) => {
+  const { server, store, bytes } = makeFixture();
+  t.after(async () => { await server.close(); });
+
+  // SymSrv spells a PDB debug id uppercase and an image id as an uppercase
+  // `%08X` stamp plus a lowercase `%x` size, so both spellings of the same
+  // identity must serve; the store sees the canonical uppercase key.
+  for (const spelling of [DEBUG_ID.toLowerCase(), "3a9c1f2e4b5d6789012345678abcdeF1"]) {
+    const response = await server.inject({ method: "GET", url: symbolsUrl(DEBUG_FILE, spelling, DEBUG_FILE) });
+    assert.equal(response.statusCode, 200, spelling);
+    assert.ok(response.rawPayload.equals(bytes), `${spelling} must serve the same bytes`);
+  }
+  assert.deepEqual(store.calls, [
+    [DEBUG_FILE, DEBUG_ID, DEBUG_FILE],
+    [DEBUG_FILE, DEBUG_ID, DEBUG_FILE],
+  ]);
 });
 
 test("bare /symbols paths are not handled by this route", async (t) => {

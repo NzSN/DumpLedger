@@ -415,6 +415,15 @@ test("decodeStorePath returns the segments without requiring file === debugFile"
   assert.deepEqual(decodeStorePath("a/AB/b"), { debugFile: "a", debugId: "AB", file: "b" });
 });
 
+test("decodeStorePath accepts ids in either case (the route canonicalizes)", () => {
+  // SymSrv image ids are mixed case (`%08X` stamp + lowercase `%x` size).
+  assert.deepEqual(decodeStorePath("electron.pdb/6a87c949d708000/electron.pdb"), {
+    debugFile: "electron.pdb",
+    debugId: "6a87c949d708000",
+    file: "electron.pdb",
+  });
+});
+
 test("decodeStorePath rejects paths that are not three valid segments", () => {
   const rejected = [
     "",
@@ -424,7 +433,6 @@ test("decodeStorePath rejects paths that are not three valid segments", () => {
     "/electron.pdb/AB/electron.pdb",
     "electron.pdb/AB/electron.pdb/",
     "electron.pdb//electron.pdb",
-    "electron.pdb/ab/electron.pdb", // lowercase id
     "electron.pdb/A/electron.pdb", // one-character id
     "electron.pdb/AB-1/electron.pdb",
     `electron.pdb/${"A".repeat(65)}/electron.pdb`,
@@ -451,10 +459,12 @@ test("encodeStorePath rejects invalid debug files", () => {
   }
 });
 
-test("encodeStorePath rejects debug ids that are not 2..64 uppercase hex characters", () => {
-  for (const debugId of ["", "A", "abcdef", "AB-1", "GG", "A".repeat(65)]) {
+test("encodeStorePath rejects debug ids that are not 2..64 hex characters", () => {
+  for (const debugId of ["", "A", "AB-1", "GG", "A".repeat(65)]) {
     assertInvalidInput(() => encodeStorePath("x.pdb", debugId));
   }
+  // Either case is grammar-valid; the codec keeps what it was given.
+  assert.equal(encodeStorePath("x.pdb", "abcdef"), "x.pdb/abcdef/x.pdb");
 });
 
 test("a parsed PDB identity encodes into a decodable store path", () => {

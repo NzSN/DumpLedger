@@ -121,7 +121,7 @@ const OPTIONAL_HEADER_MIN_BYTES = OPTIONAL_HEADER_SIZE_OF_IMAGE_OFFSET + 4;
 // --- Store path -------------------------------------------------------------
 
 const SEGMENT_MAX_LENGTH = 255;
-const DEBUG_ID_PATTERN = /^[0-9A-F]{2,64}$/;
+const DEBUG_ID_PATTERN = /^[0-9A-Fa-f]{2,64}$/;
 
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -580,7 +580,10 @@ function formatPeCodeId(timestamp: number, sizeOfImage: number): string {
  * Store-path grammar (`GET /symbols/<name>/<id>/<file>`): exactly three
  * "/"-separated segments, each 1..255 characters without control characters,
  * backslashes, "..", or leading/trailing dots; the id segment must be 2..64
- * uppercase hex characters.
+ * hex characters in either case. SymSrv spells ids case-inconsistently -- a
+ * PDB debug id (GUID+age) is uppercase while an image id is an uppercase
+ * `%08X` stamp followed by a lowercase `%x` size -- so matching is
+ * case-insensitive; the canonical form DumpLedger stores is uppercase.
  *
  * `encodeStorePath` produces `<debugFile>/<debugId>/<debugFile>`;
  * `decodeStorePath` validates and returns the three segments -- it does not
@@ -591,7 +594,7 @@ export function encodeStorePath(debugFile: string, debugId: string): string {
   const fileProblem = storeSegmentProblem(debugFile);
   if (fileProblem !== undefined) throw invalidInput(`debugFile is not a usable store path segment (${fileProblem})`);
   if (!DEBUG_ID_PATTERN.test(debugId)) {
-    throw invalidInput("debugId must be 2..64 uppercase hex characters");
+    throw invalidInput("debugId must be 2..64 hex characters");
   }
   return `${debugFile}/${debugId}/${debugFile}`;
 }

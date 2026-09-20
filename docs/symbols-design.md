@@ -61,8 +61,14 @@ uploader — derives it from artifact bytes:
   byte-order convention (first three components little-endian) followed by
   the age in hex — verified against a live debugger in tests (see test
   plan).
-- **Code identity (EXE, deferred)**: PE header `TimeDateStamp` +
-  `SizeOfImage`, hex-concatenated.
+- **Code identity (EXE)**: PE header `TimeDateStamp` + `SizeOfImage`,
+  hex-concatenated. SymSrv spells the pair `%08X%x` — an uppercase stamp and
+  a lowercase size — so image ids are matched case-insensitively, with the
+  uppercase stored form as the canonical key. An uppercase-only grammar
+  rejected the live request
+  `/symbols/lceda-pro.exe/69F08473d8e7000/lceda-pro.exe` until 2026-09-20,
+  which is why a pass of that date had to take the image from a copy next to
+  the dump instead of from the store.
 - Uploader-supplied fields (product, version, arch, notes) are annotations
   for browsing and filtering; they never participate in resolution.
 
@@ -70,12 +76,17 @@ Read path schema (exact SymSrv convention):
 
 ```text
 GET /symbols/<debug_file>/<debug_id>/<debug_file>
-GET /symbols/<code_file>/<code_id>/<code_file>          (deferred with exe)
+GET /symbols/<code_file>/<code_id>/<code_file>
 ```
 
-Casing is preserved exactly as ingested (Microsoft's servers are
-case-insensitive; some third-party tooling is not — we stay literal). No
-directory listing. A miss is a clean 404, which symsrv reads as "try the
+File names are preserved and matched exactly as ingested (Microsoft's
+servers are case-insensitive; some third-party tooling is not — we stay
+literal), while the `id` segment is matched case-insensitively and
+canonicalized to uppercase, because symsrv spells a PDB debug id uppercase
+and an image id as mixed-case `%08X%x`. No directory listing. Every
+unresolvable store path is a clean 404 — an unknown identity and a segment
+outside the grammar alike, so a request symsrv makes can never be answered
+with a status it does not read as "miss" — which symsrv reads as "try the
 next store": local directory stores that precede the single HTTP store in
 the same path are still consulted, so a pre-populated local directory
 remains a working fallthrough. Two HTTP stores cannot chain — symsrv.dll

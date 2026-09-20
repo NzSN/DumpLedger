@@ -19,12 +19,21 @@ import { sendError } from "../contracts/json.js";
  *   - `name` and `file` are basename-shaped: 1..255 code points, no `/`, no
  *     `\`, no `..` anywhere, no leading or trailing dot (which also rules out
  *     `.` and `..` as whole segments), and no control characters;
- *   - `id` is uppercase hex, 2..64 characters — the SymSrv GUID+age encoding;
+ *   - `id` is 2..64 hex characters in either case — the SymSrv GUID+age or
+ *     image-id encoding; symsrv spells a PDB id uppercase but an image id as
+ *     `%08X` stamp plus lowercase `%x` size, so the segment is matched
+ *     case-insensitively and canonicalized to uppercase before the lookup;
  *   - `file` must equal `name` byte-for-byte (the SymSrv schema repeats the
  *     debug file name in the last segment).
- * Malformed segments are 400 `invalid_request`; a grammar-valid but unknown
- * identity is a clean 404 `not_found` that symsrv reads as "try the next
- * downstream server" (e.g. the Microsoft public server in the same path).
+ * Every request this route cannot serve answers the same 404 `not_found` miss
+ * — an unknown identity and a segment outside the grammar alike — because the
+ * route is symsrv's wire contract, not an operator API: a 404 is what symsrv
+ * reads as "try the next store", and it is the only status the design
+ * documents as a miss. The grammar check still runs first, so nothing
+ * malformed reaches the store or the vault. (Until 2026-09-20 the
+ * uppercase-only grammar answered symsrv's mixed-case image ids -- `%08X`
+ * stamp plus lowercase `%x` size -- with a 400, so the store could never
+ * serve an image.)
  *
  * Hits carry `Cache-Control: public, max-age=31536000, immutable` (artifacts
  * are immutable per identity); every error response goes through the shared
@@ -43,7 +52,7 @@ export interface SymbolArtifactStorePort {
 }
 
 const MAX_SEGMENT_LENGTH = 255;
-const DEBUG_ID_PATTERN = /^[0-9A-F]{2,64}$/;
+const DEBUG_ID_PATTERN = /^[0-9A-Fa-f]{2,64}$/;
 const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 function hasControlCharacter(value: string): boolean {
@@ -74,13 +83,17 @@ export function registerSymbolRoutes(server: FastifyInstance, store: SymbolArtif
     (request, reply) => {
       const { name, id, file } = request.params;
       if (!isBasenameSegment(name) || !isBasenameSegment(file) || !DEBUG_ID_PATTERN.test(id)) {
-        return sendError(reply, "invalid_request");
+        return sendError(reply, "not_found");
       }
       // SymSrv schema: the final segment repeats the debug file name.
       if (file !== name) return sendError(reply, "not_found");
+      // SymSrv id casing differs per identity kind (uppercase PDB GUID+age;
+      // `%08X` + lowercase `%x` for an image). The store's canonical key is
+      // uppercase, so normalize the segment before the lookup.
+      const canonicalId = id.toUpperCase();
       let artifact: ReturnType<SymbolArtifactStorePort["openArtifact"]>;
       try {
-        artifact = store.openArtifact(name, id, file);
+        artifact = store.openArtifact(name, canonicalId, file);
       } catch {
         return sendError(reply, "internal_error");
       }

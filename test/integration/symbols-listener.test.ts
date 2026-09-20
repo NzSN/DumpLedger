@@ -58,10 +58,19 @@ test("symbols listener answers grammar-valid misses and rejects bad grammar", as
     const mismatchedTail = await fetch(`${baseUrl}/symbols/${DEBUG_FILE}/${DEBUG_ID}/other.pdb`);
     assert.equal(mismatchedTail.status, 404);
     const badGrammar = await fetch(`${baseUrl}/symbols/${DEBUG_FILE}/nothex/${DEBUG_FILE}`);
-    assert.equal(badGrammar.status, 400);
+    assert.equal(badGrammar.status, 404);
     // The store was consulted only for the grammar-valid, well-formed miss;
     // the mismatched tail and the bad grammar are rejected before any lookup.
     assert.deepEqual(seen, [`${DEBUG_FILE}/DEADBEEF00`]);
+  });
+});
+
+test("symbols listener canonicalizes id casing before the lookup", async () => {
+  await withListener(async (baseUrl, seen) => {
+    const response = await fetch(`${baseUrl}/symbols/${DEBUG_FILE}/${DEBUG_ID.toLowerCase()}/${DEBUG_FILE}`);
+    assert.equal(response.status, 200);
+    assert.equal(Number(response.headers.get("content-length")), BYTES.byteLength);
+    assert.deepEqual(seen, [`${DEBUG_FILE}/${DEBUG_ID}`]);
   });
 });
 
