@@ -13,6 +13,8 @@ release.
 
 ## Design index
 
+- [`docs/http-api.md`](docs/http-api.md) is the consolidated HTTP API reference:
+  authentication, all endpoints, request/response formats, and errors.
 - [`docs/product-design.md`](docs/product-design.md) defines the product scope,
   domain language, user flows, and minimum interface.
 - [`docs/architecture.md`](docs/architecture.md) defines the module seams,
