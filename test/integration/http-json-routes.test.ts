@@ -794,11 +794,11 @@ test("batch grant: quota progression, sequential uploads, exhaustion, and revoke
   assert.equal(uploadRevoked.statusCode, 404);
   assert.deepEqual(decodeError(uploadRevoked), { code: "grant_unavailable", retryable: false });
 
-  // maxUploads outside 1..16 is rejected at grant creation.
+  // maxUploads outside 1..128 is rejected at grant creation.
   const tooMany = await postJson(server, `/api/v1/cases/${caseId}/grants`, auth.cookie, auth.csrf, {
     validForHours: 24,
     maxBytes: "2048",
-    maxUploads: 17,
+    maxUploads: 129,
   });
   assert.equal(tooMany.statusCode, 400);
   assert.deepEqual(decodeError(tooMany), { code: "invalid_request", retryable: false });

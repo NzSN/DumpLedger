@@ -7,7 +7,7 @@ import { isDebugSymbolArtifact, type AuditEventProjection, type DumpLedgerProjec
 import { applyMigrations } from "./migrations.js";
 
 /** Mirrors the contract cap; kept local so the ledger imports no HTTP module. */
-export const MAX_GRANT_UPLOAD_SLOTS = 16;
+export const MAX_GRANT_UPLOAD_SLOTS = 128;
 
 export interface GrantRecord extends GrantProjection { readonly secretDigest: string }
 export interface ImportCustomerInsert { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string }

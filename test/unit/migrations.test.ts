@@ -65,7 +65,7 @@ test("migration 5 preserves version-4 module and artifact rows and admits the EX
     );
     assert.deepEqual(
       (database.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map(row => row.version),
-      [1, 2, 3, 4, 5],
+      [1, 2, 3, 4, 5, 6],
     );
 
     // The rebuilt shape admits a code identity: an EXE module carries NULL
@@ -106,7 +106,7 @@ test("migration 5 preserves version-4 module and artifact rows and admits the EX
   }
 });
 
-test("an existing version-5 database is left untouched by a second boot", () => {
+test("an existing database is left untouched by a second boot", () => {
   const database = new BetterSqlite3(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -120,6 +120,36 @@ test("an existing version-5 database is left untouched by a second boot", () => 
       [{ artifact_id: "symbol_C", kind: "exe" }],
     );
     assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
+
+test("migration 6 preserves existing grants and widens both slot bounds", () => {
+  const database = new BetterSqlite3(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    applyMigrations(database, 5);
+    database.prepare("INSERT INTO customers(customer_id, display_name, created_at) VALUES (?, ?, ?)").run("customer_A", "A", NOW);
+    database.prepare("INSERT INTO cases(case_id, customer_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)").run("case_A", "customer_A", "Crash", "new", NOW);
+    database.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at, max_uploads, uploads_used) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)")
+      .run("grant_A", "case_A", "secret_A", "issued", NOW, "10737418240", NOW, 16, 7);
+    database.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at, max_uploads, uploads_used) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)")
+      .run("grant_B", "case_A", "secret_B", "consumed", NOW, "1024", NOW, 1, 1);
+    const before = database.prepare("SELECT * FROM upload_grants ORDER BY grant_id").all();
+    assert.throws(() => database.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, created_at, max_uploads, uploads_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("grant_X", "case_A", "secret_X", "issued", NOW, "1", NOW, 128, 0), /CHECK constraint failed/);
+
+    applyMigrations(database);
+
+    assert.deepEqual(database.prepare("SELECT * FROM upload_grants ORDER BY grant_id").all(), before);
+    database.prepare("INSERT INTO upload_grants(grant_id, case_id, secret_digest, state, expires_at, max_bytes, created_at, max_uploads, uploads_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("grant_C", "case_A", "secret_C", "issued", NOW, "1", NOW, 128, 127);
+    database.prepare("UPDATE upload_grants SET uploads_used = 128, state = 'consumed' WHERE grant_id = 'grant_C'").run();
+    assert.throws(() => database.prepare("UPDATE upload_grants SET state = 'issued' WHERE grant_id = 'grant_C'").run(), /grant terminal state is immutable/);
+    assert.throws(() => database.prepare("UPDATE upload_grants SET uploads_used = 129 WHERE grant_id = 'grant_C'").run(), /CHECK constraint failed/);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.deepEqual(database.pragma("integrity_check"), [{ integrity_check: "ok" }]);
   } finally {
     database.close();
   }

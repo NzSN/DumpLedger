@@ -58,16 +58,16 @@ const SYMBOL_GUID_BYTES = Buffer.from([
 const SYMBOL_DEBUG_ID = "0123456789ABCDEF0123456789ABCDEF1";
 const SYMBOL_DEBUG_FILE = "electron.pdb";
 
-/** Minimal synthetic MSF 7.0 container whose stream 1 is one RSDS record. */
-function syntheticPdb(pdbPath = `C:\\build\\${SYMBOL_DEBUG_FILE}`, age = 1): Buffer {
+/** Minimal MSF 7.0 PDB with an Info stream and its block-list directory. */
+function syntheticPdb(age = 1): Buffer {
   const blockSize = 4096;
-  const rsds = Buffer.alloc(4 + 16 + 4 + pdbPath.length + 1);
-  rsds.write("RSDS", 0, "latin1");
-  SYMBOL_GUID_BYTES.copy(rsds, 4);
-  rsds.writeUInt32LE(age, 20);
-  rsds.write(pdbPath, 24, "latin1");
-  const streams = [Buffer.alloc(0), rsds];
-  const directory = Buffer.alloc(4 + streams.length * 4);
+  const info = Buffer.alloc(4 + 4 + 4 + 16);
+  info.writeUInt32LE(20140508, 0);
+  info.writeUInt32LE(0x5dc5d9be, 4);
+  info.writeUInt32LE(age, 8);
+  SYMBOL_GUID_BYTES.copy(info, 12);
+  const streams = [Buffer.alloc(0), info];
+  const directory = Buffer.alloc(4 + streams.length * 4 + 4);
   directory.writeUInt32LE(streams.length, 0);
   streams.forEach((stream, index) => directory.writeUInt32LE(stream.length, 4 + index * 4));
   const streamStartBlocks: number[] = [];
@@ -76,6 +76,7 @@ function syntheticPdb(pdbPath = `C:\\build\\${SYMBOL_DEBUG_FILE}`, age = 1): Buf
     streamStartBlocks.push(nextBlock);
     nextBlock += Math.ceil(stream.length / blockSize);
   }
+  directory.writeUInt32LE(streamStartBlocks[1]!, 4 + streams.length * 4);
   const directoryStartBlock = nextBlock;
   const blockMapStartBlock = directoryStartBlock + 1;
   const numBlocks = blockMapStartBlock + 1;
@@ -246,6 +247,7 @@ test("(b2) one batch grant uploads three dumps through a single link", async ({ 
   expect(caseId).not.toBe("");
   await page.goto(`/cases/${encodeURIComponent(caseId)}`);
   await expect(page.getByRole("heading", { name: "Case detail" })).toBeVisible();
+  await page.getByLabel("Link type").selectOption("batch");
   await page.getByLabel("Dumps allowed").fill("3");
   await page.getByRole("button", { name: "Generate secure link", exact: true }).click();
   const shareInput = page.getByLabel("Shareable upload URL", { exact: true });
@@ -329,7 +331,7 @@ test("(f) operator ingests a PDB on the Symbols page and the symsrv route serves
   await expect(page.getByRole("heading", { name: "Symbols" })).toBeVisible();
 
   // Ingest through the drop-zone input; the per-file row shows the parsed identity.
-  await page.getByLabel("Choose PDB files", { exact: true }).setInputFiles({
+  await page.getByLabel("Choose symbol files", { exact: true }).setInputFiles({
     name: SYMBOL_DEBUG_FILE,
     mimeType: "application/octet-stream",
     buffer: pdb,

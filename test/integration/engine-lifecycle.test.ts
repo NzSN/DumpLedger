@@ -451,11 +451,14 @@ describe("batch upload grants (docs/batch-upload-design.md)", () => {
     assert(customer.ok && customer.customerId);
     const c = engine.execute({ type: "CreateCase", customerId: customer.customerId, title: "x" });
     assert(c.ok && c.caseId);
-    for (const bad of [0, 17, 2.5]) {
+    for (const bad of [0, 129, 2.5]) {
       const receipt = engine.execute({ type: "IssueGrant", caseId: c.caseId, expiresAt: "2026-09-05T00:00:00.000Z", maxBytes: 8n, maxUploads: bad });
       assert(!receipt.ok);
       assert.equal(receipt.error.code, "invalid_input");
     }
+    const maximum = engine.execute({ type: "IssueGrant", caseId: c.caseId, expiresAt: "2026-09-05T00:00:00.000Z", maxBytes: 8n, maxUploads: 128 });
+    assert(maximum.ok && maximum.grantSecret);
+    assert.equal(engine.grantQuota(maximum.grantSecret)?.maxUploads, 128);
     engine.close();
   });
 

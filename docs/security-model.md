@@ -83,7 +83,7 @@ overflow checks.
 - Put the secret only in the URL delivered to the customer; store a keyed or
   password-style hash, never the secret itself.
 - Bind the grant to one case, one maximum size per dump, one expiry, and a
-  bounded slot count (`maxUploads`, 1–16). Total ingress from one leaked link
+  bounded slot count (`maxUploads`, 1–128). Total ingress from one leaked link
   is bounded by slots × per-dump bytes, and a failed or aborted upload still
   consumes its slot.
 - Consume each slot atomically when a dump ID is allocated; the grant is

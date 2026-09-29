@@ -130,15 +130,22 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
   const flow = useMutationFlow<CreateGrantResponse>();
   const hoursId = useId();
   const bytesId = useId();
+  const linkTypeId = useId();
   const uploadsId = useId();
   const [hoursText, setHoursText] = useState(String(DEFAULT_VALID_FOR_HOURS));
   const [bytesText, setBytesText] = useState(DEFAULT_MAX_BYTES.toString());
-  const [uploadsText, setUploadsText] = useState("1");
+  const [linkType, setLinkType] = useState<"one-time" | "batch">("one-time");
+  const [uploadsText, setUploadsText] = useState(String(MAX_GRANT_MAX_UPLOADS));
   const [hoursError, setHoursError] = useState<string | undefined>(undefined);
   const [bytesError, setBytesError] = useState<string | undefined>(undefined);
   const [uploadsError, setUploadsError] = useState<string | undefined>(undefined);
 
   const pending = flow.pending;
+  const batchBytes = parsePositiveBigInt(bytesText);
+  const batchSlots = Number(uploadsText);
+  const batchMaximum = batchBytes !== null && Number.isSafeInteger(batchSlots) && batchSlots >= 2 && batchSlots <= MAX_GRANT_MAX_UPLOADS
+    ? formatBytes(batchBytes * BigInt(batchSlots))
+    : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -156,9 +163,9 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
       return;
     }
     setBytesError(undefined);
-    const maxUploads = Number(uploadsText);
-    if (!/^[0-9]+$/.test(uploadsText) || !Number.isSafeInteger(maxUploads) || maxUploads < 1 || maxUploads > MAX_GRANT_MAX_UPLOADS) {
-      setUploadsError(`Whole number from 1 to ${MAX_GRANT_MAX_UPLOADS}.`);
+    const maxUploads = linkType === "one-time" ? 1 : Number(uploadsText);
+    if (linkType === "batch" && (!/^[0-9]+$/.test(uploadsText) || !Number.isSafeInteger(maxUploads) || maxUploads < 2 || maxUploads > MAX_GRANT_MAX_UPLOADS)) {
+      setUploadsError(`Whole number from 2 to ${MAX_GRANT_MAX_UPLOADS}.`);
       return;
     }
     setUploadsError(undefined);
@@ -232,29 +239,49 @@ export function CreateGrantForm({ caseId, onCreated }: CreateGrantFormProps): Re
           />
         )}
       </FormField>
-      <FormField
-        id={uploadsId}
-        label="Dumps allowed"
-        hint="Default: 1 (one-time link). Batch links accept up to 16 dumps."
-        {...(uploadsError === undefined ? {} : { error: uploadsError })}
-      >
+      <FormField id={linkTypeId} label="Link type">
         {({ describedBy }) => (
-          <input
-            id={uploadsId}
-            name="maxUploads"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={MAX_GRANT_MAX_UPLOADS}
-            value={uploadsText}
-            onChange={(event) => setUploadsText(event.target.value)}
+          <select
+            id={linkTypeId}
+            name="linkType"
+            value={linkType}
+            onChange={(event) => {
+              setLinkType(event.target.value as "one-time" | "batch");
+              setUploadsError(undefined);
+            }}
             disabled={pending}
-            aria-invalid={uploadsError !== undefined}
             aria-describedby={describedBy}
-            required
-          />
+          >
+            <option value="one-time">One-time link (1 dump)</option>
+            <option value="batch">Batch link (up to {MAX_GRANT_MAX_UPLOADS} dumps)</option>
+          </select>
         )}
       </FormField>
+      {linkType === "batch" && (
+        <FormField
+          id={uploadsId}
+          label="Dumps allowed"
+          hint={`Preset to ${MAX_GRANT_MAX_UPLOADS}; lower it if fewer uploads are needed.${batchMaximum === null ? "" : ` At the per-file limit, this link could accept up to ${batchMaximum} total.`}`}
+          {...(uploadsError === undefined ? {} : { error: uploadsError })}
+        >
+          {({ describedBy }) => (
+            <input
+              id={uploadsId}
+              name="maxUploads"
+              type="number"
+              inputMode="numeric"
+              min={2}
+              max={MAX_GRANT_MAX_UPLOADS}
+              value={uploadsText}
+              onChange={(event) => setUploadsText(event.target.value)}
+              disabled={pending}
+              aria-invalid={uploadsError !== undefined}
+              aria-describedby={describedBy}
+              required
+            />
+          )}
+        </FormField>
+      )}
       <button type="submit" className="button" disabled={pending}>
         {pending ? "Generating…" : "Generate secure link"}
       </button>

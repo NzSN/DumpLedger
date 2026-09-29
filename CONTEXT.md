@@ -44,7 +44,7 @@ _Avoid_: Case status
 
 **Upload grant**:
 A short-lived, case-bound authorization to begin dump uploads. Each grant is
-issued with a slot count (`maxUploads`, 1–16); a one-slot grant is a one-time
+issued with a slot count (`maxUploads`, 1–128); a one-slot grant is a one-time
 grant. Closing a case revokes every issued grant for that case.
 _Avoid_: Reusable upload link
 

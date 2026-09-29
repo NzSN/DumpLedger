@@ -67,7 +67,7 @@ refer to the same engineering defect.
 ### Upload grant
 
 A short-lived authorization bound to exactly one case. Each grant is issued
-with a slot count (1–16 dumps, default 1); a one-slot grant is a one-time
+with a slot count (1–128 dumps, default 1); a one-slot grant is a one-time
 grant, and a multi-slot grant is a batch grant shared as a single link (see
 `docs/batch-upload-design.md`). The customer receives the grant as an HTTPS
 URL. DumpLedger stores only a cryptographic hash of the secret token.
@@ -134,8 +134,9 @@ cannot list customers, cases, or existing dumps.
 
 ### Customer uploads files
 
-1. The operator selects **Create upload link** on a case, choosing how many
-   dumps the link accepts (1–16).
+1. The operator selects **Create upload link** on a case, choosing a one-time
+   link or a batch link. Batch mode presets 128 dumps and permits a lower
+   count from 2 through 128.
 2. DumpLedger creates a grant with an expiry, a maximum byte count per dump,
    and that many upload slots.
 3. The customer opens the link and streams their dumps one request per file,
@@ -249,7 +250,7 @@ finishes deletion if the process stops between those operations.
 - **F1:** Every dump has exactly one immutable case association.
 - **F2:** Each case has exactly one customer.
 - **F3:** Each upload grant is bound to one case and can begin at most as
-  many uploads as its issued slot count (1–16).
+  many uploads as its issued slot count (1–128).
 - **F4:** Input is streamed; memory consumption is bounded independently of
   dump size.
 - **F5:** SHA-256 is computed over the original bytes while receiving them.

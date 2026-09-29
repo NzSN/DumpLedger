@@ -294,7 +294,7 @@ Source: [case routes](../src/http/routes/case-routes.ts),
 
 `validForHours` is an integer from 1 through 8784; `maxBytes` is a positive
 canonical decimal string; optional `maxUploads` is an integer from 1 through
-16 and defaults to 1. Expiry uses the server clock. Closed cases cannot receive
+128 and defaults to 1. Expiry uses the server clock. Closed cases cannot receive
 new grants (`409 invalid_transition`). The `201` response is:
 
 ```text

@@ -95,6 +95,30 @@ const migrations: readonly Migration[] = [
     CREATE INDEX modules_identity_idx ON modules(debug_file, debug_id);
     CREATE INDEX modules_code_identity_idx ON modules(code_file, code_id);
   ` },
+  /* Raise the per-grant batch bound while preserving issued and consumed grants.
+   * SQLite cannot widen the existing column CHECK constraints in place. */
+  { version: 6, sql: `
+    CREATE TABLE upload_grants_rebuilt (
+      grant_id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(case_id),
+      secret_digest TEXT NOT NULL UNIQUE,
+      state TEXT NOT NULL CHECK (state IN ('issued','consumed','revoked','expired')),
+      expires_at TEXT NOT NULL,
+      max_bytes TEXT NOT NULL,
+      consumed_by_dump_id TEXT,
+      created_at TEXT NOT NULL,
+      max_uploads INTEGER NOT NULL DEFAULT 1 CHECK (max_uploads BETWEEN 1 AND 128),
+      uploads_used INTEGER NOT NULL DEFAULT 0 CHECK (uploads_used BETWEEN 0 AND 128)
+    ) STRICT;
+    INSERT INTO upload_grants_rebuilt(grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at, max_uploads, uploads_used)
+      SELECT grant_id, case_id, secret_digest, state, expires_at, max_bytes, consumed_by_dump_id, created_at, max_uploads, uploads_used FROM upload_grants;
+    DROP TABLE upload_grants;
+    ALTER TABLE upload_grants_rebuilt RENAME TO upload_grants;
+    CREATE TRIGGER grant_terminal_state_immutable BEFORE UPDATE OF state ON upload_grants
+      WHEN OLD.state IN ('consumed','revoked','expired') AND NEW.state <> OLD.state
+      BEGIN SELECT RAISE(ABORT, 'grant terminal state is immutable'); END;
+    CREATE INDEX grants_case_idx ON upload_grants(case_id);
+  ` },
 ];
 /**
  * Applies pending migrations in ascending version order, each inside its own

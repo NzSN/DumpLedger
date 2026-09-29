@@ -148,8 +148,10 @@ describe("Upload grant operator flows", () => {
     // Existing grant rows show slot usage (batch upload design).
     expect(screen.getByText("0 / 1 uploads used")).toBeTruthy();
 
+    expect(screen.queryByLabelText("Dumps allowed")).toBeNull();
+    await user.selectOptions(screen.getByLabelText("Link type"), "batch");
     const uploads = screen.getByLabelText("Dumps allowed");
-    expect((uploads as HTMLInputElement).value).toBe("1");
+    expect((uploads as HTMLInputElement).value).toBe("128");
     await user.clear(uploads);
     await user.type(uploads, "3");
     await user.click(screen.getByRole("button", { name: "Generate secure link" }));
@@ -170,10 +172,30 @@ describe("Upload grant operator flows", () => {
 
     // Out-of-range slot counts are rejected before anything reaches the server.
     await user.clear(uploads);
-    await user.type(uploads, "17");
+    await user.type(uploads, "129");
     await user.click(screen.getByRole("button", { name: "Generate secure link" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Whole number from 1 to 16.");
+    expect((await screen.findByRole("alert")).textContent).toContain("Whole number from 2 to 128.");
     expect(calls).toHaveLength(1);
+  });
+
+  it("automatically issues a 128-slot grant when batch mode is selected", async () => {
+    const fake = new OperatorFakeHttpClient();
+    fake.setQueryResponder(DETAIL_PATH, () => caseDetailFixture());
+    fake.setMutationResponder("POST", GRANTS_PATH, () => ({
+      grant: issuedGrantRecord("grant-128", "case-1001", "2026-09-08T10:00:00.000Z", 10737418240n, 128, 0),
+      uploadPath: UPLOAD_PATH,
+    }));
+    const user = userEvent.setup();
+    renderCaseDetail(fake);
+    await screen.findByText("Renderer crash on startup");
+    await user.selectOptions(screen.getByLabelText("Link type"), "batch");
+    await user.click(screen.getByRole("button", { name: "Generate secure link" }));
+    await screen.findByText(/stops working after 128 uploads/);
+    expect(fake.mutationCalls.find((call) => call.path === GRANTS_PATH)?.body).toEqual({
+      validForHours: 24,
+      maxBytes: "10737418240",
+      maxUploads: 128,
+    });
   });
 
   it("surfaces a grant-creation failure and moves focus to the alert", async () => {

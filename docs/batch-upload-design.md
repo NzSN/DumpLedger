@@ -1,7 +1,7 @@
 # Batch upload design
 
-Status: implemented (design decisions 1–4 resolved 2026-09-14; shipped in the
-same change series). Extends the one-time upload grant (architecture, Intake;
+Status: implemented (design decisions 1–4 resolved 2026-09-14; decision 1
+revised 2026-09-29 to allow 128 slots). Extends the one-time upload grant (architecture, Intake;
 product design, public upload) so one grant link can deliver several dumps.
 
 ## Purpose and scope
@@ -21,8 +21,10 @@ client uploads (sequential only), refunding slots for failed uploads.
 
 ## Design decisions (resolved)
 
-1. **`maxUploads` capped at 16.** Enforced at the contract decoder, the
-   engine, and the SQL schema.
+1. **`maxUploads` capped at 128.** Enforced at the contract decoder, the
+   engine, and the SQL schema. The operator explicitly chooses a one-time
+   link or a batch link. Batch mode presets 128 slots, which the operator
+   may lower. The API default remains one slot when `maxUploads` is omitted.
 2. **Failed and aborted uploads consume their slot.** Same rule as today's
    one-time grant, restated per slot; prevents infinite-retry abuse on a
    leaked link. Operators issue a fresh grant instead of expecting refunds.
@@ -99,9 +101,9 @@ not by a read-then-write in the engine. No new engine commands.
 
 ### Grant issuance (operator)
 
-`CreateGrantRequest` gains an optional `maxUploads` integer, 1..16, default
+`CreateGrantRequest` gains an optional `maxUploads` integer, 1..128, default
 1 — old clients decode unchanged. New constant
-`MAX_GRANT_MAX_UPLOADS = 16` in the grants contract, mirrored by the SQL
+`MAX_GRANT_MAX_UPLOADS = 128` in the grants contract, mirrored by the SQL
 CHECK and the engine assert.
 
 `GrantRecord` gains `maxUploads` and `uploadsUsed`; decoders default them
@@ -186,18 +188,20 @@ the distinct code; revoked/expired/unknown secrets stay indistinguishable.
 
 ### Operator grants UI
 
-Create-grant form gains "dumps allowed" (number, default 1, max 16). Grant
+Create-grant form offers one-time or batch mode. Batch mode presets "dumps
+allowed" to 128 (editable from 2 through 128); one-time mode issues exactly
+one slot. Grant
 list and detail show "3 / 5 slots used". Optional follow-up: per-grant
 dump listing.
 
 ## Security controls
 
 A leaked link now authorizes up to N dumps within its expiry instead of 1.
-Bounds: `maxUploads ≤ 16`; unchanged per-dump `maxBytes` (total ingress ≤
+Bounds: `maxUploads ≤ 128`; unchanged per-dump `maxBytes` (total ingress ≤
 N × maxBytes); unchanged expiry, revoke, and case-close revocation;
 process-wide admission cap throttling ingress rate; per-IP grant-attempt
 rate limiting unchanged (still one secret, so secret-guessing protection is
-unchanged). A 16-file batch is 16 POSTs against that limiter — verify its
+unchanged). A 128-file batch is 128 POSTs against that limiter — verify its
 threshold accommodates legitimate batches (tuning, not redesign). Every
 slot consumption emits the existing `BeginUpload` audit event with the
 grant id, so batch uploads are fully attributable. `security-model.md` and
@@ -208,7 +212,8 @@ grant id, so batch uploads are fully attributable. `security-model.md` and
 `specs/DumpLedger.tla`: grants gain a slots dimension. `BeginUpload` is
 enabled while `uploads_used < max_uploads`, increments it, and the grant
 becomes `consumed` at the bound (model with max 2 slots to keep the state
-space small). New invariants: slot bounds
+space small; this finite representative is independent of the production
+128-slot cap). New invariants: slot bounds
 `0 ≤ uploads_used ≤ max_uploads`, and dumps-per-grant ≤ `max_uploads`.
 `ClosedCaseHasNoIssuedGrant` is unchanged.
 

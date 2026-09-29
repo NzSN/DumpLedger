@@ -507,9 +507,10 @@ describe("grants (7.5)", () => {
     assert.deepEqual(encodeCreateGrantRequest({ ...oneTime, maxUploads: 1 }), encodeCreateGrantRequest(oneTime));
     assert.ok(!("maxUploads" in encodeCreateGrantRequest(oneTime)));
   });
-  it("bounds maxUploads to 1..16", () => {
+  it("bounds maxUploads to 1..128", () => {
     expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 0 }, "$"), /below the minimum/);
-    expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 17 }, "$"), /exceeds the maximum/);
+    assert.equal(decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 128 }, "$").maxUploads, 128);
+    expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 129 }, "$"), /exceeds the maximum/);
     expectDecodeError(() => decodeCreateGrantRequest({ validForHours: 72, maxBytes: "1", maxUploads: 2.5 }, "$"), /safe integer/);
   });
   it("defaults grant record slot fields for a pre-batch server", () => {

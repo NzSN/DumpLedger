@@ -62,11 +62,11 @@ function assertPlainObject(value: unknown, name: string, maxSerializedBytes: num
 }
 function assertMaxUploads(value: unknown): number {
   if (value === undefined) return 1;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_GRANT_UPLOAD_SLOTS) throw new DumpLedgerError("invalid_input", "maxUploads must be an integer between 1 and 16");
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_GRANT_UPLOAD_SLOTS) throw new DumpLedgerError("invalid_input", `maxUploads must be an integer between 1 and ${MAX_GRANT_UPLOAD_SLOTS}`);
   return value;
 }
 function assertUploadsUsed(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > MAX_GRANT_UPLOAD_SLOTS) throw new DumpLedgerError("invalid_input", "uploadsUsed must be an integer between 0 and 16");
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > MAX_GRANT_UPLOAD_SLOTS) throw new DumpLedgerError("invalid_input", `uploadsUsed must be an integer between 0 and ${MAX_GRANT_UPLOAD_SLOTS}`);
   return value;
 }
 function assertCount(value: unknown, name: string): number { if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new DumpLedgerError("invalid_input", `${name} must be a nonnegative integer`); return value; }

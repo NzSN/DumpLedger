@@ -29,7 +29,7 @@ import { grantStateDecoder, type GrantState } from "./vocab.js";
 /** Longest grant validity accepted from an operator (365 days). */
 export const MAX_GRANT_VALID_FOR_HOURS = 24 * 366;
 /** Most dumps one grant may authorize (batch upload design, decision 1). */
-export const MAX_GRANT_MAX_UPLOADS = 16;
+export const MAX_GRANT_MAX_UPLOADS = 128;
 export const MAX_UPLOAD_PATH_LENGTH = 512;
 export const MIN_GRANT_SECRET_BASE64URL_LENGTH = 16;
 
@@ -39,7 +39,7 @@ export interface CreateGrantRequest {
   readonly validForHours: number;
   /** Original-byte ceiling for the upload, in canonical decimal form on the wire. */
   readonly maxBytes: bigint;
-  /** Dumps the grant authorizes (1..16); omitted means a one-time grant. */
+  /** Dumps the grant authorizes (1..128); omitted means a one-time grant. */
   readonly maxUploads?: number;
 }
 
