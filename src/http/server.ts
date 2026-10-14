@@ -10,6 +10,7 @@ import type {
   CaseSearchResponse,
   CaseSummary,
   CustomerDetailResponse,
+  CustomerListResponse,
   DashboardResponse,
   DumpCatalogParams,
   DumpCatalogResponse,
@@ -96,6 +97,8 @@ export interface HttpApplicationPort {
   openDownload(dumpId: string): { readonly phase: string; readonly byteSize: bigint; readonly bytes: Readable } | undefined;
   operations(): { readonly integrityErrors: readonly string[] };
   dashboard(): DashboardResponse;
+  /** `GET /api/v1/customers`: every customer (id + display name) for the analyzer's name resolution. */
+  listCustomers(): CustomerListResponse;
   searchCases(params: CaseSearchParams): CaseSearchResponse;
   caseSummary(caseId: string): CaseSummary | undefined;
   caseDetail(caseId: string): CaseDetailResponse | undefined;

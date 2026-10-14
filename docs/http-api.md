@@ -138,6 +138,7 @@ See [security-model.md](security-model.md) for transport and deployment controls
 | POST | `/api/v1/dumps/:dumpId/analyses` | Mutation or Analyzer | 201 / 200 | Record an analysis report |
 | GET | `/api/v1/dumps/:dumpId/analyses` | Analyzer | 200 | List analysis reports |
 | GET | `/api/v1/events` | Analyzer | 200 | Audit event feed |
+| GET | `/api/v1/customers` | Analyzer | 200 | Customer list (id + display name; the analyzer's name-resolution surface) |
 | PUT | `/api/v1/dumps/:dumpId/retention` | Mutation | 200 | Schedule purge |
 | GET | `/api/v1/symbols` | Session | 200 | List PDB/image artifacts |
 | POST | `/api/v1/symbols` | Symbol ingest | 201 | Stream PDB/EXE/DLL |

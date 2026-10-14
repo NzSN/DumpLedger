@@ -11,6 +11,7 @@ import {
   type CaseSearchResponse,
   type CaseSummary,
   type CustomerDetailResponse,
+  type CustomerListResponse,
   type DashboardResponse,
   type DumpCatalogEntry,
   type DumpCatalogParams,
@@ -287,6 +288,18 @@ export class EngineHttpApplication implements HttpApplicationPort {
   // projection to the browser (the Phase-5 cutover removed the HTML
   // comparison oracle and the HTTP port's snapshot()).
   // ---------------------------------------------------------------------------
+
+  /** `GET /api/v1/customers`: every customer, for the analyzer's name
+   * resolution (display name → id). Read-only, no command, no audit event. */
+  listCustomers(): CustomerListResponse {
+    const projection = this.engine.snapshot();
+    return {
+      customers: projection.customers.map(item => ({
+        customerId: item.customerId,
+        displayName: item.displayName,
+      })),
+    };
+  }
 
   dashboard(): DashboardResponse {
     const projection = this.engine.snapshot();

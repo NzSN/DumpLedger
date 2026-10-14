@@ -51,6 +51,25 @@ export function encodeCustomerSummary(customer: CustomerSummary): Record<string,
   return { customerId: customer.customerId, displayName: customer.displayName };
 }
 
+/** `GET /api/v1/customers` success: every customer (id + display name). */
+export interface CustomerListResponse {
+  readonly customers: readonly CustomerSummary[];
+}
+
+export const decodeCustomerListResponse: Decoder<CustomerListResponse> = (value, path) => {
+  const decoded = object(
+    {
+      customers: field(arrayOf(decodeCustomerSummary, { label: "customers", maxLength: 4096 })),
+    },
+    "customer list response",
+  )(value, path);
+  return { customers: decoded.customers };
+}
+
+export function encodeCustomerListResponse(response: CustomerListResponse): Record<string, unknown> {
+  return { customers: response.customers.map(encodeCustomerSummary) };
+}
+
 /** `POST /api/v1/customers` body. */
 export interface CreateCustomerRequest {
   readonly displayName: string;

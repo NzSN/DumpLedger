@@ -40,8 +40,9 @@ header, only the bearer path is consulted — a wrong or malformed token is a
 falls through to session behavior.
 
 Token scope is exactly: the catalog reads, dump detail and content, the
-event feed, and analysis write-back (the table in http-api.md is the
-authoritative list). Everything else — case workflow, grants, retention,
+event feed, the customer list (`GET /api/v1/customers`, for resolving a
+customer's display name to its id), and analysis write-back (the table in
+http-api.md is the authoritative list). Everything else — case workflow, grants, retention,
 symbols ingest, transfers — rejects the token.
 
 ## The integration loop

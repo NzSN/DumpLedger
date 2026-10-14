@@ -6,9 +6,17 @@ import {
   encodeCaseSummary,
   encodeCreateCustomerResponse,
   encodeCustomerDetailResponse,
+  encodeCustomerListResponse,
   encodeDashboardResponse,
 } from "@dump-ledger/http-contracts";
-import { contractErrorFor, decodeJsonRequest, jsonRequireMutation, jsonRequireSession, sendError } from "../contracts/json.js";
+import {
+  authorizeSessionOrAnalyzer,
+  contractErrorFor,
+  decodeJsonRequest,
+  jsonRequireMutation,
+  jsonRequireSession,
+  sendError,
+} from "../contracts/json.js";
 import type { RouteContext } from "./common.js";
 
 /**
@@ -26,6 +34,14 @@ export function registerCustomerRoutes(server: FastifyInstance, ctx: RouteContex
     if (jsonRequireSession(request, reply, options.sessions) === undefined) return reply;
     const dashboard = options.application.dashboard();
     return reply.type("application/json; charset=utf-8").send(encodeDashboardResponse(dashboard));
+  });
+
+  // The analyzer token may list customers (id + display name) so analyzers
+  // can resolve a customer's display name to its id for scoped work.
+  server.get("/api/v1/customers", async (request, reply) => {
+    if (authorizeSessionOrAnalyzer(request, reply, options) === undefined) return reply;
+    const response = options.application.listCustomers();
+    return reply.type("application/json; charset=utf-8").send(encodeCustomerListResponse(response));
   });
 
   server.get<{ Params: { customerId: string } }>("/api/v1/customers/:customerId", async (request, reply) => {
