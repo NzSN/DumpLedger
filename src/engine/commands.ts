@@ -79,6 +79,10 @@ export interface ImportAuditEventRecord {
   readonly detail: Readonly<Record<string, unknown>>;
 }
 
+/** Verdict vocabulary of one analysis report (docs/analyzer-integration-design.md,
+ * "Analysis write-back"): a closed set, unlike `kind`. */
+export type AnalysisOutcome = "completed" | "failed";
+
 export type LifecycleCommand =
   | { readonly type: "CreateCustomer"; readonly displayName: string }
   | { readonly type: "CreateCase"; readonly customerId: CustomerId; readonly title: string }
@@ -117,5 +121,11 @@ export type LifecycleCommand =
   | { readonly type: "ImportGrant"; readonly record: ImportGrantRecord; readonly forcedState?: "revoked" }
   | { readonly type: "ImportDumpStaged"; readonly record: ImportDumpRecord }
   | { readonly type: "ImportAuditEvent"; readonly record: ImportAuditEventRecord }
-  | { readonly type: "FinishImport"; readonly importId: AuditEventId; readonly summary: ImportSummary };
+  | { readonly type: "FinishImport"; readonly importId: AuditEventId; readonly summary: ImportSummary }
+  /* Analysis write-back (docs/analyzer-integration-design.md, milestone AI3):
+   * one analyzer verdict pinned to the exact dump bytes named by `inputSha256`.
+   * The entity identity is (dumpId, analyzerName, analyzerVersion, kind,
+   * inputSha256); a repeat of an existing identity is an idempotent replay, so
+   * the engine returns the stored report instead of recording a second row. */
+  | { readonly type: "RecordAnalysis"; readonly dumpId: DumpId; readonly analyzerName: string; readonly analyzerVersion: string; readonly kind: string; readonly inputSha256: string; readonly outcome: AnalysisOutcome; readonly summary: string; readonly facts?: Readonly<Record<string, unknown>>; readonly duplicateOf?: DumpId | null };
 export type LifecycleAction = LifecycleCommand["type"];

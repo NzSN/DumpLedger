@@ -1,7 +1,7 @@
 import type { StableError } from "../domain/errors.js";
-import type { AuditEventId, CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
+import type { AnalysisId, AuditEventId, CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
 import type { BlobState, CaseStatus, CoverageKind, DumpPhase, SymbolArtifactKind, TokenState, ValidationState } from "../domain/lifecycle.js";
-import type { LifecycleAction } from "./commands.js";
+import type { AnalysisOutcome, LifecycleAction } from "./commands.js";
 
 export interface CustomerProjection { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string }
 export interface CaseProjection { readonly caseId: CaseId; readonly customerId: CustomerId; readonly title: string; readonly status: CaseStatus; readonly createdAt: string }
@@ -34,6 +34,26 @@ export interface StoredSymbolArtifact {
   readonly createdAt: string;
 }
 /**
+ * One immutable analysis report (docs/analyzer-integration-design.md, "Analysis
+ * write-back"): a verdict about exactly one dump, identified by the tuple
+ * `(dumpId, analyzer.name, analyzer.version, kind, inputSha256)`. `facts` is
+ * stored JSON, `null` when the analyzer supplied none; `duplicateOf` is the
+ * dump the analyzer recognized as a duplicate, `null` when it reported none.
+ */
+export interface StoredAnalysisReport {
+  readonly analysisId: AnalysisId;
+  readonly dumpId: DumpId;
+  readonly analyzer: { readonly name: string; readonly version: string };
+  readonly kind: string;
+  readonly inputSha256: string;
+  readonly outcome: AnalysisOutcome;
+  readonly summary: string;
+  readonly facts: Readonly<Record<string, unknown>> | null;
+  readonly duplicateOf: DumpId | null;
+  readonly createdAt: string;
+}
+
+/**
  * The debug-identity view of the symbol store: the artifacts that resolve by a
  * debug identity (kind `pdb`). `snapshot()` hands this view to the transfer
  * export, whose bundle manifest is PDB-only (`src/transfer/manifest.ts`), and
@@ -52,7 +72,7 @@ export interface AuditEventProjection { readonly eventId: AuditEventId; readonly
 export interface DumpLedgerProjection { readonly customers: readonly CustomerProjection[]; readonly cases: readonly CaseProjection[]; readonly grants: readonly GrantProjection[]; readonly dumps: readonly DumpProjection[]; readonly downloadable: readonly DumpId[]; readonly symbols: readonly SymbolArtifactProjection[]; readonly auditEvents: readonly AuditEventProjection[] }
 export interface BackupInventoryDump { readonly dumpId: DumpId; readonly caseId: CaseId; readonly phase: DumpPhase; readonly byteSize: string | null; readonly sha256: string | null; readonly purgeAt: string | null; readonly purgedAt: string | null }
 export interface BackupInventory { readonly schema: "dump-ledger.backup-inventory/v1"; readonly generatedAt: string; readonly includesVaultBytes: false; readonly dumps: readonly BackupInventoryDump[] }
-export interface TransitionSuccess { readonly ok: true; readonly action: LifecycleAction; readonly occurredAt: string; readonly importId?: AuditEventId; readonly customerId?: CustomerId; readonly caseId?: CaseId; readonly grantId?: GrantId; readonly grantSecret?: string; readonly dumpId?: DumpId; readonly maxBytes?: bigint; readonly maxUploads?: number; readonly phase?: DumpPhase; readonly artifactId?: SymbolArtifactId; readonly deduplicated?: boolean; readonly dump?: DumpProjection; readonly purgeAt?: string; readonly revokedGrantIds?: readonly GrantId[] }
+export interface TransitionSuccess { readonly ok: true; readonly action: LifecycleAction; readonly occurredAt: string; readonly importId?: AuditEventId; readonly customerId?: CustomerId; readonly caseId?: CaseId; readonly grantId?: GrantId; readonly grantSecret?: string; readonly dumpId?: DumpId; readonly maxBytes?: bigint; readonly maxUploads?: number; readonly phase?: DumpPhase; readonly artifactId?: SymbolArtifactId; readonly deduplicated?: boolean; readonly dump?: DumpProjection; readonly purgeAt?: string; readonly revokedGrantIds?: readonly GrantId[]; readonly analysis?: StoredAnalysisReport; /** True exactly when RecordAnalysis replayed an existing identity and stored nothing new. */ readonly replayed?: boolean }
 export interface TransitionFailure { readonly ok: false; readonly action: LifecycleAction; readonly error: StableError }
 export type TransitionReceipt = TransitionSuccess | TransitionFailure;
 

@@ -131,24 +131,25 @@ async function positiveTraces(): Promise<string[]> {
 }
 
 const EXPECTED_COVERAGE = {
-  AcceptDump: 3,
-  BeginPurge: 5,
-  BeginUpload: 7,
+  AcceptDump: 4,
+  BeginPurge: 6,
+  BeginUpload: 8,
   CloseCase: 1,
   ExpireToken: 1,
   FailUpload: 1,
-  FinishPurge: 5,
+  FinishPurge: 6,
   IngestSymbol: 2,
-  Initialize: 9,
-  IssueToken: 9,
-  MarkQuarantined: 4,
-  PromoteObject: 4,
+  Initialize: 10,
+  IssueToken: 10,
+  MarkQuarantined: 5,
+  PromoteObject: 5,
   PurgeSymbol: 1,
+  RecordAnalysis: 1,
   RejectDump: 1,
   ResolveCase: 1,
   ResumeInvestigation: 1,
   RevokeToken: 1,
-  SealUpload: 4,
+  SealUpload: 5,
   StartInvestigation: 1,
   WaitForCustomer: 1,
 } as const;
@@ -171,14 +172,14 @@ test("checked-in corpus reaches all_steps_done through negotiated generated bind
   assert.equal(recording.closeCalls(), 1);
   assert.equal(
     probe.sessionCreates,
-    9,
+    10,
     "each trace must receive a fresh engine and SQLite ledger",
   );
-  assert.equal(probe.sessionCloses, 9);
-  assert.equal(probe.portCalls, 62);
+  assert.equal(probe.sessionCloses, 10);
+  assert.equal(probe.portCalls, 72);
   assert.equal(
     probe.observationCalls,
-    62,
+    72,
     "each replayed action must be observed exactly once",
   );
   assert.deepEqual(probe.generatedBinding?.coverage(), EXPECTED_COVERAGE);

@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Readable } from "node:stream";
 
 import type {
+  AnalysisListResponse,
+  AnalysisReport,
   CaseAction,
   CaseDetailResponse,
   CaseSearchParams,
@@ -9,9 +11,14 @@ import type {
   CaseSummary,
   CustomerDetailResponse,
   DashboardResponse,
+  DumpCatalogParams,
+  DumpCatalogResponse,
   DumpDetailResponse,
+  EventFeedParams,
+  EventFeedResponse,
   GrantQuotaResponse,
   GrantRecord,
+  RecordAnalysisRequest,
   SymbolKind,
   SymbolListResponse,
   TransitionResponse,
@@ -26,11 +33,14 @@ import type { PostProcessingQueue } from "../intake/post-processing-queue.js";
 import { UploadSession, type UploadByteSink, type UploadLifecyclePort } from "../intake/upload-session.js";
 import type { TransferManager } from "../transfer/manager.js";
 import type { RuntimeJobSnapshot } from "./runtime-jobs.js";
+import { registerAnalysisRoutes } from "./routes/analysis-routes.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { registerCaseRoutes } from "./routes/case-routes.js";
 import type { RouteContext } from "./routes/common.js";
 import { registerCustomerRoutes } from "./routes/customer-routes.js";
+import { registerDumpCatalogRoutes } from "./routes/dump-catalog-routes.js";
 import { registerDumpRoutes } from "./routes/dump-routes.js";
+import { registerEventRoutes } from "./routes/event-routes.js";
 import { registerGrantRoutes } from "./routes/grant-routes.js";
 import { registerOperationRoutes } from "./routes/operation-routes.js";
 import { registerTransferRoutes } from "./routes/transfer-routes.js";
@@ -59,6 +69,16 @@ export type CaseTransitionOutcome =
   | { readonly ok: false; readonly code: string };
 
 /**
+ * Analysis write-back outcome (docs/analyzer-integration-design.md, "Analysis
+ * write-back"; milestone AI3): the stored report plus whether the engine
+ * resolved an identity replay and stored nothing new, or a stable failure
+ * code for the route layer to map onto the shared error envelope.
+ */
+export type AnalysisRecordOutcome =
+  | { readonly ok: true; readonly report: AnalysisReport; readonly replayed: boolean }
+  | { readonly ok: false; readonly code: string };
+
+/**
  * Browser use-case port. There is no global `snapshot()`: every route is
  * served by one of the bounded query methods below, so no endpoint ships the
  * whole ledger projection to the browser (design section 10).
@@ -82,6 +102,28 @@ export interface HttpApplicationPort {
   transitionCase(caseId: string, action: CaseAction): CaseTransitionOutcome | undefined;
   dumpDetail(dumpId: string): DumpDetailResponse | undefined;
   grantRecord(grantId: string): GrantRecord | undefined;
+
+  /* Dump catalog (docs/analyzer-integration-design.md, "Dump catalog
+   * search"): read-only, SQLite-backed enumeration with keyset pagination;
+   * `dumpsBySha256` is the exact content-hash lookup. Both throw
+   * `DumpLedgerError` for malformed filters, mapped by the route layer. */
+  searchDumps(params: DumpCatalogParams): DumpCatalogResponse;
+  dumpsBySha256(sha256: string): DumpCatalogResponse;
+
+  /* Event feed (docs/analyzer-integration-design.md, "Event feed"): the
+   * read-only rowid cursor over the audit trail; a malformed cursor or case
+   * filter throws `DumpLedgerError`, mapped by the route layer. */
+  eventFeed(params: EventFeedParams): EventFeedResponse;
+
+  /* Analysis write-back (docs/analyzer-integration-design.md, "Analysis
+   * write-back"; milestone AI3): `recordAnalysis` records one analyzer
+   * verdict pinned to the dump's sealed bytes, resolving an identity replay
+   * to the stored report and enforcing MAX_ANALYSES_PER_DUMP before the
+   * engine command runs; `listAnalyses` returns every stored report for one
+   * dump, `undefined` for an unknown dump (which the route layer maps to
+   * `not_found`). */
+  recordAnalysis(dumpId: string, request: RecordAnalysisRequest): AnalysisRecordOutcome;
+  listAnalyses(dumpId: string): AnalysisListResponse | undefined;
 
   /* Symbol store (docs/symbols-design.md): operator list + ingest lifecycle
    * + purge, and the unauthenticated symsrv read surface. */
@@ -110,6 +152,18 @@ export interface HttpServerOptions {
    * undefined disables token auth entirely. No other route consults it.
    */
   readonly ingestTokenHash?: Buffer;
+  /**
+   * Optional sha256 digest of the analyzer bearer token
+   * (docs/analyzer-integration-design.md, "Analyzer tokens"), already
+   * validated by the composition root. Present enables
+   * `Authorization: Bearer <token>` on the analyzer-scoped routes (catalog
+   * list, by-sha256, dump detail/content, the audit event feed, and, since
+   * milestone AI3, the analysis write-back POST) as an alternative to the
+   * operator session cookie; absent or undefined disables the bearer path
+   * entirely. The token's scope is exactly those routes: every other
+   * mutation and non-analyzer route never consults it.
+   */
+  readonly analyzerTokenHash?: Buffer;
   readonly uploadLifecycle: UploadLifecyclePort;
   readonly uploadSink: UploadByteSink;
   readonly now?: () => number;
@@ -221,6 +275,9 @@ export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
   registerCaseRoutes(server, ctx);
   registerGrantRoutes(server, ctx);
   registerDumpRoutes(server, ctx);
+  registerDumpCatalogRoutes(server, ctx);
+  registerAnalysisRoutes(server, ctx);
+  registerEventRoutes(server, ctx);
   registerOperationRoutes(server, ctx);
   registerTransferRoutes(server, ctx);
   registerUploadRoutes(server, ctx);

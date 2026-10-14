@@ -4,6 +4,7 @@
     "format-description": "https://apalache-mc.org/docs/adr/015adr-trace.html",
     "varTypes": {
       "action_taken": "Str",
+      "analysisRecorded": "Set(Int)",
       "blobState": "Seq(Str)",
       "caseStatus": "Seq(Str)",
       "coverage": "Seq(Str)",
@@ -38,6 +39,9 @@
         "unclassified"
       ],
       "digestRecorded": {
+        "#set": []
+      },
+      "analysisRecorded": {
         "#set": []
       },
       "downloadable": {
@@ -115,6 +119,9 @@
       "digestRecorded": {
         "#set": []
       },
+      "analysisRecorded": {
+        "#set": []
+      },
       "downloadable": {
         "#set": []
       },
@@ -188,6 +195,9 @@
         "unclassified"
       ],
       "digestRecorded": {
+        "#set": []
+      },
+      "analysisRecorded": {
         "#set": []
       },
       "downloadable": {
@@ -269,6 +279,9 @@
           }
         ]
       },
+      "analysisRecorded": {
+        "#set": []
+      },
       "downloadable": {
         "#set": []
       },
@@ -347,6 +360,9 @@
             "#bigint": "1"
           }
         ]
+      },
+      "analysisRecorded": {
+        "#set": []
       },
       "downloadable": {
         "#set": []
@@ -427,6 +443,9 @@
           }
         ]
       },
+      "analysisRecorded": {
+        "#set": []
+      },
       "downloadable": {
         "#set": []
       },
@@ -505,6 +524,9 @@
             "#bigint": "1"
           }
         ]
+      },
+      "analysisRecorded": {
+        "#set": []
       },
       "downloadable": {
         "#set": [
@@ -589,6 +611,9 @@
           }
         ]
       },
+      "analysisRecorded": {
+        "#set": []
+      },
       "downloadable": {
         "#set": []
       },
@@ -668,6 +693,9 @@
           }
         ]
       },
+      "analysisRecorded": {
+        "#set": []
+      },
       "downloadable": {
         "#set": []
       },
@@ -731,6 +759,7 @@
     "downloadable",
     "digestRecorded",
     "action_taken",
+    "analysisRecorded",
     "caseStatus",
     "parameters",
     "dumpToken",

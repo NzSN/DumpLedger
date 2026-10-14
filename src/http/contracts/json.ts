@@ -23,7 +23,9 @@ import {
   encodeErrorResponse,
   type HttpErrorCode,
 } from "@dump-ledger/http-contracts";
+import { verifyAnalyzerToken } from "../../auth/analyzer-token.js";
 import type { OperatorSession, OperatorSessions } from "../../auth/sessions.js";
+import type { HttpServerOptions } from "../server.js";
 
 const HTTP_STATUS: Readonly<Record<HttpErrorCode, number>> = {
   invalid_request: 400,
@@ -153,6 +155,81 @@ export function jsonRequireSession(
   const session = jsonSession(request, sessions);
   if (session === undefined) sendError(reply, "unauthenticated");
   return session;
+}
+
+/** Which credential walked an analyzer-scoped read route. */
+export type AnalyzerReadAuthChannel = "operator" | "analyzer-token";
+
+/**
+ * Analyzer-or-session guard for the read routes in the analyzer token's scope
+ * (docs/analyzer-integration-design.md, "Analyzer tokens"). Pinned bearer
+ * precedence, mirroring `authorizeSymbolIngest`: when the request carries any
+ * `Authorization` header, ONLY the bearer token path is consulted — a
+ * malformed header, a token that does not match the configured analyzer
+ * digest, or a disabled token configuration is the same generic 401 envelope
+ * the session guard sends, and it never falls through to the session cookie.
+ * Without the header the operator session guard applies unchanged. Bearer
+ * requests carry no cookie semantics, so no CSRF/Origin evidence applies on
+ * that path. Every other mutation and every non-analyzer route keeps its own
+ * guard; the analysis write-back POST is the one mutation in the analyzer
+ * token's scope and uses {@link authorizeSessionOrAnalyzerMutation}.
+ */
+export function authorizeSessionOrAnalyzer(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: HttpServerOptions,
+): AnalyzerReadAuthChannel | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization === undefined) {
+    return jsonRequireSession(request, reply, options.sessions) === undefined ? undefined : "operator";
+  }
+  // The scheme name is matched case-insensitively (HTTP auth semantics); the
+  // token itself is exact and opaque, compared by sha256 digest only.
+  const token = /^Bearer +(\S+)$/i.exec(authorization)?.[1];
+  if (token === undefined || !verifyAnalyzerToken(options.analyzerTokenHash, token)) {
+    sendError(reply, "unauthenticated");
+    return undefined;
+  }
+  return "analyzer-token";
+}
+
+/**
+ * Which credential walked an analyzer-scoped write-back mutation (the
+ * analysis `POST`); the value set matches {@link AnalyzerReadAuthChannel}.
+ */
+export type AnalyzerMutationAuthChannel = AnalyzerReadAuthChannel;
+
+/**
+ * Analyzer-or-session guard for the one mutation in the analyzer token's
+ * scope — the analysis write-back route (docs/analyzer-integration-design.md,
+ * "Analyzer tokens" and "Analysis write-back", milestone AI3). Pinned bearer
+ * precedence, mirroring `authorizeSymbolIngest`: when the request carries any
+ * `Authorization` header, ONLY the bearer token path is consulted — a
+ * malformed header, a token that does not match the configured analyzer
+ * digest, or a disabled token configuration is the same generic 401 envelope
+ * the session guard sends, and it never falls through to the session cookie.
+ * Without the header the operator session+CSRF+Origin guard applies exactly
+ * as before. Bearer requests carry no cookie semantics, so there is no
+ * CSRF/Origin evidence to check on that path: a machine caller has no ambient
+ * browser authority.
+ */
+export function authorizeSessionOrAnalyzerMutation(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: HttpServerOptions,
+): AnalyzerMutationAuthChannel | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization === undefined) {
+    return jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined ? undefined : "operator";
+  }
+  // The scheme name is matched case-insensitively (HTTP auth semantics); the
+  // token itself is exact and opaque, compared by sha256 digest only.
+  const token = /^Bearer +(\S+)$/i.exec(authorization)?.[1];
+  if (token === undefined || !verifyAnalyzerToken(options.analyzerTokenHash, token)) {
+    sendError(reply, "unauthenticated");
+    return undefined;
+  }
+  return "analyzer-token";
 }
 
 /**

@@ -299,6 +299,27 @@
       ]
     },
     {
+      "id": "RecordAnalysis",
+      "wireAction": "RecordAnalysis",
+      "wireAliases": [],
+      "inputs": [
+        {
+          "id": "Dump",
+          "from": {
+            "root": "stepParameters",
+            "path": [
+              {
+                "field": "parameters"
+              },
+              {
+                "field": "dump"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": "IngestSymbol",
       "wireAction": "IngestSymbol",
       "wireAliases": [],
@@ -480,6 +501,11 @@
     {
       "id": "DigestRecorded",
       "wireName": "digestRecorded",
+      "provenance": "implementation"
+    },
+    {
+      "id": "AnalysisRecorded",
+      "wireName": "analysisRecorded",
       "provenance": "implementation"
     },
     {

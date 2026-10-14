@@ -99,6 +99,15 @@ export interface ExportManifest {
   readonly generator: ExportManifestGenerator;
   readonly grantKeyFingerprint: string;
   readonly counts: ExportManifestCounts;
+  /**
+   * Number of analysis reports attached to the exported dumps that the bundle
+   * deliberately omits from its import surface
+   * (docs/analyzer-integration-design.md, "Transfer exclusion"): the exporter
+   * always writes it (0 when no exported dump has a report), and the importer
+   * tolerates its absence on bundles written before the field existed (the
+   * `auditEvents` optional-field precedent).
+   */
+  readonly skippedAnalyses?: number;
   readonly skipped: readonly ExportManifestSkipped[];
   readonly dumps: readonly ExportManifestDump[];
   /**
@@ -327,7 +336,7 @@ export function parseExportManifest(bytes: Uint8Array): ExportManifest {
   exactKeysAllowingOptional(
     value,
     ["schema", "createdAt", "generator", "grantKeyFingerprint", "counts", "skipped", "dumps"],
-    ["symbols"],
+    ["symbols", "skippedAnalyses"],
     "$",
   );
   if (value.schema !== EXPORT_MANIFEST_SCHEMA) fail("$.schema", `must be exactly ${JSON.stringify(EXPORT_MANIFEST_SCHEMA)}`);
@@ -335,6 +344,7 @@ export function parseExportManifest(bytes: Uint8Array): ExportManifest {
   const generator = parseGenerator(value.generator, "$.generator");
   const grantKeyFingerprint = textField(value.grantKeyFingerprint, "$.grantKeyFingerprint", 43, GRANT_KEY_FINGERPRINT_PATTERN);
   const counts = parseCounts(value.counts, "$.counts");
+  const skippedAnalyses = value.skippedAnalyses === undefined ? undefined : countField(value.skippedAnalyses, "$.skippedAnalyses");
   const skipped = boundedList(value.skipped, "$.skipped").map((entry, index) => parseSkippedEntry(entry, `$.skipped[${index}]`));
   const dumps = boundedList(value.dumps, "$.dumps").map((entry, index) => parseDumpEntry(entry, `$.dumps[${index}]`));
   const symbols = value.symbols === undefined
@@ -372,6 +382,7 @@ export function parseExportManifest(bytes: Uint8Array): ExportManifest {
     generator,
     grantKeyFingerprint,
     counts,
+    ...(skippedAnalyses === undefined ? {} : { skippedAnalyses }),
     skipped,
     dumps,
     ...(symbols === undefined ? {} : { symbols }),
@@ -394,6 +405,7 @@ export function serializeExportManifest(manifest: ExportManifest): Uint8Array {
     generator: { version: manifest.generator.version, schemaMigrations: manifest.generator.schemaMigrations },
     grantKeyFingerprint: manifest.grantKeyFingerprint,
     counts,
+    ...(manifest.skippedAnalyses === undefined ? {} : { skippedAnalyses: manifest.skippedAnalyses }),
     skipped: manifest.skipped.map(entry => ({ dumpId: entry.dumpId, phase: entry.phase, reason: entry.reason })),
     dumps: manifest.dumps.map(dump => ({
       dumpId: dump.dumpId,

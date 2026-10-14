@@ -28,6 +28,7 @@ import type {
   MarkQuarantinedInput,
   PromoteObjectInput,
   PurgeSymbolInput,
+  RecordAnalysisInput,
   RejectDumpInput,
   ResolveCaseInput,
   ResumeInvestigationInput,
@@ -127,6 +128,7 @@ interface Session {
   readonly grants: Map<bigint, { readonly grantId: GrantId; readonly secret: string }>;
   readonly symbols: Map<bigint, { readonly artifactId: string }>;
   readonly dumps: Map<bigint, DumpId>;
+  readonly dumpSha256: Map<bigint, string>;
 }
 
 function slot(value: bigint, label: string): 1n | 2n {
@@ -237,6 +239,7 @@ export class MbtHarness {
         grants: new Map(),
         symbols: new Map(),
         dumps: new Map(),
+        dumpSha256: new Map(),
       };
     } catch (error) {
       engine.close();
@@ -322,6 +325,7 @@ export class MbtHarness {
       byteSize: BigInt(uploadBytes.byteLength),
       sha256,
     });
+    session.dumpSha256.set(slot(dumpValue, "dump"), sha256);
   }
 
   failUpload(dumpValue: bigint): void {
@@ -377,6 +381,29 @@ export class MbtHarness {
     this.execute({
       type: "FinishPurge",
       dumpId: this.requireDump(dumpValue),
+    });
+  }
+
+  recordAnalysis(dumpValue: bigint): void {
+    const dump = slot(dumpValue, "dump");
+    const session = this.requireSession();
+    const inputSha256 = session.dumpSha256.get(dump);
+    if (inputSha256 === undefined) {
+      throw new Error(`dump slot ${dump} has no sealed sha256 to analyze`);
+    }
+    // A repeat of the same (dump, analyzer, version, kind, inputSha256)
+    // identity is an idempotent replay: the engine returns the stored report
+    // and stores nothing new (receipt.replayed), so re-firing while recorded
+    // only advances action_taken, exactly like the model action.
+    this.execute({
+      type: "RecordAnalysis",
+      dumpId: this.requireDump(dump),
+      analyzerName: "mbt",
+      analyzerVersion: "1",
+      kind: "triage",
+      inputSha256,
+      outcome: "completed",
+      summary: "model-based test analysis record",
     });
   }
 
@@ -509,6 +536,10 @@ export class MbtHarness {
         const sha256 = dumpBySlot(modelSlot)?.sha256;
         return sha256 !== null && sha256 !== undefined;
       }),
+      analysisRecorded: MODEL_SLOTS.filter((modelSlot) => {
+        const dumpId = session.dumps.get(modelSlot);
+        return dumpId !== undefined && session.engine.listAnalyses(dumpId).length > 0;
+      }),
       validation: MODEL_SLOTS.map(
         (modelSlot) => dumpBySlot(modelSlot)?.validation ?? "not-checked",
       ),
@@ -630,6 +661,9 @@ export class DumpLedgerMbtPort implements DumpLedgerPort {
   purgeSymbol(input: PurgeSymbolInput): void {
     this.call("PurgeSymbol", () => this.harness.purgeSymbol(input.dump));
   }
+  recordAnalysis(input: RecordAnalysisInput): void {
+    this.call("RecordAnalysis", () => this.harness.recordAnalysis(input.dump));
+  }
   issueToken(input: IssueTokenInput): void {
     this.call("IssueToken", () => this.harness.issueToken(input.token));
   }
@@ -711,6 +745,9 @@ type IngestSymbolReturnsVoid = Assert<
 type PurgeSymbolReturnsVoid = Assert<
   IsExactly<ReturnType<DumpLedgerMbtPort["purgeSymbol"]>, void>
 >;
+type RecordAnalysisReturnsVoid = Assert<
+  IsExactly<ReturnType<DumpLedgerMbtPort["recordAnalysis"]>, void>
+>;
 type IssueTokenReturnsVoid = Assert<
   IsExactly<ReturnType<DumpLedgerMbtPort["issueToken"]>, void>
 >;
@@ -756,6 +793,7 @@ type ConcreteVoidAssertions =
   | IssueTokenReturnsVoid
   | MarkQuarantinedReturnsVoid
   | PromoteObjectReturnsVoid
+  | RecordAnalysisReturnsVoid
   | RejectDumpReturnsVoid
   | RevokeTokenReturnsVoid
   | SealUploadReturnsVoid

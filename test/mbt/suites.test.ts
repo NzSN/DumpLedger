@@ -76,9 +76,9 @@ test("the base corpus passes as a checked application suite", async () => {
     return { port: adapter, dispose: () => adapter.dispose?.() };
   };
   const result = await runSuite(suite, { mirror: MIRROR_BIN, implementation });
-  assertPassedSuite(result, 9, BASE_REQUIRED_ACTIONS);
-  // 62 port actions include 9 per-trace initializations; transitions are the rest.
-  assert.equal(result.evidence.transitionsMatched, String(53));
+  assertPassedSuite(result, 10, BASE_REQUIRED_ACTIONS);
+  // 72 port actions include 10 per-trace initializations; transitions are the rest.
+  assert.equal(result.evidence.transitionsMatched, String(62));
   assert.equal(allocated, 1, "one adapter serves the corpus; Initialize resets the SUT per trace");
   assert.equal(disposed, 1);
 });

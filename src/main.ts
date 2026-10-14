@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { parseAnalyzerTokenHash } from "./auth/analyzer-token.js";
 import { parseIngestTokenHash } from "./auth/ingest-token.js";
 import { OperatorSessions } from "./auth/sessions.js";
 import { createDumpLedgerEngine } from "./engine/dump-ledger-engine.js";
@@ -47,6 +48,10 @@ export async function main(): Promise<void> {
   // Optional CI symbol-ingest token (docs/security-model.md): unset or empty
   // disables token auth entirely; a malformed digest fails boot fast.
   const ingestTokenHash = parseIngestTokenHash(process.env.DUMP_LEDGER_INGEST_TOKEN_HASH);
+  // Optional analyzer read token (docs/analyzer-integration-design.md,
+  // "Analyzer tokens"): unset or empty disables the bearer path entirely; a
+  // malformed digest fails boot fast, exactly like the ingest token above.
+  const analyzerTokenHash = parseAnalyzerTokenHash(process.env.DUMP_LEDGER_ANALYZER_TOKEN_HASH);
   const maxConcurrentUploads = positiveIntegerEnvironment("DUMP_LEDGER_MAX_CONCURRENT_UPLOADS", 2);
   const uploadTimeouts = validateUploadTimeouts({
     idleMs: positiveIntegerEnvironment("DUMP_LEDGER_UPLOAD_IDLE_TIMEOUT_MS", DEFAULT_UPLOAD_TIMEOUTS.idleMs),
@@ -116,6 +121,7 @@ export async function main(): Promise<void> {
     application,
     sessions,
     ...(ingestTokenHash === undefined ? {} : { ingestTokenHash }),
+    ...(analyzerTokenHash === undefined ? {} : { analyzerTokenHash }),
     uploadLifecycle: new EngineUploadLifecycle(engine),
     uploadSink: new VaultUploadSink(vault),
     uploadPostProcessor: postProcessor,

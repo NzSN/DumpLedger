@@ -1,13 +1,87 @@
 import { createHash } from "node:crypto";
 import BetterSqlite3 from "better-sqlite3";
 import { DumpLedgerError } from "../domain/errors.js";
-import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type SymbolArtifactId } from "../domain/ids.js";
+import { parseAnalysisId, parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AnalysisId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type SymbolArtifactId } from "../domain/ids.js";
 import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type SymbolArtifactKind, type SymbolIngestAuthChannel, type TokenState, type ValidationState } from "../domain/lifecycle.js";
-import { isDebugSymbolArtifact, type AuditEventProjection, type DumpLedgerProjection, type DumpProjection, type GrantProjection, type StoredSymbolArtifact } from "../engine/projection.js";
+import type { AnalysisOutcome } from "../engine/commands.js";
+import { isDebugSymbolArtifact, type AuditEventProjection, type DumpLedgerProjection, type DumpProjection, type GrantProjection, type StoredAnalysisReport, type StoredSymbolArtifact } from "../engine/projection.js";
 import { applyMigrations } from "./migrations.js";
 
 /** Mirrors the contract cap; kept local so the ledger imports no HTTP module. */
 export const MAX_GRANT_UPLOAD_SLOTS = 128;
+
+/** Mirrors the catalog page cap (docs/analyzer-integration-design.md, "Dump
+ * catalog search"); kept local so the ledger imports no HTTP module. */
+export const MAX_CATALOG_PAGE = 200;
+
+/** Mirrors the event-feed page cap (docs/analyzer-integration-design.md,
+ * "Event feed"); kept local so the ledger imports no HTTP module. */
+export const MAX_AUDIT_FEED_PAGE = 500;
+
+/** Filters for a catalog search; every field is optional and absent fields
+ * impose no constraint. */
+export interface DumpCatalogFilter {
+  readonly caseId?: CaseId;
+  readonly customerId?: CustomerId;
+  readonly phase?: DumpPhase;
+  readonly validation?: ValidationState;
+  /** Inclusive bounds on `received_at` (canonical UTC timestamps). */
+  readonly receivedAfter?: string;
+  readonly receivedBefore?: string;
+  /** Exact inspector architecture; only a stored inspection that succeeded
+   * can match. */
+  readonly architecture?: string;
+  /** Exact unsigned 32-bit exception code. */
+  readonly exceptionCode?: number;
+  readonly sha256?: string;
+}
+
+/** Keyset position: the `(receivedAt, dumpId)` pair of the last delivered row. */
+export interface DumpCatalogAfter { readonly receivedAt: string; readonly dumpId: DumpId }
+
+/** One dump row of a catalog page: dump and case identity, lifecycle state,
+ * and the inspector facts carried by the stored inspection. */
+export interface DumpCatalogRow {
+  readonly dumpId: DumpId;
+  readonly caseId: CaseId;
+  readonly customerId: CustomerId;
+  readonly phase: DumpPhase;
+  readonly validation: ValidationState;
+  readonly originalName: string;
+  readonly byteSize: bigint | null;
+  readonly sha256: string | null;
+  readonly receivedAt: string;
+  readonly availableAt: string | null;
+  readonly purgeAt: string | null;
+  /** Inspector fact, present only when the stored inspection succeeded and
+   * carried it. */
+  readonly architecture?: string;
+  /** Inspector fact: unsigned 32-bit code. */
+  readonly exceptionCode?: number;
+  /** Inspector fact: unsigned 64-bit address. */
+  readonly exceptionAddress?: bigint;
+}
+
+/** One keyset page: up to {@link MAX_CATALOG_PAGE} rows plus the cursor of the
+ * following page, present exactly while another row exists. */
+export interface DumpCatalogPage {
+  readonly rows: readonly DumpCatalogRow[];
+  readonly nextAfter?: DumpCatalogAfter;
+}
+
+/** One audit row of the event feed (docs/analyzer-integration-design.md,
+ * "Event feed"): the append-only `audit_events` row addressed by its SQLite
+ * `rowid`, plus the subject identifiers and the parsed `detail_json` payload. */
+export interface AuditFeedEntry {
+  readonly rowid: number;
+  readonly eventId: AuditEventId;
+  readonly occurredAt: string;
+  readonly action: string;
+  readonly customerId: CustomerId | null;
+  readonly caseId: CaseId | null;
+  readonly dumpId: DumpId | null;
+  readonly detail: Record<string, unknown>;
+}
 
 export interface GrantRecord extends GrantProjection { readonly secretDigest: string }
 export interface ImportCustomerInsert { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string }
@@ -16,6 +90,23 @@ export interface ImportGrantInsert { readonly grantId: GrantId; readonly caseId:
 export interface ImportDumpStagedInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly originalName: string; readonly byteSize: bigint; readonly sha256: string; readonly receivedAt: string; readonly purgeAt: string | null }
 export interface ImportDumpTombstoneInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly phase: "rejected" | "deleted"; readonly originalName: string; readonly byteSize: bigint | null; readonly sha256: string | null; readonly validation: ValidationState; readonly coverage: CoverageKind | null; readonly inspectionError: string | null; readonly inspectionFacts: Readonly<Record<string, unknown>> | null; readonly receivedAt: string; readonly availableAt: string | null; readonly purgeAt: string | null; readonly purgedAt: string | null }
 export interface ImportAuditEventInsert { readonly eventId: AuditEventId; readonly occurredAt: string; readonly action: string; readonly customerId: CustomerId | null; readonly caseId: CaseId | null; readonly dumpId: DumpId | null; readonly detail: Readonly<Record<string, unknown>> }
+/** Insert shape of one immutable analysis report (docs/analyzer-integration-design.md,
+ * "Analysis write-back"). The engine assigns `analysisId` and `createdAt`; the
+ * identity tuple `(dump_id, analyzer_name, analyzer_version, kind, input_sha256)`
+ * is unique, so a repeat insert is refused by the database as a backstop. */
+export interface AnalysisInsert {
+  readonly analysisId: AnalysisId;
+  readonly dumpId: DumpId;
+  readonly analyzerName: string;
+  readonly analyzerVersion: string;
+  readonly kind: string;
+  readonly inputSha256: string;
+  readonly outcome: AnalysisOutcome;
+  readonly summary: string;
+  readonly facts: Readonly<Record<string, unknown>> | null;
+  readonly duplicateOf: DumpId | null;
+  readonly createdAt: string;
+}
 interface EventIdentity { readonly eventId: AuditEventId; readonly occurredAt: string }
 type Row = Record<string, unknown>;
 function requiredString(row: Row, key: string): string { const value = row[key]; if (typeof value !== "string") throw new DumpLedgerError("integrity_failure", `invalid database ${key}`); return value; }
@@ -55,6 +146,156 @@ function grantFromRow(row: Row): GrantRecord {
     expiresAt: requiredString(row, "expires_at"), maxBytes: BigInt(requiredString(row, "max_bytes")),
     maxUploads: boundedInteger(row, "max_uploads", 1, MAX_GRANT_UPLOAD_SLOTS), uploadsUsed: boundedInteger(row, "uploads_used", 0, MAX_GRANT_UPLOAD_SLOTS),
     consumedByDumpId: consumed === null ? null : databaseValue("consumed_by_dump_id", parseDumpId, consumed), createdAt: requiredString(row, "created_at"),
+  };
+}
+
+/** Maps one `dump_analyses` row: the stored JSON `facts` parse like the stored
+ * inspector facts, `duplicate_of` is a dump identifier when present, and the
+ * closed outcome vocabulary is re-checked against the stored text. */
+function analysisFromRow(row: Row): StoredAnalysisReport {
+  const outcome = row.outcome;
+  if (outcome !== "completed" && outcome !== "failed") throw new DumpLedgerError("integrity_failure", "invalid database outcome");
+  const factsJson = nullableString(row, "facts_json");
+  const duplicateOf = nullableString(row, "duplicate_of");
+  return {
+    analysisId: databaseValue("analysis_id", parseAnalysisId, row.analysis_id),
+    dumpId: databaseValue("dump_id", parseDumpId, row.dump_id),
+    analyzer: { name: requiredString(row, "analyzer_name"), version: requiredString(row, "analyzer_version") },
+    kind: requiredString(row, "kind"), inputSha256: requiredString(row, "input_sha256"),
+    outcome, summary: requiredString(row, "summary"),
+    facts: factsJson === null ? null : parseJsonObject(factsJson),
+    duplicateOf: duplicateOf === null ? null : databaseValue("duplicate_of", parseDumpId, duplicateOf),
+    createdAt: requiredString(row, "created_at"),
+  };
+}
+
+/** Catalog reads join the case row for `customer_id` and keep the inspector
+ * facts in their stored JSON; the fact filters extract them in SQL. */
+const CATALOG_COLUMNS = "d.dump_id, d.case_id, c.customer_id, d.phase, d.validation, d.original_name, d.byte_size, d.sha256, d.received_at, d.available_at, d.purge_at, d.inspection_error, d.inspection_facts_json";
+const CATALOG_SELECT = `SELECT ${CATALOG_COLUMNS} FROM dumps d JOIN cases c ON c.case_id = d.case_id`;
+
+/** Audit feed columns; `rowid` is selected explicitly because `SELECT *`
+ * does not include it. */
+const AUDIT_FEED_SELECT = "SELECT rowid, event_id, occurred_at, action, customer_id, case_id, dump_id, detail_json FROM audit_events";
+
+/** Stored inspector facts stringify their 64-bit integers (`serializeFacts`
+ * in src/inspection/vault-inspection-port.ts), so the catalog parses decimal
+ * text rather than JSON numbers. */
+const CANONICAL_UNSIGNED_TEXT = /^(0|[1-9][0-9]*)$/;
+const MAX_UINT32 = 0xffff_ffffn;
+const MAX_UINT64 = 0xffff_ffff_ffff_ffffn;
+const MAX_CATALOG_ARCHITECTURE_LENGTH = 64;
+
+function factUnsigned(value: unknown): bigint | null {
+  return typeof value === "string" && CANONICAL_UNSIGNED_TEXT.test(value) ? BigInt(value) : null;
+}
+function factUint32(value: unknown): number | null {
+  const parsed = factUnsigned(value);
+  return parsed === null || parsed > MAX_UINT32 ? null : Number(parsed);
+}
+function factUint64(value: unknown): bigint | null {
+  const parsed = factUnsigned(value);
+  return parsed === null || parsed > MAX_UINT64 ? null : parsed;
+}
+/** Bounded, control-character-free fact text; anything else reads as absent,
+ * mirroring the tolerant stored-fact readers in the HTTP layer. */
+function factArchitecture(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CATALOG_ARCHITECTURE_LENGTH) return null;
+  return /[\u0000-\u001f\u007f]/.test(value) ? null : value;
+}
+
+/** Maps one `CATALOG_SELECT` row. Inspector facts are read only when the
+ * stored inspection succeeded (`inspection_error IS NULL`); a flagged
+ * inspection's stored facts stay out of the catalog. */
+function catalogRowFromRow(row: Row): DumpCatalogRow {
+  const facts = nullableString(row, "inspection_error") === null && row.inspection_facts_json !== null
+    ? parseJsonObject(requiredString(row, "inspection_facts_json"))
+    : null;
+  const architecture = facts === null ? null : factArchitecture(facts.architecture);
+  const exceptionCode = facts === null ? null : factUint32(facts.exceptionCode);
+  const exceptionAddress = facts === null ? null : factUint64(facts.exceptionAddress);
+  const byteSize = nullableString(row, "byte_size");
+  return {
+    dumpId: databaseValue("dump_id", parseDumpId, row.dump_id), caseId: databaseValue("case_id", parseCaseId, row.case_id),
+    customerId: databaseValue("customer_id", parseCustomerId, row.customer_id),
+    phase: databaseValue("phase", parseDumpPhase, row.phase), validation: databaseValue("validation", parseValidationState, row.validation),
+    originalName: requiredString(row, "original_name"), byteSize: byteSize === null ? null : BigInt(byteSize), sha256: nullableString(row, "sha256"),
+    receivedAt: requiredString(row, "received_at"),
+    availableAt: nullableIsoTimestamp(row, "available_at"), purgeAt: nullableIsoTimestamp(row, "purge_at"),
+    ...(architecture === null ? {} : { architecture }),
+    ...(exceptionCode === null ? {} : { exceptionCode }),
+    ...(exceptionAddress === null ? {} : { exceptionAddress }),
+  };
+}
+
+/** Builds the optional AND clauses of a catalog read into `parameters`. The
+ * fact filters extract the stored JSON in SQL (no per-row JavaScript scan)
+ * and require a successful stored inspection; the keyset clause compares the
+ * `(received_at, dump_id)` row value so equal timestamps cannot skip rows. */
+function catalogWhere(filter: DumpCatalogFilter, after: DumpCatalogAfter | undefined, parameters: Record<string, unknown>): string {
+  const clauses: string[] = [];
+  if (filter.caseId !== undefined) { clauses.push("d.case_id = @caseId"); parameters.caseId = filter.caseId; }
+  if (filter.customerId !== undefined) { clauses.push("c.customer_id = @customerId"); parameters.customerId = filter.customerId; }
+  if (filter.phase !== undefined) { clauses.push("d.phase = @phase"); parameters.phase = filter.phase; }
+  if (filter.validation !== undefined) { clauses.push("d.validation = @validation"); parameters.validation = filter.validation; }
+  if (filter.receivedAfter !== undefined) { clauses.push("d.received_at >= @receivedAfter"); parameters.receivedAfter = filter.receivedAfter; }
+  if (filter.receivedBefore !== undefined) { clauses.push("d.received_at <= @receivedBefore"); parameters.receivedBefore = filter.receivedBefore; }
+  if (filter.architecture !== undefined) { clauses.push("d.inspection_error IS NULL AND CAST(json_extract(d.inspection_facts_json, '$.architecture') AS TEXT) = @architecture"); parameters.architecture = filter.architecture; }
+  if (filter.exceptionCode !== undefined) {
+    const code = filter.exceptionCode;
+    if (!Number.isSafeInteger(code) || code < 0 || code > 0xffff_ffff) throw new DumpLedgerError("invalid_input", "exceptionCode must be an unsigned 32-bit integer");
+    /* The stored code is decimal text (serializeFacts); CAST keeps the compare
+     * textual whichever storage class the JSON scalar has. */
+    clauses.push("d.inspection_error IS NULL AND CAST(json_extract(d.inspection_facts_json, '$.exceptionCode') AS TEXT) = @exceptionCode");
+    parameters.exceptionCode = String(code);
+  }
+  if (filter.sha256 !== undefined) { clauses.push("d.sha256 = @sha256"); parameters.sha256 = filter.sha256; }
+  if (after !== undefined) {
+    clauses.push("(d.received_at, d.dump_id) > (@afterReceivedAt, @afterDumpId)");
+    parameters.afterReceivedAt = after.receivedAt;
+    parameters.afterDumpId = after.dumpId;
+  }
+  return clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
+}
+
+/** Builds the optional AND clauses of an audit-feed read into `parameters`.
+ * The action allowlist binds one parameter per action; an explicitly empty
+ * allowlist matches no action (a filter over zero actions, not "all"). */
+function auditFeedWhere(afterRowid: number | undefined, filter: { readonly actions?: readonly string[]; readonly caseId?: CaseId } | undefined, parameters: Record<string, unknown>): string {
+  const clauses: string[] = [];
+  if (afterRowid !== undefined) { clauses.push("rowid > @afterRowid"); parameters.afterRowid = afterRowid; }
+  if (filter !== undefined && filter.actions !== undefined) {
+    if (filter.actions.length === 0) clauses.push("1 = 0");
+    else {
+      clauses.push(`action IN (${filter.actions.map((_action, index) => `@action${index}`).join(", ")})`);
+      filter.actions.forEach((action, index) => { parameters[`action${index}`] = action; });
+    }
+  }
+  if (filter !== undefined && filter.caseId !== undefined) { clauses.push("case_id = @caseId"); parameters.caseId = filter.caseId; }
+  return clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
+}
+
+/** Feed page sizes are clamped into `[1, MAX_AUDIT_FEED_PAGE]`; an absent or
+ * non-finite size reads as the default, which is the cap. */
+function auditFeedPageSize(limit: number | undefined): number {
+  if (limit === undefined) return MAX_AUDIT_FEED_PAGE;
+  const size = Math.floor(limit);
+  if (!Number.isFinite(size)) return MAX_AUDIT_FEED_PAGE;
+  return Math.min(Math.max(size, 1), MAX_AUDIT_FEED_PAGE);
+}
+
+/** Maps one audit row to the feed shape; `detail_json` parses to a plain
+ * object exactly as `snapshot()` reads it. */
+function auditFeedEntryFromRow(row: Row): AuditFeedEntry {
+  return {
+    rowid: boundedInteger(row, "rowid", 1, Number.MAX_SAFE_INTEGER),
+    eventId: databaseValue("event_id", parseAuditEventId, row.event_id),
+    occurredAt: requiredString(row, "occurred_at"),
+    action: requiredString(row, "action"),
+    customerId: row.customer_id === null ? null : databaseValue("customer_id", parseCustomerId, row.customer_id),
+    caseId: row.case_id === null ? null : databaseValue("case_id", parseCaseId, row.case_id),
+    dumpId: row.dump_id === null ? null : databaseValue("dump_id", parseDumpId, row.dump_id),
+    detail: parseJsonObject(requiredString(row, "detail_json")),
   };
 }
 
@@ -191,7 +432,15 @@ export class SqliteLedger {
   acceptDump(dumpId: DumpId, coverage: CoverageKind, facts: Readonly<Record<string, unknown>>, event: EventIdentity): void { this.transitionDump(dumpId, ["quarantined"], event, "AcceptDump", "phase = 'available', validation = 'valid', coverage = @coverage, downloadable = 1, inspection_error = NULL, inspection_facts_json = @facts, available_at = @availableAt", {coverage, facts: stringifyJson(facts), availableAt:event.occurredAt}, "blob_state = 'vault' AND sha256 IS NOT NULL"); }
   rejectDump(dumpId: DumpId, reason: string, event: EventIdentity): void { this.transitionDump(dumpId, ["quarantined"], event, "RejectDump", "phase = 'rejected', validation = 'invalid', downloadable = 0, inspection_error = @reason", {reason}, "blob_state = 'vault'"); }
   beginPurge(dumpId: DumpId, event: EventIdentity): void { this.transitionDump(dumpId, ["available", "rejected"], event, "BeginPurge", "phase = 'deleting', downloadable = 0"); }
-  finishPurge(dumpId: DumpId, event: EventIdentity): void { this.transitionDump(dumpId, ["deleting"], event, "FinishPurge", "phase = 'deleted', blob_state = 'none', downloadable = 0, purged_at = @purgedAt", {purgedAt:event.occurredAt}); }
+  finishPurge(dumpId: DumpId, event: EventIdentity): void {
+    this.database.transaction(() => {
+      this.transitionDump(dumpId, ["deleting"], event, "FinishPurge", "phase = 'deleted', blob_state = 'none', downloadable = 0, purged_at = @purgedAt", {purgedAt:event.occurredAt});
+      /* Dump rows are tombstoned (phase = 'deleted'), never deleted, so the
+       * FK's ON DELETE CASCADE never fires; the analysis cascade is this
+       * explicit delete in the same transaction as the phase change. */
+      this.prepare("DELETE FROM dump_analyses WHERE dump_id = ?").run(dumpId);
+    })();
+  }
   setRetention(dumpId: DumpId, purgeAt: string, event: EventIdentity): void {
     this.database.transaction(() => {
       const dump = this.getDump(dumpId); if (dump === null) throw new DumpLedgerError("not_found", "dump was not found");
@@ -203,6 +452,79 @@ export class SqliteLedger {
   authorizeDownload(dumpId: DumpId, event: EventIdentity): DumpProjection {
     return this.database.transaction(() => { const dump = this.getDump(dumpId); if (dump === null) throw new DumpLedgerError("not_found", "dump was not found"); if (dump.phase !== "available" || !dump.downloadable) throw new DumpLedgerError("invalid_transition", "dump is not available for download"); this.insertAudit(event, "AuthorizeDownload", this.customerForCase(dump.caseId), dump.caseId, dumpId, {}); return dump; })();
   }
+
+  /**
+   * Records one immutable analysis report and its `RecordAnalysis` audit event
+   * in a single transaction (docs/analyzer-integration-design.md, "Analysis
+   * write-back"). A repeat of the identity tuple is an idempotent replay: the
+   * stored report is returned and nothing is written, so the audit trail gains
+   * no second event. The audit detail carries identifiers and outcome only —
+   * never the summary or the analyzer's facts.
+   */
+  recordAnalysis(insert: AnalysisInsert, event: EventIdentity): { readonly report: StoredAnalysisReport; readonly deduplicated: boolean } {
+    return this.database.transaction(() => {
+      const dump = this.getDump(insert.dumpId);
+      if (dump === null) throw new DumpLedgerError("not_found", "dump was not found");
+      const existing = this.findAnalysisByIdentity(insert.dumpId, insert.analyzerName, insert.analyzerVersion, insert.kind, insert.inputSha256);
+      if (existing !== null) return { report: existing, deduplicated: true };
+      this.prepare("INSERT INTO dump_analyses(analysis_id, dump_id, analyzer_name, analyzer_version, kind, input_sha256, outcome, summary, facts_json, duplicate_of, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(insert.analysisId, insert.dumpId, insert.analyzerName, insert.analyzerVersion, insert.kind, insert.inputSha256, insert.outcome, insert.summary, insert.facts === null ? null : stringifyJson(insert.facts), insert.duplicateOf, insert.createdAt);
+      this.insertAudit(event, "RecordAnalysis", this.customerForCase(dump.caseId), dump.caseId, insert.dumpId, {
+        analysisId: insert.analysisId, dumpId: insert.dumpId, caseId: dump.caseId,
+        analyzerName: insert.analyzerName, analyzerVersion: insert.analyzerVersion, kind: insert.kind, outcome: insert.outcome,
+      });
+      const report = this.findAnalysisByIdentity(insert.dumpId, insert.analyzerName, insert.analyzerVersion, insert.kind, insert.inputSha256);
+      if (report === null || report.analysisId !== insert.analysisId) throw new DumpLedgerError("integrity_failure", "recorded analysis report was not found after insert");
+      return { report, deduplicated: false };
+    })();
+  }
+
+  /** Identity-tuple lookup, served by the UNIQUE `(dump_id, analyzer_name, analyzer_version, kind, input_sha256)`. */
+  findAnalysisByIdentity(dumpId: DumpId, analyzerName: string, analyzerVersion: string, kind: string, inputSha256: string): StoredAnalysisReport | null {
+    const row = this.prepare("SELECT * FROM dump_analyses WHERE dump_id = ? AND analyzer_name = ? AND analyzer_version = ? AND kind = ? AND input_sha256 = ?").get(dumpId, analyzerName, analyzerVersion, kind, inputSha256) as Row | undefined;
+    return row === undefined ? null : analysisFromRow(row);
+  }
+
+  /** Every stored report of one dump, ordered by `(created_at, analysis_id)`. */
+  listAnalyses(dumpId: DumpId): readonly StoredAnalysisReport[] {
+    return (this.prepare("SELECT * FROM dump_analyses WHERE dump_id = ? ORDER BY created_at, analysis_id").all(dumpId) as Row[]).map(analysisFromRow);
+  }
+  /**
+   * One keyset page of the dump catalog (docs/analyzer-integration-design.md,
+   * "Dump catalog search"), ordered by `(received_at, dump_id)` ascending.
+   * The scan reads {@link MAX_CATALOG_PAGE} + 1 rows so `nextAfter` is present
+   * exactly while another page exists; pagination does not pin a snapshot, so
+   * intake that lands after the cursor surfaces on a later page.
+   */
+  searchDumps(filter: DumpCatalogFilter, after?: DumpCatalogAfter): DumpCatalogPage {
+    const parameters: Record<string, unknown> = {};
+    const rows = this.prepare(`${CATALOG_SELECT}${catalogWhere(filter, after, parameters)} ORDER BY d.received_at, d.dump_id LIMIT ${MAX_CATALOG_PAGE + 1}`).all(parameters) as Row[];
+    const page = rows.slice(0, MAX_CATALOG_PAGE).map(catalogRowFromRow);
+    const last = page[MAX_CATALOG_PAGE - 1];
+    return rows.length > MAX_CATALOG_PAGE && last !== undefined
+      ? { rows: page, nextAfter: { receivedAt: last.receivedAt, dumpId: last.dumpId } }
+      : { rows: page };
+  }
+  /** Every dump carrying exactly these bytes, in catalog order (answered by
+   * `dumps_sha256_idx`). */
+  findDumpsBySha256(sha256: string): readonly DumpCatalogRow[] {
+    return (this.prepare(`${CATALOG_SELECT} WHERE d.sha256 = ? ORDER BY d.received_at, d.dump_id`).all(sha256) as Row[]).map(catalogRowFromRow);
+  }
+
+  /**
+   * One `rowid` page of the audit event feed (docs/analyzer-integration-design.md,
+   * "Event feed"), ordered by `rowid` ascending. The trail is append-only, so a
+   * poller passing `lastRowid` back as `afterRowid` never sees a row twice and
+   * never misses one; an empty page echoes the request cursor (0 without one),
+   * which is how a caught-up poller sleeps.
+   */
+  readAuditEvents(afterRowid?: number, filter?: { readonly actions?: readonly string[]; readonly caseId?: CaseId }, limit?: number): { readonly events: readonly AuditFeedEntry[]; readonly lastRowid: number } {
+    const parameters: Record<string, unknown> = {};
+    const events = (this.prepare(`${AUDIT_FEED_SELECT}${auditFeedWhere(afterRowid, filter, parameters)} ORDER BY rowid LIMIT ${auditFeedPageSize(limit)}`).all(parameters) as Row[]).map(auditFeedEntryFromRow);
+    const last = events[events.length - 1];
+    return { events, lastRowid: last !== undefined ? last.rowid : (afterRowid ?? 0) };
+  }
+
   beginImport(event: EventIdentity, detail: Readonly<Record<string, unknown>>): void {
     this.database.transaction(() => {
       if (!this.isEmpty()) throw new DumpLedgerError("invalid_transition", "import requires an empty ledger");

@@ -21,6 +21,9 @@ a route or contract, update this reference alongside it.
 - [Upload grants](#upload-grants)
 - [Dump uploads](#dump-uploads)
 - [Dump detail, download, and retention](#dump-detail-download-and-retention)
+- [Dump catalog](#dump-catalog)
+- [Audit event feed](#audit-event-feed)
+- [Analysis write-back](#analysis-write-back)
 - [Symbols](#symbols)
 - [Operations and transfers](#operations-and-transfers)
 - [Health and browser routes](#health-and-browser-routes)
@@ -69,6 +72,8 @@ The inventory below uses these access labels:
 | Mutation | Session cookie plus `X-CSRF-Token` from the session response |
 | Grant | `X-Upload-Grant: <secret>`; no operator session or CSRF token |
 | Symbol ingest | Mutation authentication, or the dedicated CI bearer token |
+| Analyzer | Valid session cookie, or the dedicated analyzer bearer token |
+| Mutation or Analyzer | Mutation authentication, or the dedicated analyzer bearer token |
 
 Operator login sets an `HttpOnly; SameSite=Strict; Path=/` cookie, with `Secure`
 in HTTPS mode. Sessions expire after eight hours by default, live in process
@@ -81,12 +86,29 @@ Mutation requests also validate `Origin` when present and reject
 headers but must still send the cookie and CSRF token. Missing/expired sessions
 produce `401`; failed CSRF/origin checks produce `403` without logging out.
 
-Only `POST /api/v1/symbols` accepts `Authorization: Bearer <token>`. The operator
-configures its SHA-256 digest through `DUMP_LEDGER_INGEST_TOKEN_HASH`. If any
-`Authorization` header is supplied on that endpoint, bearer authentication
-takes precedence: an invalid token returns `401` even if a valid session cookie
-is also present. Successful bearer requests do not require CSRF or Origin
-evidence. This token cannot list, purge, export, or administer the ledger.
+`POST /api/v1/symbols` and the six analyzer-scoped routes (five reads plus the
+analysis write-back) accept `Authorization: Bearer <token>`. For symbol ingest, the operator configures the
+token's SHA-256 digest through `DUMP_LEDGER_INGEST_TOKEN_HASH`. If any
+`Authorization` header is supplied on one of these endpoints, bearer
+authentication takes precedence: an invalid token returns `401` even if a
+valid session cookie is also present. Successful bearer requests do not
+require CSRF or Origin evidence. The ingest token cannot list, purge, export,
+or administer the ledger.
+
+The analyzer bearer token is verified against the SHA-256 digest configured in
+`DUMP_LEDGER_ANALYZER_TOKEN_HASH` (64 lowercase hex characters; unset or empty
+disables it) and follows the same precedence rules: any `Authorization` header
+selects the bearer path only, so a wrong, malformed, or disabled token is the
+same generic `401 unauthenticated` even alongside a valid session cookie (the
+`Bearer` scheme name is matched case-insensitively). Without the header the
+session guard applies unchanged. Bearer requests carry no cookie semantics, so
+no CSRF or Origin evidence applies. Its scope is exactly the five read routes
+`GET /api/v1/dumps`, `GET /api/v1/dumps/by-sha256/:sha256`,
+`GET /api/v1/dumps/:dumpId`, `GET /api/v1/dumps/:dumpId/content`, and
+`GET /api/v1/events`, plus the analysis write-back
+`POST /api/v1/dumps/:dumpId/analyses` (six routes in total); session callers
+retain access to those routes — the write-back as a mutation — and every other
+route, including the retention change, rejects a bearer token.
 
 See [security-model.md](security-model.md) for transport and deployment controls.
 
@@ -109,8 +131,13 @@ See [security-model.md](security-model.md) for transport and deployment controls
 | POST | `/api/v1/grants/:grantId/revoke` | Mutation | 200 | Revoke grant |
 | GET | `/api/v1/uploads/quota` | Grant | 200 | Read remaining quota |
 | POST | `/api/v1/uploads` | Grant | 201 / 202 | Stream a dump |
-| GET | `/api/v1/dumps/:dumpId` | Session | 200 | Dump detail |
-| GET | `/api/v1/dumps/:dumpId/content` | Session | 200 | Stream dump bytes |
+| GET | `/api/v1/dumps` | Analyzer | 200 | Search dumps across cases |
+| GET | `/api/v1/dumps/by-sha256/:sha256` | Analyzer | 200 | Exact content-hash lookup |
+| GET | `/api/v1/dumps/:dumpId` | Analyzer | 200 | Dump detail |
+| GET | `/api/v1/dumps/:dumpId/content` | Analyzer | 200 | Stream dump bytes |
+| POST | `/api/v1/dumps/:dumpId/analyses` | Mutation or Analyzer | 201 / 200 | Record an analysis report |
+| GET | `/api/v1/dumps/:dumpId/analyses` | Analyzer | 200 | List analysis reports |
+| GET | `/api/v1/events` | Analyzer | 200 | Audit event feed |
 | PUT | `/api/v1/dumps/:dumpId/retention` | Mutation | 200 | Schedule purge |
 | GET | `/api/v1/symbols` | Session | 200 | List PDB/image artifacts |
 | POST | `/api/v1/symbols` | Symbol ingest | 201 | Stream PDB/EXE/DLL |
@@ -125,9 +152,10 @@ See [security-model.md](security-model.md) for transport and deployment controls
 | GET | `/api/v1/operations/imports/:id` | Session | 200 | Read import outcome |
 | GET | `/health` | Public | 200 | Process liveness |
 
-There are no general `GET /api/v1/customers` or `GET /api/v1/dumps` collection
-endpoints. Use the dashboard/customer/case responses to discover those records.
-There is no direct dump-delete HTTP endpoint; retention drives purge.
+There is no `GET /api/v1/customers` collection endpoint; use the dashboard,
+customer, and case responses to discover customers. `GET /api/v1/dumps` is the
+dump catalog search. There is no direct dump-delete HTTP endpoint; retention
+drives purge.
 
 ## Sessions
 
@@ -390,6 +418,10 @@ Source: [upload routes](../src/http/routes/upload-routes.ts),
 
 ## Dump detail, download, and retention
 
+Dump detail and raw content accept the operator session or the analyzer bearer
+token; the retention change stays operator-only. See
+[Authentication](#authentication) for the token's exact read scope.
+
 `GET /api/v1/dumps/:dumpId` returns:
 
 ```text
@@ -427,7 +459,14 @@ or WinSxS; it is a display hint, independent of the artifact's presence here.
 `GET /api/v1/dumps/:dumpId/content` streams `application/octet-stream` with
 `Content-Length` and `Content-Disposition: attachment; filename="<dumpId>.dmp"`.
 Only available, downloadable dumps with accessible vault bytes are served;
-an unavailable download returns `404 not_found`.
+an unavailable download returns `404 not_found`. An available, downloadable
+dump with a sealed digest also carries a strong `ETag: "<sha256>"` validator.
+When an `If-None-Match` request contains that exact quoted digest as one
+comma-separated element, the endpoint returns `304` with the `ETag` and no
+body; weak (`W/…`) and wildcard (`*`) elements never match, and the check runs
+before the download is opened, so a `304` consumes no vault reader.
+`Cache-Control: no-store` is unchanged: this is validator semantics for
+clients that deliberately hold bytes, not permission for intermediary caching.
 
 `PUT /api/v1/dumps/:dumpId/retention` accepts `{ "days": 30 }`, an integer
 from 1 through 36500. It returns
@@ -437,6 +476,165 @@ Invalid lifecycle states return `409 invalid_transition`.
 
 Source: [dump routes](../src/http/routes/dump-routes.ts),
 [dump contracts](../packages/http-contracts/src/dumps.ts).
+
+## Dump catalog
+
+`GET /api/v1/dumps` searches dumps across cases and returns one keyset page:
+
+```text
+{
+  dumps: DumpCatalogEntry[],
+  nextCursor?: string
+}
+DumpCatalogEntry = {
+  dumpId, caseId, customerId, phase, validation, originalName,
+  byteSize: string | null, sha256: string | null,
+  receivedAt, availableAt: string | null, purgeAt: string | null,
+  architecture?: string, exceptionCode?: number, exceptionAddress?: string,
+  symbolCoverage: { present: number, missing: number, unidentified: number }
+}
+```
+
+All query parameters are optional and may appear only once; unknown
+parameters are rejected like every other shared decoder.
+
+| Parameter | Meaning and bounds |
+|---|---|
+| `caseId` | Exact case identifier |
+| `customerId` | Exact customer identifier |
+| `phase` | Exact dump lifecycle phase (`receiving`, `sealed`, `quarantined`, `available`, `rejected`, `deleting`, `deleted`) |
+| `validation` | Exact validation state (`not-checked`, `valid`, `invalid`, `transfer-failed`) |
+| `receivedAfter` | Inclusive lower bound on `receivedAt`, canonical UTC timestamp |
+| `receivedBefore` | Inclusive upper bound on `receivedAt`, canonical UTC timestamp |
+| `architecture` | Exact inspector architecture string, at most 64 characters |
+| `exceptionCode` | Exact unsigned 32-bit exception code, canonical decimal (at most 10 characters) |
+| `sha256` | Exact content hash, 64 lowercase hex characters |
+| `cursor` | Opaque keyset cursor, at most 256 non-whitespace characters |
+
+Rows are ordered by `(receivedAt, dumpId)` ascending; a page carries at most
+200 rows. To page, repeat the request with the same filters plus the returned
+`nextCursor`; an absent `nextCursor` means the end. The cursor is opaque, a
+malformed value returns `400 invalid_request`, and pagination does not pin a
+snapshot across requests: intake that lands after the cursor appears on a
+later page. A well-formed filter that matches nothing returns an empty page
+with `200`, not `404`; malformed identifiers and filter values return
+`400 invalid_request`.
+
+`architecture`, `exceptionCode`, and `exceptionAddress` are stored-inspection
+facts: they are present only when the inspection succeeded, so a dump with an
+`inspectionError` simply omits them. `symbolCoverage` aggregates the same
+module rows as dump detail — counts of modules with a stored artifact, modules
+missing an artifact, and modules without a usable debug identity — so an
+analyzer can pre-filter symbolication without fetching each dump. Byte sizes
+and `exceptionAddress` are decimal strings; `exceptionCode` is a JSON number.
+The shared response decoder accepts at most 4096 rows; the server pages at
+200.
+
+`GET /api/v1/dumps/by-sha256/:sha256` is the exact content-hash lookup for
+duplicate detection. The path value must be 64 lowercase hex characters
+(otherwise `400 invalid_request`). It returns the same page shape with the
+matching rows in catalog order (normally zero or one) and never a
+`nextCursor`; no match is an empty `dumps` array with `200`, not `404`. Both
+catalog endpoints are read-only application queries (no engine command, no
+audit event) and accept the operator session or the analyzer bearer token.
+
+Source: [dump catalog routes](../src/http/routes/dump-catalog-routes.ts),
+[catalog contracts](../packages/http-contracts/src/catalog.ts).
+
+## Audit event feed
+
+`GET /api/v1/events` is a read-only cursor over the audit trail, ordered by
+SQLite `rowid` — append-only and strictly monotonic, so the cursor is the
+zero-padded 16-digit rowid of the last delivered row:
+
+```text
+GET /api/v1/events?since=<cursor>&actions=SealUpload,RejectDump&caseId=<id>&limit=<n>
+```
+
+All parameters are optional and may appear only once; unknown parameters are
+rejected like every other shared decoder.
+
+| Parameter | Meaning and bounds |
+|---|---|
+| `since` | Opaque cursor, 1–16 decimal digits within `Number.MAX_SAFE_INTEGER`; absent means "from the beginning" |
+| `actions` | Comma-separated audit action filter, at most 32 entries of 1–64 characters; absent means all actions |
+| `caseId` | Exact case identifier |
+| `limit` | Page size, integer 1–500; absent means the 500 cap |
+
+```text
+{ "events": [Event…], "nextCursor": string }     // nextCursor is always present
+Event = {
+  cursor: string,                  // zero-padded rowid; pass back as ?since=
+  eventId, occurredAt, action,
+  customerId: string | null, caseId: string | null, dumpId: string | null,
+  detail: { … }                    // identifiers and outcomes, ≤ 4 KiB serialized
+}
+```
+
+`nextCursor` is always present: with a non-empty page it is the last delivered
+cursor, and an empty page — including one whose `since` is beyond the current
+end — echoes the request position, which is how a poller sleeps between pages.
+The cursor is opaque; a malformed value returns `400 invalid_request`. The
+shared response decoder accepts at most 4096 entries and bounds each `detail`
+object to 4 KiB of compact JSON; the server pages at 500. Like the catalog,
+the feed is a read-only application query (no engine command, no audit event)
+and accepts the operator session or the analyzer bearer token.
+
+Source: [event routes](../src/http/routes/event-routes.ts),
+[event contracts](../packages/http-contracts/src/events.ts).
+
+## Analysis write-back
+
+An analyzer reports one verdict per analyzer name, version, kind, and exact
+dump content hash; re-running the same identity against the same bytes is an
+idempotent replay, not a duplicate.
+
+`POST /api/v1/dumps/:dumpId/analyses` accepts:
+
+```text
+{
+  analyzer: { name: string, version: string },   // self-reported, not identity
+  kind: string,                                  // bounded string, 1–64 characters
+  inputSha256: string,                           // must equal the dump's sealed sha256
+  outcome: "completed" | "failed",
+  summary: string,                               // ≤ 2000 characters, may be empty
+  facts?: { … },                                 // JSON object, ≤ 4096 serialized bytes
+  duplicateOf?: dumpId | null                    // dump the analyzer recognized
+}
+```
+
+It returns `201` with the stored `AnalysisReport` — the request fields plus
+the server-assigned `analysisId`, `dumpId`, and `createdAt` (the server clock
+is authoritative, never the analyzer's). The identity tuple
+`(dumpId, analyzer.name, analyzer.version, kind, inputSha256)` is the
+idempotency key: a repeat POST of the same tuple returns `200` with the
+stored report and writes nothing — the body of the repeat is ignored, which
+keeps analyzer retries after a lost response safe. `inputSha256` must equal
+the dump's sealed hash, otherwise `400 invalid_request`; the dump must exist
+and be `available` (unknown dump `404 not_found`, any other phase
+`409 invalid_transition`). Unknown fields, duplicate keys, wrong types, and
+out-of-bounds values are rejected by the shared decoder with
+`400 invalid_request` before any ledger change.
+
+`GET /api/v1/dumps/:dumpId/analyses` returns every stored report for one
+dump, ordered by `(createdAt, analysisId)`:
+
+```text
+{ "analyses": [AnalysisReport…] }
+```
+
+An unknown dump is `404 not_found`; a dump with no reports is an empty array
+with `200`. Both routes accept the operator session or the analyzer bearer
+token: the `POST` under the same pinned precedence as the other
+analyzer-scoped routes (any `Authorization` header selects the bearer path
+only), with session callers needing the CSRF token and Origin evidence like
+every other mutation. A dump holds at most 64 reports; a 65th distinct
+identity returns `409 invalid_transition`, while a replay of an existing
+identity still returns `200` at the cap. Reports cascade with the dump's
+purge and are not carried in transfer bundles.
+
+Source: [analysis routes](../src/http/routes/analysis-routes.ts),
+[analysis contracts](../packages/http-contracts/src/analyses.ts).
 
 ## Symbols
 
@@ -644,7 +842,7 @@ Handled application errors use this envelope:
 | HTTP status | `error.code` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed or invalid request |
-| 401 | `unauthenticated` | Missing/invalid session, password, or ingest token |
+| 401 | `unauthenticated` | Missing/invalid session, password, ingest token, or analyzer token |
 | 403 | `forbidden` | CSRF, Origin, or Fetch Metadata check failed |
 | 404 | `not_found` | Resource or artifact not available |
 | 404 | `grant_unavailable` | Unknown, expired, revoked, or unusable grant |

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { SimulatedCrash } from "../domain/errors.js";
-import { parseGeneratedId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type IdentifierKind, type IdSource, type SymbolArtifactId } from "../domain/ids.js";
+import { parseGeneratedId, type AnalysisId, type AuditEventId, type CaseId, type CustomerId, type DumpId, type GrantId, type IdentifierKind, type IdSource, type SymbolArtifactId } from "../domain/ids.js";
 
 export interface Clock { now(): string }
 export interface EntropySource { secret(): string }
@@ -25,7 +25,7 @@ export class DeterministicEntropy implements EntropySource {
   }
 }
 
-type AnyId = CustomerId | CaseId | GrantId | DumpId | AuditEventId | SymbolArtifactId;
+type AnyId = CustomerId | CaseId | GrantId | DumpId | AuditEventId | SymbolArtifactId | AnalysisId;
 export class RandomIds implements IdSource {
   next(kind: "customer"): CustomerId;
   next(kind: "case"): CaseId;
@@ -33,6 +33,7 @@ export class RandomIds implements IdSource {
   next(kind: "dump"): DumpId;
   next(kind: "audit"): AuditEventId;
   next(kind: "symbol"): SymbolArtifactId;
+  next(kind: "analysis"): AnalysisId;
   next(kind: IdentifierKind): AnyId {
     if (kind === "customer") {
       return parseGeneratedId(kind, `${kind}_${randomUUID()}`) as AnyId;
@@ -50,6 +51,7 @@ export class DeterministicIds implements IdSource {
   next(kind: "dump"): DumpId;
   next(kind: "audit"): AuditEventId;
   next(kind: "symbol"): SymbolArtifactId;
+  next(kind: "analysis"): AnalysisId;
   next(kind: IdentifierKind): AnyId {
     this.sequence += 1;
     const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

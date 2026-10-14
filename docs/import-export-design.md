@@ -59,6 +59,7 @@ vault/dump_<id>/original.dmp   # one entry per exported dump
   "grantKeyFingerprint": "<sha256 of grant key, base64url>",
   "counts": { "customers": 3, "cases": 5, "dumps": 11, "auditEvents": 87 },
   "skipped": [{ "dumpId": "dump_…", "phase": "receiving", "reason": "not-stable" }],
+  "skippedAnalyses": 4,
   "dumps": [
     { "dumpId": "dump_…", "caseId": "case_…", "phase": "available",
       "originalName": "crash.dmp", "byteSize": "73400320",
@@ -67,6 +68,10 @@ vault/dump_<id>/original.dmp   # one entry per exported dump
 }
 ```
 
+- `skippedAnalyses` counts analysis reports (analyzer write-back) attached to
+  the exported dumps. Reports are analyzer-regenerable and never carried in
+  the bundle; the count makes the omission visible. Bundles written before
+  the field existed import unchanged.
 - The manifest is bounded in size by the ledger row counts; it is the only JSON
   the importer trusts before verification, and only after schema decoding.
 - Tar entries are written by a small internal `src/transfer/` tar writer/reader

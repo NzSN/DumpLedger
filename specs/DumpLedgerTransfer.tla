@@ -199,7 +199,7 @@ IssueTokenI(t) ==
   /\ action_taken' = "IssueToken"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped,
@@ -239,7 +239,7 @@ BeginUploadI(t, d) ==
   /\ action_taken' = "BeginUpload"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, digestRecorded, validation, coverage,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, bundle, done, tokDone, fingerprintMatches,
                  custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -253,7 +253,7 @@ SealUploadI(d) ==
   /\ action_taken' = "SealUpload"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  validation, coverage, downloadable, symbolRegistered, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -266,7 +266,7 @@ PromoteI(d) ==
   /\ action_taken' = "PromoteObject"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped,
@@ -281,7 +281,7 @@ QuarantineI(d) ==
   /\ action_taken' = "MarkQuarantined"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped,
@@ -299,7 +299,7 @@ AcceptI(d, kind) ==
   /\ downloadable' = downloadable \cup {d}
   /\ action_taken' = "AcceptDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d, kind |-> kind]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, symbolRegistered, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -313,7 +313,7 @@ RejectI(d) ==
   /\ action_taken' = "RejectDump"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, coverage, downloadable, symbolRegistered, bundle, done,
                  tokDone, fingerprintMatches, custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -329,7 +329,7 @@ BeginPurgeI(d) ==
   /\ action_taken' = "BeginPurge"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase, blobState,
                  digestRecorded, validation, coverage, symbolRegistered, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -342,7 +342,7 @@ FinishPurgeI(d) ==
   /\ action_taken' = "FinishPurge"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpCase,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped,
@@ -362,7 +362,7 @@ IngestSymbolI(m) ==
   /\ action_taken' = "IngestSymbol"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> m,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, includeSymbols, bundleSymbols, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
@@ -374,7 +374,7 @@ PurgeSymbolI(m) ==
   /\ action_taken' = "PurgeSymbol"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> m,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, includeSymbols, bundleSymbols, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
@@ -416,7 +416,7 @@ ExportStartRequest(flag, label) ==
   /\ action_taken' = label
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, fingerprintMatches, wiped>>
 
@@ -439,7 +439,7 @@ ExportSeal ==
   /\ action_taken' = "ExportSeal"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped,
@@ -451,7 +451,7 @@ ExportFail ==
   /\ action_taken' = "ExportFail"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped,
@@ -466,7 +466,7 @@ TamperBundle(d) ==
   /\ action_taken' = "TamperBundle"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped,
@@ -485,7 +485,7 @@ DeleteBundle ==
   /\ action_taken' = "DeleteBundle"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, fingerprintMatches, done, tokDone, custDone,
                  caseDone, wiped>>
@@ -519,7 +519,7 @@ WipeInstance ==
   /\ action_taken' = "WipeInstance"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<fingerprintMatches, bundle,
+  /\ UNCHANGED <<analysisRecorded, fingerprintMatches, bundle,
                  includeSymbols, bundleSymbols>>
 
 (* IMPORT: gated by FreshLedger (the engine's empty-table guard), consumes a
@@ -536,7 +536,7 @@ ImportStart ==
   /\ action_taken' = "ImportStart"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, fingerprintMatches, wiped,
                  includeSymbols, bundleSymbols>>
@@ -553,7 +553,7 @@ ImportCustomer(c) ==
   /\ action_taken' = "ImportCustomer"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, fingerprintMatches, bundle, caseDone, done,
                  tokDone, wiped,
@@ -571,7 +571,7 @@ ImportCase(c) ==
   /\ action_taken' = "ImportCase"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered,
                  fingerprintMatches, bundle, custDone, done, tokDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -598,7 +598,7 @@ ImportTokens(t) ==
   /\ action_taken' = "ImportTokens"
   /\ parameters' = [case |-> 0, token |-> t, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, dumpToken, dumpPhase, dumpCase, blobState,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, dumpToken, dumpPhase, dumpCase, blobState,
                  digestRecorded, validation, coverage, downloadable, symbolRegistered, bundle,
                  done, fingerprintMatches, custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -615,7 +615,7 @@ ImportSymbols ==
   /\ action_taken' = "ImportSymbols"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, includeSymbols, bundleSymbols, bundle, done, tokDone,
                  fingerprintMatches, custDone, caseDone, wiped>>
@@ -649,7 +649,7 @@ ImportDumpOk(d, c) ==
   /\ action_taken' = "ImportDumpOk"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, validation, coverage,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, tokenUploads, tokFirstDump, validation, coverage,
                  downloadable, symbolRegistered, bundle, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped,
                  includeSymbols, bundleSymbols>>
@@ -683,7 +683,7 @@ ImportDumpReject(d, c) ==
   /\ action_taken' = "ImportDumpReject"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped,
                  includeSymbols, bundleSymbols>>
@@ -719,7 +719,7 @@ ImportDumpTombR(d, c) ==
   /\ action_taken' = "ImportDumpTombR"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, tokenUploads, tokFirstDump, coverage, downloadable, symbolRegistered,
                  bundle, tokDone, fingerprintMatches, custDone, caseDone,
                  wiped,
                  includeSymbols, bundleSymbols>>
@@ -751,7 +751,7 @@ ImportDumpTombD(d, c) ==
   /\ action_taken' = "ImportDumpTombD"
   /\ parameters' = [case |-> c, token |-> 0, dump |-> d,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, tokenUploads, tokFirstDump, downloadable, symbolRegistered, bundle,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, tokenUploads, tokFirstDump, downloadable, symbolRegistered, bundle,
                  tokDone, fingerprintMatches, custDone, caseDone, wiped,
                  includeSymbols, bundleSymbols>>
 
@@ -770,7 +770,7 @@ ImportFinish ==
   /\ action_taken' = "ImportFinish"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped,
@@ -784,7 +784,7 @@ ImportHardFail ==
   /\ action_taken' = "ImportHardFail"
   /\ parameters' = [case |-> 0, token |-> 0, dump |-> 0,
                       kind |-> NoCoverage]
-  /\ UNCHANGED <<caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
+  /\ UNCHANGED <<analysisRecorded, caseStatus, tokenState, dumpToken, tokenUploads, tokFirstDump, dumpPhase, dumpCase,
                  blobState, digestRecorded, validation, coverage,
                  downloadable, symbolRegistered, done, tokDone, fingerprintMatches, custDone,
                  caseDone, wiped,

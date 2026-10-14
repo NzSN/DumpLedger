@@ -1,19 +1,19 @@
 import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
-import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type DumpId, type IdSource } from "../domain/ids.js";
+import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type CaseId, type DumpId, type IdSource } from "../domain/ids.js";
 import { isCoverageKind, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseSymbolIngestAuthChannel, parseTokenState, parseValidationState, type CoverageKind, type DumpPhase, type SymbolArtifactKind } from "../domain/lifecycle.js";
-import { MAX_GRANT_UPLOAD_SLOTS, SqliteLedger } from "../ledger/sqlite-ledger.js";
+import { MAX_GRANT_UPLOAD_SLOTS, SqliteLedger, type AuditFeedEntry, type DumpCatalogAfter, type DumpCatalogFilter, type DumpCatalogPage, type DumpCatalogRow } from "../ledger/sqlite-ledger.js";
 import type { SymbolVault, Vault } from "../vault/vault.js";
-import type { ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
+import type { AnalysisOutcome, ImportCounts, ImportSummary, LifecycleCommand } from "./commands.js";
 import { CryptoEntropy, NoFailpoints, RandomIds, SystemClock, type Clock, type EntropySource, type FailpointPort } from "./dependencies.js";
 import type { InspectionPort } from "./inspection-port.js";
-import type { BackupInventory, DumpLedgerProjection, StoredSymbolArtifact, TransitionReceipt, TransitionSuccess } from "./projection.js";
+import type { BackupInventory, DumpLedgerProjection, StoredAnalysisReport, StoredSymbolArtifact, TransitionReceipt, TransitionSuccess } from "./projection.js";
 
 export { DeterministicClock, DeterministicEntropy, DeterministicIds, ScriptedFailpoints } from "./dependencies.js";
 export type { DurableCheckpoint } from "./dependencies.js";
 export type { InspectionOutcome, InspectionPort } from "./inspection-port.js";
 export type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCustomerRecord, ImportDumpRecord, ImportGrantRecord, ImportSummary, LifecycleCommand } from "./commands.js";
-export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, StoredSymbolArtifact, TransitionReceipt } from "./projection.js";
+export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, StoredAnalysisReport, StoredSymbolArtifact, TransitionReceipt } from "./projection.js";
 
 export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly symbolVault?: SymbolVault; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
 /** Public grant-quota answer (batch upload design): what the holder of a valid secret may still upload. */
@@ -22,6 +22,20 @@ export interface GrantQuota {
   readonly uploadsUsed: number;
   readonly maxBytes: bigint;
   readonly expiresAt: string;
+}
+
+/** Filter bag for the audit event feed read: an optional audit action set and
+ * an optional exact case (docs/analyzer-integration-design.md, "Event feed"). */
+export interface AuditFeedFilter {
+  readonly actions?: readonly string[];
+  readonly caseId?: CaseId;
+}
+
+/** One rowid page of the audit event feed plus the position a poller resumes
+ * from: the last delivered rowid, else the request position, else 0. */
+export interface AuditFeedPage {
+  readonly events: readonly AuditFeedEntry[];
+  readonly lastRowid: number;
 }
 
 export interface DumpLedgerEngine {
@@ -38,6 +52,20 @@ export interface DumpLedgerEngine {
   snapshot(): DumpLedgerProjection;
   dueForPurge(at?: string): readonly DumpId[];
   pendingPurgeCompletion(): readonly DumpId[];
+  /** One keyset page of the dump catalog (docs/analyzer-integration-design.md,
+   * "Dump catalog search"): a read-only ledger read with no command, audit
+   * event, or projection change. */
+  searchDumps(filter: DumpCatalogFilter, after?: DumpCatalogAfter): DumpCatalogPage;
+  /** Every dump carrying exactly these sealed bytes, in catalog order. */
+  dumpsBySha256(sha256: string): readonly DumpCatalogRow[];
+  /** One `rowid` page of the audit event feed (docs/analyzer-integration-design.md,
+   * "Event feed"): a read-only ledger read with no command, audit event, or
+   * projection change. */
+  readAuditEvents(afterRowid?: number, filter?: AuditFeedFilter, limit?: number): AuditFeedPage;
+  /** Every stored analysis report for one dump, ordered by `(created_at,
+   * analysis_id)` (docs/analyzer-integration-design.md, "Analysis write-back"):
+   * a read-only ledger read with no command, audit event, or projection change. */
+  listAnalyses(dumpId: DumpId): readonly StoredAnalysisReport[];
   backupInventory(): BackupInventory;
   integrityCheck(): readonly string[];
   backup(destination: string): Promise<void>;
@@ -58,6 +86,53 @@ function assertPlainObject(value: unknown, name: string, maxSerializedBytes: num
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new DumpLedgerError("invalid_input", `${name} must be an object`);
   const serialized = JSON.stringify(value);
   if (serialized === undefined || Buffer.byteLength(serialized, "utf8") > maxSerializedBytes) throw new DumpLedgerError("invalid_input", `${name} exceeds its serialized size bound`);
+  return value as Readonly<Record<string, unknown>>;
+}
+/** Analysis write-back bounds (docs/analyzer-integration-design.md, "Analysis
+ * write-back"), mirrored from the HTTP contracts so the engine imports no wire
+ * module — the same mirroring discipline as MAX_GRANT_UPLOAD_SLOTS in the
+ * ledger. */
+const MAX_ANALYSIS_NAME_LENGTH = 128;
+const MAX_ANALYSIS_VERSION_LENGTH = 64;
+const MAX_ANALYSIS_KIND_LENGTH = 64;
+const MAX_ANALYSIS_SUMMARY_LENGTH = 2000;
+const MAX_ANALYSIS_FACTS_BYTES = 4096;
+/** Deepest accepted `facts` nesting, mirroring the contract decoder's JSON depth cap. */
+const MAX_ANALYSIS_FACTS_DEPTH = 100;
+/** Control-character rule of the contract text decoder (`text` in decode.ts). */
+const ANALYSIS_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
+function assertAnalysisText(value: unknown, name: string, maximum: number, minimum = 1): string {
+  if (typeof value !== "string" || value.length < minimum || value.length > maximum || ANALYSIS_CONTROL_CHARACTERS.test(value)) throw new DumpLedgerError("invalid_input", `${name} is invalid`);
+  return value;
+}
+function assertAnalysisOutcome(value: unknown): AnalysisOutcome {
+  if (value !== "completed" && value !== "failed") throw new DumpLedgerError("invalid_input", 'outcome must be "completed" or "failed"');
+  return value;
+}
+/** The contract decoder accepts a plain JSON tree only (no `undefined`,
+ * functions, symbols, bigints, or non-finite numbers) down to a fixed depth. */
+function assertJsonTree(value: unknown, name: string, depth: number): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") { if (!Number.isFinite(value)) throw new DumpLedgerError("invalid_input", `${name} must contain only finite JSON numbers`); return; }
+  if (Array.isArray(value)) {
+    if (depth >= MAX_ANALYSIS_FACTS_DEPTH) throw new DumpLedgerError("invalid_input", `${name} exceeds the maximum nesting depth`);
+    for (const entry of value) assertJsonTree(entry, name, depth + 1);
+    return;
+  }
+  if (typeof value === "object") {
+    if (depth >= MAX_ANALYSIS_FACTS_DEPTH) throw new DumpLedgerError("invalid_input", `${name} exceeds the maximum nesting depth`);
+    for (const entry of Object.values(value)) assertJsonTree(entry, name, depth + 1);
+    return;
+  }
+  throw new DumpLedgerError("invalid_input", `${name} must contain only JSON values`);
+}
+function assertAnalysisFacts(value: unknown): Readonly<Record<string, unknown>> | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new DumpLedgerError("invalid_input", "facts must be a JSON object");
+  assertJsonTree(value, "facts", 0);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined || Buffer.byteLength(serialized, "utf8") > MAX_ANALYSIS_FACTS_BYTES) throw new DumpLedgerError("invalid_input", `facts exceeds ${MAX_ANALYSIS_FACTS_BYTES} serialized bytes`);
   return value as Readonly<Record<string, unknown>>;
 }
 function assertMaxUploads(value: unknown): number {
@@ -121,6 +196,10 @@ class Engine implements DumpLedgerEngine {
   }
   dueForPurge(at?: string): readonly DumpId[] { return this.ledger.dueForPurge(assertIsoTimestamp(at ?? this.clock.now(), "retention time")); }
   pendingPurgeCompletion(): readonly DumpId[] { return this.snapshot().dumps.filter(dump => dump.phase === "deleting").map(dump => dump.dumpId); }
+  searchDumps(filter: DumpCatalogFilter, after?: DumpCatalogAfter): DumpCatalogPage { return this.ledger.searchDumps(filter, after); }
+  dumpsBySha256(sha256: string): readonly DumpCatalogRow[] { return this.ledger.findDumpsBySha256(sha256); }
+  readAuditEvents(afterRowid?: number, filter?: AuditFeedFilter, limit?: number): AuditFeedPage { return this.ledger.readAuditEvents(afterRowid, filter, limit); }
+  listAnalyses(dumpId: DumpId): readonly StoredAnalysisReport[] { return this.ledger.listAnalyses(dumpId); }
   backupInventory(): BackupInventory {
     return { schema:"dump-ledger.backup-inventory/v1", generatedAt:assertIsoTimestamp(this.clock.now(), "clock"), includesVaultBytes:false,
       dumps:this.snapshot().dumps.map(dump => ({dumpId:dump.dumpId,caseId:dump.caseId,phase:dump.phase,byteSize:dump.byteSize?.toString() ?? null,sha256:dump.sha256,purgeAt:dump.purgeAt,purgedAt:dump.purgedAt})) };
@@ -169,6 +248,21 @@ class Engine implements DumpLedgerEngine {
       case "SetRetention": { const dumpId=parseDumpId(command.dumpId), purgeAt=assertIsoTimestamp(command.purgeAt,"purgeAt"); if(purgeAt<=occurredAt) throw new DumpLedgerError("invalid_input","purgeAt must be in the future"); this.ledger.setRetention(dumpId,purgeAt,event()); return {ok:true,action:command.type,occurredAt,dumpId,purgeAt}; }
       case "BeginPurge": { const dumpId=parseDumpId(command.dumpId), dump=this.requireOneOfPhases(dumpId,["available","rejected"]); this.ledger.beginPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,phase:"deleting"}; }
       case "FinishPurge": { const dumpId=parseDumpId(command.dumpId); this.requirePhase(dumpId,"deleting"); this.options.vault.remove(dumpId); this.failpoints.hit("after_vault_remove"); this.ledger.finishPurge(dumpId,event()); return {ok:true,action:command.type,occurredAt,dumpId,phase:"deleted"}; }
+      case "RecordAnalysis": {
+        const dumpId=parseDumpId(command.dumpId);
+        const analyzerName=assertAnalysisText(command.analyzerName,"analyzerName",MAX_ANALYSIS_NAME_LENGTH);
+        const analyzerVersion=assertAnalysisText(command.analyzerVersion,"analyzerVersion",MAX_ANALYSIS_VERSION_LENGTH);
+        const kind=assertAnalysisText(command.kind,"kind",MAX_ANALYSIS_KIND_LENGTH);
+        const inputSha256=assertSha256(command.inputSha256), outcome=assertAnalysisOutcome(command.outcome);
+        const summary=assertAnalysisText(command.summary,"summary",MAX_ANALYSIS_SUMMARY_LENGTH,0), facts=assertAnalysisFacts(command.facts);
+        const duplicateOf=command.duplicateOf===undefined||command.duplicateOf===null?null:parseDumpId(command.duplicateOf);
+        const dump=this.requirePhase(dumpId,"available");
+        if (dump.sha256===null||dump.sha256!==inputSha256) throw new DumpLedgerError("invalid_input","inputSha256 must equal the dump's sealed sha256");
+        const existing=this.ledger.findAnalysisByIdentity(dumpId,analyzerName,analyzerVersion,kind,inputSha256);
+        if (existing!==null) return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,analysis:existing,replayed:true};
+        const recorded=this.ledger.recordAnalysis({analysisId:this.ids.next("analysis"),dumpId,analyzerName,analyzerVersion,kind,inputSha256,outcome,summary,facts,duplicateOf,createdAt:occurredAt},event());
+        return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,analysis:recorded.report,replayed:recorded.deduplicated};
+      }
       case "IngestSymbol": {
         const vault=this.requireSymbolVault();
         parseSymbolArtifactKind(command.kind);

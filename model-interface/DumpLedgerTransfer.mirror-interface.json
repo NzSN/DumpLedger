@@ -636,6 +636,11 @@
       "provenance": "implementation"
     },
     {
+      "id": "AnalysisRecorded",
+      "wireName": "analysisRecorded",
+      "provenance": "implementation"
+    },
+    {
       "id": "Wiped",
       "wireName": "wiped",
       "provenance": "implementation"

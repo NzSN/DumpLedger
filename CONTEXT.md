@@ -73,3 +73,20 @@ _Avoid_: Debug blob, symbol dump
 The symbol-artifact collection plus the symsrv-protocol read surface
 (`GET /symbols/<debug_file>/<debug_id>/<debug_file>`).
 _Avoid_: Symbol server, pdb folder
+
+**Analyzer**:
+An external machine consumer that reads the dump catalog and audit event
+feed, downloads dump bytes and symbols, and records analysis reports back
+against dumps. Authenticated by an analyzer token, never an operator session.
+_Avoid_: Worker, plugin
+
+**Analyzer token**:
+A configured bearer credential (digest at rest) that authenticates an
+analyzer on the catalog read routes and the analysis write-back route.
+_Avoid_: API key, service account
+
+**Analysis report**:
+One immutable verdict record attached to a dump, produced by one named
+analyzer at one version against one dump content hash; re-recording the same
+identity is a no-op replay.
+_Avoid_: Verdict blob, scan result

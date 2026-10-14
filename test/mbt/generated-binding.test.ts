@@ -25,6 +25,7 @@ function assertBindingCode(
 }
 
 const VALID_OBSERVATION: DumpLedgerObservation = {
+  analysisRecorded: [],
   blobState: ["none", "none"],
   caseStatus: ["new", "new"],
   coverage: ["unclassified", "unclassified"],
@@ -53,6 +54,7 @@ function noOpPort(
     finishPurge(): void {},
     ingestSymbol(): void {},
     purgeSymbol(): void {},
+    recordAnalysis(): void {},
     issueToken(): void {},
     markQuarantined(): void {},
     promoteObject(): void {},

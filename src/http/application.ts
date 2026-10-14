@@ -3,6 +3,8 @@ import type { ByteReader } from "../symbols/identity.js";
 
 import {
   type ActivityItem,
+  type AnalysisListResponse,
+  type AnalysisReport,
   type CaseAction,
   type CaseDetailResponse,
   type CaseSearchParams,
@@ -10,23 +12,37 @@ import {
   type CaseSummary,
   type CustomerDetailResponse,
   type DashboardResponse,
+  type DumpCatalogEntry,
+  type DumpCatalogParams,
+  type DumpCatalogResponse,
+  type DumpCatalogSymbolCoverage,
   type DumpDetailResponse,
+  type EventFeedEntry,
+  type EventFeedParams,
+  type EventFeedResponse,
   type GrantRecord,
   type MissingSymbolIdentity,
   type ModuleSymbolCoverage,
+  type ModuleSymbolStatus,
+  MAX_ANALYSES_PER_DUMP,
   MAX_CASE_LIST_ITEMS,
+  MAX_CATALOG_CURSOR_LENGTH,
   MAX_DASHBOARD_CUSTOMERS,
   MAX_DASHBOARD_RECENT_CASES,
   MAX_DEBUG_FILE_LENGTH,
   MAX_DEBUG_ID_LENGTH,
+  MAX_EVENT_DETAIL_BYTES,
   MAX_MODULE_NAME_LENGTH,
+  type RecordAnalysisRequest,
   type SymbolKind,
 } from "@dump-ledger/http-contracts";
+import { DumpLedgerError } from "../domain/errors.js";
 import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type CaseId } from "../domain/ids.js";
-import type { DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
-import type { DumpLedgerProjection, SymbolArtifactProjection } from "../engine/projection.js";
+import type { AuditFeedFilter, DumpLedgerEngine } from "../engine/dump-ledger-engine.js";
+import type { DumpLedgerProjection, DumpProjection, StoredAnalysisReport, SymbolArtifactProjection } from "../engine/projection.js";
+import type { AuditFeedEntry, DumpCatalogAfter, DumpCatalogFilter, DumpCatalogRow } from "../ledger/sqlite-ledger.js";
 import type { SymbolVault, Vault, VaultReader } from "../vault/vault.js";
-import type { CaseTransitionOutcome, HttpApplicationPort, SymbolIngestInput } from "./server.js";
+import type { AnalysisRecordOutcome, CaseTransitionOutcome, HttpApplicationPort, SymbolIngestInput } from "./server.js";
 
 function readerStream(reader: VaultReader): Readable {
   return Readable.from((async function* () {
@@ -326,6 +342,89 @@ export class EngineHttpApplication implements HttpApplicationPort {
     };
   }
 
+  /** Dump catalog search (docs/analyzer-integration-design.md, "Dump catalog
+   * search"): the contract filter bag maps onto the ledger's keyset catalog
+   * read, and rows shape into one bounded page. Read-only. Malformed
+   * identifiers and cursors throw `invalid_input`, which the route layer maps
+   * to `invalid_request` via `contractErrorFor`. */
+  searchDumps(params: DumpCatalogParams): DumpCatalogResponse {
+    const after = params.cursor === undefined ? undefined : decodeCatalogCursor(params.cursor);
+    const page = this.engine.searchDumps(catalogFilterOf(params), after);
+    return catalogResponseOf(page.rows, page.nextAfter, this.engine.snapshot());
+  }
+
+  /** By-content-hash lookup: every dump carrying exactly these bytes (normally
+   * zero or one); an empty page is a hit on no rows, not an error. */
+  dumpsBySha256(sha256: string): DumpCatalogResponse {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) throw new DumpLedgerError("invalid_input", "sha256 is invalid");
+    return catalogResponseOf(this.engine.dumpsBySha256(sha256), undefined, this.engine.snapshot());
+  }
+
+  /** Audit event feed (docs/analyzer-integration-design.md, "Event feed"): the
+   * contract query bag maps onto the ledger's rowid read and rows shape into
+   * one bounded page. Read-only (no engine command, no audit event). A
+   * malformed `since` cursor or case filter throws `invalid_input`, mapped to
+   * `invalid_request` by the route layer. `nextCursor` is always present: past
+   * the end it echoes the request position, which is how a poller sleeps
+   * between pages. */
+  eventFeed(params: EventFeedParams): EventFeedResponse {
+    const afterRowid = params.since === undefined ? undefined : decodeEventCursor(params.since);
+    const filter: AuditFeedFilter = {
+      ...(params.actions === undefined ? {} : { actions: params.actions }),
+      ...(params.caseId === undefined ? {} : { caseId: catalogIdentifier(parseCaseId, params.caseId, "caseId") }),
+    };
+    const page = this.engine.readAuditEvents(afterRowid, filter, params.limit);
+    return { events: page.events.map(eventFeedEntryOf), nextCursor: formatEventCursor(page.lastRowid) };
+  }
+
+  /** Analysis write-back (docs/analyzer-integration-design.md, "Analysis
+   * write-back"): one analyzer verdict pinned to the dump's sealed bytes,
+   * recorded through the `RecordAnalysis` engine command. The engine's
+   * identity tuple `(dumpId, analyzer.name, analyzer.version, kind,
+   * inputSha256)` makes a repeat POST an idempotent replay that returns the
+   * stored report (`replayed: true`). The per-dump cap is enforced here,
+   * before the command: {@link MAX_ANALYSES_PER_DUMP} stored reports is the
+   * limit for NEW identities, while a replay stores nothing new and stays
+   * admissible at the cap (an analyzer retrying after a lost response must
+   * not be turned away by its own earlier reports). A malformed dump id is
+   * `dump_not_found` (404), an unknown dump surfaces the engine's
+   * `not_found`, and a dump outside `available` surfaces `invalid_transition`. */
+  recordAnalysis(dumpIdText: string, request: RecordAnalysisRequest): AnalysisRecordOutcome {
+    let dumpId;
+    try { dumpId = parseDumpId(dumpIdText); } catch { return { ok: false, code: "dump_not_found" }; }
+    const stored = this.engine.listAnalyses(dumpId);
+    if (stored.length >= MAX_ANALYSES_PER_DUMP && !stored.some(report => sameAnalysisIdentity(report, request))) {
+      return { ok: false, code: "invalid_transition" };
+    }
+    const receipt = this.engine.execute({
+      type: "RecordAnalysis",
+      dumpId,
+      analyzerName: request.analyzer.name,
+      analyzerVersion: request.analyzer.version,
+      kind: request.kind,
+      inputSha256: request.inputSha256,
+      outcome: request.outcome,
+      summary: request.summary,
+      ...(request.facts === undefined ? {} : { facts: request.facts }),
+      ...(request.duplicateOf === undefined ? {} : { duplicateOf: request.duplicateOf as never }),
+    });
+    if (!receipt.ok) return { ok: false, code: receipt.error.code };
+    if (receipt.analysis === undefined) return { ok: false, code: "integrity_failure" };
+    return { ok: true, report: analysisReportOf(receipt.analysis), replayed: receipt.replayed === true };
+  }
+
+  /** Every stored report for one dump, ordered by `(createdAt, analysisId)`
+   * (the ledger's `(created_at, analysis_id)` read-through). `undefined`
+   * means the dump itself is unknown — a dump with no reports is an empty
+   * list — which the route layer maps to `not_found`, exactly like dump
+   * detail. */
+  listAnalyses(dumpIdText: string): AnalysisListResponse | undefined {
+    let dumpId;
+    try { dumpId = parseDumpId(dumpIdText); } catch { return undefined; }
+    if (!this.engine.snapshot().dumps.some(dump => dump.dumpId === dumpId)) return undefined;
+    return { analyses: this.engine.listAnalyses(dumpId).map(analysisReportOf) };
+  }
+
   caseSummary(caseIdText: string): CaseSummary | undefined {
     let caseId;
     try { caseId = parseCaseId(caseIdText); } catch { return undefined; }
@@ -462,6 +561,35 @@ export class EngineHttpApplication implements HttpApplicationPort {
   }
 }
 
+/** One stored analysis report as the wire shape. `facts` and `duplicateOf`
+ * are omitted when the stored column is SQL NULL: the store collapses
+ * "absent" and "explicitly null" `duplicateOf` into NULL, and the contract
+ * marks both fields optional. */
+function analysisReportOf(report: StoredAnalysisReport): AnalysisReport {
+  return {
+    analysisId: report.analysisId,
+    dumpId: report.dumpId,
+    analyzer: { name: report.analyzer.name, version: report.analyzer.version },
+    kind: report.kind,
+    inputSha256: report.inputSha256,
+    outcome: report.outcome,
+    summary: report.summary,
+    createdAt: report.createdAt,
+    ...(report.facts === null ? {} : { facts: report.facts }),
+    ...(report.duplicateOf === null ? {} : { duplicateOf: report.duplicateOf }),
+  };
+}
+
+/** The engine's analysis identity tuple
+ * `(dumpId, analyzer.name, analyzer.version, kind, inputSha256)`, minus the
+ * dump id both sides already share. */
+function sameAnalysisIdentity(report: StoredAnalysisReport, request: RecordAnalysisRequest): boolean {
+  return report.analyzer.name === request.analyzer.name
+    && report.analyzer.version === request.analyzer.version
+    && report.kind === request.kind
+    && report.inputSha256 === request.inputSha256;
+}
+
 /**
  * Presentation guidance mirroring the case workflow transition table in
  * `specs/DumpLedger.tla` and the lifecycle engine (design section 7.4). This
@@ -484,6 +612,166 @@ function parseCursorOffset(cursor: string | undefined): number {
   if (cursor === undefined || cursor.length === 0 || cursor.length > 256 || !/^[0-9a-z]+$/.test(cursor)) return 0;
   const value = Number.parseInt(cursor, 36);
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/** Dump catalog: contract filter parameters -> ledger filter. Identifiers are
+ * parsed with the domain parsers; a value that is merely identifier-shaped
+ * fails as `invalid_input` (mapped to `invalid_request` by the route layer). */
+function catalogFilterOf(params: DumpCatalogParams): DumpCatalogFilter {
+  return {
+    ...(params.caseId === undefined ? {} : { caseId: catalogIdentifier(parseCaseId, params.caseId, "caseId") }),
+    ...(params.customerId === undefined ? {} : { customerId: catalogIdentifier(parseCustomerId, params.customerId, "customerId") }),
+    ...(params.phase === undefined ? {} : { phase: params.phase }),
+    ...(params.validation === undefined ? {} : { validation: params.validation }),
+    ...(params.receivedAfter === undefined ? {} : { receivedAfter: params.receivedAfter }),
+    ...(params.receivedBefore === undefined ? {} : { receivedBefore: params.receivedBefore }),
+    ...(params.architecture === undefined ? {} : { architecture: params.architecture }),
+    ...(params.exceptionCode === undefined ? {} : { exceptionCode: params.exceptionCode }),
+    ...(params.sha256 === undefined ? {} : { sha256: params.sha256 }),
+  };
+}
+
+function catalogIdentifier<T>(parse: (value: unknown) => T, value: unknown, label: string): T {
+  try {
+    return parse(value);
+  } catch {
+    throw new DumpLedgerError("invalid_input", `${label} is invalid`);
+  }
+}
+
+/** Catalog cursor codec: base64url of `JSON.stringify([receivedAt, dumpId])`,
+ * i.e. the ledger's `DumpCatalogAfter` pair. The string is opaque to clients;
+ * decoding validates both halves (canonical UTC timestamp, dump identifier)
+ * and rejects non-canonical base64url, so a malformed cursor fails as
+ * `invalid_input` instead of silently restarting the traversal. */
+function encodeCatalogCursor(after: DumpCatalogAfter): string {
+  return Buffer.from(JSON.stringify([after.receivedAt, after.dumpId]), "utf8").toString("base64url");
+}
+
+function decodeCatalogCursor(cursor: string): DumpCatalogAfter {
+  if (cursor.length === 0 || cursor.length > MAX_CATALOG_CURSOR_LENGTH || !/^[A-Za-z0-9_-]+$/.test(cursor)) invalidCatalogInput("cursor is invalid");
+  const bytes = Buffer.from(cursor, "base64url");
+  if (bytes.toString("base64url") !== cursor) invalidCatalogInput("cursor is invalid");
+  const decoded = parseCatalogCursorJson(bytes.toString("utf8"));
+  const receivedAt = decoded[0];
+  if (typeof receivedAt !== "string" || !isCanonicalTimestamp(receivedAt)) invalidCatalogInput("cursor is invalid");
+  return { receivedAt, dumpId: catalogIdentifier(parseDumpId, decoded[1], "cursor") };
+}
+
+function parseCatalogCursorJson(text: string): readonly unknown[] {
+  let decoded: unknown = undefined;
+  try {
+    decoded = JSON.parse(text);
+  } catch {
+    invalidCatalogInput("cursor is invalid");
+  }
+  if (!Array.isArray(decoded) || decoded.length !== 2) invalidCatalogInput("cursor is invalid");
+  return decoded;
+}
+
+function invalidCatalogInput(message: string): never {
+  throw new DumpLedgerError("invalid_input", message);
+}
+
+/** Canonical UTC timestamp (milliseconds precision, `Z` suffix, real date),
+ * mirroring the contract decoders' rule. */
+function isCanonicalTimestamp(value: string): boolean {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+/** Event feed cursor codec: the zero-padded 16-digit decimal rowid
+ * (docs/analyzer-integration-design.md, "Event feed"). The cursor is opaque to
+ * clients; decoding requires 1..16 decimal digits within
+ * `Number.MAX_SAFE_INTEGER`, so a malformed value fails as `invalid_input`
+ * instead of silently restarting the traversal. */
+function formatEventCursor(rowid: number): string {
+  return rowid.toString(10).padStart(16, "0");
+}
+
+function decodeEventCursor(cursor: string): number {
+  if (!/^\d{1,16}$/.test(cursor)) invalidCatalogInput("cursor is invalid");
+  const rowid = Number(cursor);
+  if (!Number.isSafeInteger(rowid)) invalidCatalogInput("cursor is invalid");
+  return rowid;
+}
+
+/** One ledger audit row as the wire entry; the entry cursor is the row's own
+ * formatted rowid, so a client can resume strictly after it. */
+function eventFeedEntryOf(entry: AuditFeedEntry): EventFeedEntry {
+  return {
+    cursor: formatEventCursor(entry.rowid),
+    eventId: entry.eventId,
+    occurredAt: entry.occurredAt,
+    action: entry.action,
+    customerId: entry.customerId,
+    caseId: entry.caseId,
+    dumpId: entry.dumpId,
+    detail: boundedEventDetail(entry.detail),
+  };
+}
+
+/** The response contract bounds `detail` at {@link MAX_EVENT_DETAIL_BYTES} of
+ * compact JSON. Audit details are engine-written and normally small; a stored
+ * detail that somehow exceeds the bound must not fail the whole feed, so that
+ * one field degrades to `{}` (which the response decoder accepts) rather than
+ * the page 500ing. */
+function boundedEventDetail(detail: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const serialized = JSON.stringify(detail);
+  if (serialized === undefined) return {};
+  return Buffer.byteLength(serialized, "utf8") > MAX_EVENT_DETAIL_BYTES ? {} : detail;
+}
+
+/** One ledger catalog page as the wire response; `nextCursor` is present
+ * exactly when the ledger page carried a following keyset position. */
+function catalogResponseOf(
+  rows: readonly DumpCatalogRow[],
+  nextAfter: DumpCatalogAfter | undefined,
+  projection: DumpLedgerProjection,
+): DumpCatalogResponse {
+  const dumpsById = new Map(projection.dumps.map(dump => [dump.dumpId, dump]));
+  return {
+    dumps: rows.map(row => catalogEntryOf(row, dumpsById.get(row.dumpId), projection.symbols)),
+    ...(nextAfter === undefined ? {} : { nextCursor: encodeCatalogCursor(nextAfter) }),
+  };
+}
+
+/** One catalog row as the wire entry. Inspector facts follow the ledger's
+ * stored-inspection rule (present only when the inspection succeeded and the
+ * stored fact parsed); `symbolCoverage` aggregates the same module rows the
+ * dump detail route shows. */
+function catalogEntryOf(
+  row: DumpCatalogRow,
+  dump: DumpProjection | undefined,
+  symbols: readonly SymbolArtifactProjection[],
+): DumpCatalogEntry {
+  const facts = dump === undefined || dump.inspectionError !== null ? null : dump.inspectionFacts;
+  return {
+    dumpId: row.dumpId,
+    caseId: row.caseId,
+    customerId: row.customerId,
+    phase: row.phase,
+    validation: row.validation,
+    originalName: row.originalName,
+    byteSize: row.byteSize,
+    sha256: row.sha256,
+    receivedAt: row.receivedAt,
+    availableAt: row.availableAt,
+    purgeAt: row.purgeAt,
+    ...(row.architecture === undefined ? {} : { architecture: row.architecture }),
+    ...(row.exceptionCode === undefined ? {} : { exceptionCode: row.exceptionCode }),
+    ...(row.exceptionAddress === undefined ? {} : { exceptionAddress: row.exceptionAddress }),
+    symbolCoverage: catalogSymbolCoverage(facts, symbols),
+  };
+}
+
+function catalogSymbolCoverage(
+  facts: Readonly<Record<string, unknown>> | null,
+  symbols: readonly SymbolArtifactProjection[],
+): DumpCatalogSymbolCoverage {
+  const counts: Record<ModuleSymbolStatus, number> = { present: 0, missing: 0, unidentified: 0 };
+  for (const module of symbolCoverageFor(facts, symbols)) counts[module.status] += 1;
+  return counts;
 }
 
 /** Bounds an audit action/outcome to the wire limits before it leaves the server. */

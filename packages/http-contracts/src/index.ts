@@ -19,3 +19,6 @@ export * from "./operations.js";
 export * from "./uploads.js";
 export * from "./transfer.js";
 export * from "./symbols.js";
+export * from "./catalog.js";
+export * from "./events.js";
+export * from "./analyses.js";

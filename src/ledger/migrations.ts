@@ -119,6 +119,37 @@ const migrations: readonly Migration[] = [
       BEGIN SELECT RAISE(ABORT, 'grant terminal state is immutable'); END;
     CREATE INDEX grants_case_idx ON upload_grants(case_id);
   ` },
+  /* Analyzer catalog reads (docs/analyzer-integration-design.md, "Dump catalog
+   * search"): the catalog scans keyset-ordered by (received_at, dump_id), and
+   * the by-sha256 lookup answers "which dumps carry these bytes" directly. */
+  { version: 7, sql: `
+    CREATE INDEX dumps_received_idx ON dumps(received_at, dump_id);
+    CREATE INDEX dumps_sha256_idx ON dumps(sha256);
+  ` },
+  /* Analysis write-back (docs/analyzer-integration-design.md, "Analysis
+   * write-back"): immutable analyzer verdicts pinned to a dump's exact bytes.
+   * The identity tuple (dump_id, analyzer_name, analyzer_version, kind,
+   * input_sha256) is UNIQUE, so re-running the same analyzer version against
+   * the same bytes is an idempotent replay. Dump rows are tombstoned, never
+   * deleted, on purge, so the relationship has no ON DELETE CASCADE; the
+   * purge-finish cascade is the explicit DELETE in sqlite-ledger.ts. */
+  { version: 8, sql: `
+    CREATE TABLE dump_analyses (
+      analysis_id TEXT PRIMARY KEY,
+      dump_id TEXT NOT NULL REFERENCES dumps(dump_id),
+      analyzer_name TEXT NOT NULL,
+      analyzer_version TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      input_sha256 TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('completed','failed')),
+      summary TEXT NOT NULL,
+      facts_json TEXT,
+      duplicate_of TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (dump_id, analyzer_name, analyzer_version, kind, input_sha256)
+    ) STRICT;
+    CREATE INDEX dump_analyses_dump_idx ON dump_analyses(dump_id);
+  ` },
 ];
 /**
  * Applies pending migrations in ascending version order, each inside its own

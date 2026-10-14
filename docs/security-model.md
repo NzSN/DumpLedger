@@ -22,7 +22,8 @@ process-local rate limits for login and grant verification, opaque vault paths,
 no-follow/restrictive filesystem creation, bounded structural inspection,
 download gating, audit rows, startup reconciliation, explicit retention
 scheduling, two-phase deletion, and digest-only CI symbol-ingest tokens
-("CI symbol-ingest tokens" below).
+("CI symbol-ingest tokens" below) and analyzer read tokens ("Analyzer tokens"
+below).
 
 This is not yet an internet-deployment approval. The operator API does not terminate
 TLS; a trusted reverse proxy and its network controls must be configured and
@@ -199,6 +200,57 @@ operator session. The token is bearer-equivalent and deliberately narrow.
 - **Rotation.** Generate a new token, replace the configured hash, and restart
   the process. There is no stateful revocation list; a replaced digest retires
   the old token immediately.
+
+### Analyzer tokens
+
+An external analyzer can read the dump catalog, dump records, and the audit
+event feed — and record analysis reports — without an interactive operator
+session. The token is bearer-equivalent and otherwise read-only.
+
+- **Disabled by default.** Token auth exists only while
+  `DUMP_LEDGER_ANALYZER_TOKEN_HASH` carries the 64-lowercase-hex sha256 of the
+  bearer token. Unset or empty disables the path entirely: a presented
+  authorization is then a generic 401, never a fall-through to session
+  cookies.
+- **Catalog-read plus write-back scope.** The token is consulted by exactly
+  six routes — `GET /api/v1/dumps`, `GET /api/v1/dumps/by-sha256/:sha256`,
+  `GET /api/v1/dumps/:dumpId`, `GET /api/v1/dumps/:dumpId/content`,
+  `GET /api/v1/events`, and the analysis write-back
+  `POST /api/v1/dumps/:dumpId/analyses` (with `GET .../analyses` on the read
+  guard). Every other route rejects the token with the same generic 401 as
+  an anonymous request: it cannot search cases, list or read symbols, mutate
+  anything else (including the `PUT /api/v1/dumps/:dumpId/retention` change),
+  transfer, purge, or administer the ledger.
+- **Write-back idempotency.** A repeated `POST` whose identity tuple
+  (dump, analyzer name/version, kind, input sha256) matches a stored report
+  returns `200` with the existing report — no new row and no second audit
+  event. Fresh records audit `RecordAnalysis`, which surfaces on the event
+  feed like every other action.
+- **Feed sensitivity.** The audit event feed exposes details that are already
+  constrained to identifiers and outcomes — never dump contents, upload-grant
+  secrets, session material, or bearer tokens — and the response decoder
+  bounds each event's `detail` to 4 KiB of compact JSON, so the invariant is
+  enforced mechanically at the wire boundary.
+- **Digest at rest.** Only the sha256 digest is configured; the token itself
+  carries at least 256 bits of entropy, lives in the analyzer's secret store,
+  and is never written to the ledger, logs, or audit details.
+- **Pinned precedence.** When a request carries any `Authorization` header on
+  one of these routes, only the bearer path is consulted: the header must
+  be a `Bearer` credential whose sha256 matches the configured digest in
+  constant time. A wrong token, a malformed header, or a disabled
+  configuration is the same generic 401 envelope the session guard uses —
+  there is no silent cookie/CSRF fallback. Without the header, the session
+  guard applies unchanged.
+- **No cookie semantics.** Bearer requests skip CSRF and Origin checks because
+  they carry no ambient browser authority; they must still ride TLS, and the
+  token must not be placed in URLs or logs.
+- **No separate attribution.** Catalog search and dump detail record no audit
+  event; a content download records the ordinary `AuthorizeDownload` audit
+  event, which does not distinguish the analyzer channel from an operator
+  session in this implementation.
+- **Rotation by restart.** Generate a new token, replace the configured hash,
+  and restart the process. There is no stateful revocation list; a replaced
+  digest retires the old token immediately.
 
 ### Dedicated symbols listener
 

@@ -166,6 +166,18 @@ npm run --silent generate:ingest-token
 export DUMP_LEDGER_INGEST_TOKEN_HASH='<64 lowercase hex characters>'
 ```
 
+An analyzer can read the dump catalog, dump detail, and dump content with its
+own read-only bearer token instead of an operator session (it cannot mutate
+anything, including retention; see
+[`docs/security-model.md`](docs/security-model.md)). Generate a high-entropy
+token (at least 256 bits) in the analyzer's secret store and export only its
+SHA-256 digest — leaving the variable unset or empty keeps the token path
+disabled:
+
+```sh
+export DUMP_LEDGER_ANALYZER_TOKEN_HASH='<64 lowercase hex characters>'
+```
+
 Debuggers can fetch symbols without touching the operator surface: set
 `DUMP_LEDGER_SYMBOLS_PORT` to start a dedicated, unauthenticated, read-only
 symsrv listener. Its default bind is **127.0.0.1**, for local debugger access

@@ -12,7 +12,8 @@ export type GrantId = Brand<string, "GrantId">;
 export type DumpId = Brand<string, "DumpId">;
 export type AuditEventId = Brand<string, "AuditEventId">;
 export type SymbolArtifactId = Brand<string, "SymbolArtifactId">;
-export type IdentifierKind = "customer" | "case" | "grant" | "dump" | "audit" | "symbol";
+export type AnalysisId = Brand<string, "AnalysisId">;
+export type IdentifierKind = "customer" | "case" | "grant" | "dump" | "audit" | "symbol" | "analysis";
 
 function parseIdentifier<Id extends string>(value: unknown, prefix: string, label: string): Id {
   if (typeof value !== "string") throw new TypeError(`invalid ${label} identifier`);
@@ -36,6 +37,7 @@ export const parseGrantId = (value: unknown): GrantId => parseIdentifier(value, 
 export const parseDumpId = (value: unknown): DumpId => parseIdentifier(value, "dump", "dump");
 export const parseAuditEventId = (value: unknown): AuditEventId => parseIdentifier(value, "audit", "audit event");
 export const parseSymbolArtifactId = (value: unknown): SymbolArtifactId => parseIdentifier(value, "symbol", "symbol artifact");
+export const parseAnalysisId = (value: unknown): AnalysisId => parseIdentifier(value, "analysis", "analysis");
 
 export interface IdSource {
   next(kind: "customer"): CustomerId;
@@ -44,6 +46,7 @@ export interface IdSource {
   next(kind: "dump"): DumpId;
   next(kind: "audit"): AuditEventId;
   next(kind: "symbol"): SymbolArtifactId;
+  next(kind: "analysis"): AnalysisId;
 }
 
 export function parseGeneratedId(kind: IdentifierKind, value: unknown): string {
@@ -54,5 +57,6 @@ export function parseGeneratedId(kind: IdentifierKind, value: unknown): string {
     case "dump": return parseDumpId(value);
     case "audit": return parseAuditEventId(value);
     case "symbol": return parseSymbolArtifactId(value);
+    case "analysis": return parseAnalysisId(value);
   }
 }

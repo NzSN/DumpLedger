@@ -23,6 +23,8 @@ interface TraceCase {
   readonly nextPredicate?: string;
   readonly terminalDescription: string;
   readonly terminalMatches: (state: JsonObject) => boolean;
+  /** Wire actions the selected trace must evidence, beyond its terminal state. */
+  readonly requiredTraceActions?: readonly string[];
 }
 
 interface CliOptions {
@@ -203,6 +205,22 @@ const traceCases: readonly TraceCase[] = [
       sequenceSlot(state, "tokenState", 1) === "revoked" &&
       sequenceSlot(state, "tokenState", 2) === "unused",
   },
+  {
+    destination: "10-record-analysis-cascade.itf.json",
+    witnessModule: "RecordAnalysis",
+    lengthBound: 9,
+    nextPredicate: "WitnessNext",
+    terminalDescription: "FinishPurge cascade-removing a recorded analysis from dump slot 1",
+    requiredTraceActions: ["RecordAnalysis"],
+    terminalMatches: (state) =>
+      state["action_taken"] === "FinishPurge" &&
+      parametersMatch(state, { token: "0", dump: "1", kind: "unclassified" }) &&
+      sequenceSlot(state, "dumpPhase", 1) === "deleted" &&
+      sequenceSlot(state, "blobState", 1) === "none" &&
+      sequenceSlot(state, "validation", 1) === "valid" &&
+      sequenceSlot(state, "coverage", 1) === "partial" &&
+      setSize(state["analysisRecorded"]) === 0,
+  },
 ];
 
 function usage(): string {
@@ -333,8 +351,13 @@ async function generatedTraces(
 }
 
 function selectUniqueTrace(testCase: TraceCase, traces: readonly Json[]): Json {
-  const matches = traces.filter((trace, index) =>
-    testCase.terminalMatches(terminalState(trace, `generated trace ${index}`)));
+  const requiredActions = testCase.requiredTraceActions ?? [];
+  const matches = traces.filter((trace, index) => {
+    if (!testCase.terminalMatches(terminalState(trace, `generated trace ${index}`))) return false;
+    return requiredActions.every((action) =>
+      statesOf(trace, `generated trace ${index}`)
+        .some((state) => state["action_taken"] === action));
+  });
   if (matches.length === 0) {
     throw new Error(`${testCase.destination}: no trace reached ${testCase.terminalDescription}`);
   }

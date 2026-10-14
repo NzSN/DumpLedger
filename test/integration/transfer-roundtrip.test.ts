@@ -17,9 +17,9 @@ import {
 import type { DumpLedgerProjection, TransitionReceipt, TransitionSuccess } from "../../src/engine/projection.js";
 import { createVaultMinidumpInspectionPort } from "../../src/inspection/index.js";
 import { applyMigrations } from "../../src/ledger/migrations.js";
-import { exportBundle, type BundleTargetFactory } from "../../src/transfer/export.js";
+import { createExportSession, exportBundle, type BundleTargetFactory } from "../../src/transfer/export.js";
 import { importBundle, type ImportOutcome } from "../../src/transfer/import.js";
-import { dumpEntryName, serializeExportManifest } from "../../src/transfer/manifest.js";
+import { dumpEntryName, parseExportManifest, serializeExportManifest } from "../../src/transfer/manifest.js";
 import { TransferManager } from "../../src/transfer/manager.js";
 import { createTarWriter, readTar, type TarSource } from "../../src/transfer/tar.js";
 import { FilesystemVault } from "../../src/vault/filesystem-vault.js";
@@ -129,6 +129,20 @@ function entryOrder(bytes: Uint8Array): string[] {
   return [...readTar(bufferSource(bytes))].map(entry => entry.name);
 }
 
+/** The full bytes of one named tar entry (same helper the symbol bundle tests use). */
+function entryBytes(bytes: Uint8Array, name: string): Uint8Array {
+  const entry = [...readTar(bufferSource(bytes))].find(candidate => candidate.name === name);
+  assert.ok(entry !== undefined, `tar entry not found: ${name}`);
+  const chunks = [...entry.chunks()];
+  const result = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
 function entryDataOffset(bytes: Uint8Array, name: string): number {
   let offset = 0;
   for (const entry of readTar(bufferSource(bytes))) {
@@ -209,6 +223,8 @@ describe("transfer round trip", () => {
       assert.ok(existsSync(bundlePath));
       const bundleBytes = readFileSync(bundlePath);
       assert.equal(summary.byteSize, BigInt(bundleBytes.byteLength).toString());
+      // analysis reports are excluded from the import surface: the count is explicit even at zero
+      assert.equal(parseExportManifest(entryBytes(bundleBytes, "manifest.json")).skippedAnalyses, 0);
       // deterministic layout: manifest, ledger, then vault entries sorted by dump id; tombstones carry no bytes
       assert.deepEqual(entryOrder(bundleBytes), ["manifest.json", "ledger.sqlite", dumpEntryName(populated.dumpAvailable)]);
 
@@ -245,6 +261,48 @@ describe("transfer round trip", () => {
       assert.equal(events[0]?.action, "BeginImport");
       assert.equal(events[finishIndex]?.detail.importId, outcome.engineImportId);
 
+      a.engine.close();
+      b.engine.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts the analyses the bundle skips while the round trip stays analysis-free", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dump-ledger-skipped-analyses-"));
+    try {
+      const a = makeInstance(join(root, "a"));
+      const populated = populate(a);
+      const inputSha256 = sha256hex(populated.dumpBytes);
+      const record = {
+        type: "RecordAnalysis" as const,
+        dumpId: populated.dumpAvailable,
+        analyzerName: "triage-tool",
+        analyzerVersion: "1.4.0",
+        kind: "triage",
+        inputSha256,
+        outcome: "completed" as const,
+        summary: "no matching fault line",
+      };
+      must(a.engine.execute(record));
+      must(a.engine.execute(record)); // same identity: a replay stores nothing and must not double-count
+      must(a.engine.execute({ ...record, kind: "symbolication", outcome: "failed" as const, summary: "symbols unavailable" }));
+      assert.equal(a.engine.listAnalyses(populated.dumpAvailable).length, 2);
+
+      const exportsDir = join(root, "a-exports");
+      const session = await createExportSession({ engine: a.engine, vault: a.vault, exportsDir });
+      assert.equal(session.manifest.skippedAnalyses, 2);
+      const summary = await session.run();
+      assert.equal(summary.status, "sealed", show(summary));
+      const bundlePath = join(exportsDir, summary.exportId, "bundle.tar");
+      assert.equal(parseExportManifest(entryBytes(readFileSync(bundlePath), "manifest.json")).skippedAnalyses, 2);
+
+      const b = makeInstance(join(root, "b"));
+      const outcome = importBundle({ engine: b.engine, vault: b.vault, bundlePath });
+      assert.equal(outcome.status, "finished", show(outcome));
+      assert.equal(outcome.imported, 2);
+      // analysis reports ride in the ledger copy but are never re-created by an import
+      assert.deepEqual(b.engine.listAnalyses(populated.dumpAvailable), []);
       a.engine.close();
       b.engine.close();
     } finally {

@@ -305,7 +305,26 @@ function readSchemaMigrations(ledgerCopyPath: string): number {
   }
 }
 
-function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: string, generatorVersion: string, schemaMigrations: number, symbols: readonly ExportManifestSymbol[] | undefined): ExportManifest {
+/**
+ * Counts the stored analysis reports per dump in the ledger copy. Analysis
+ * reports are analyzer-regenerable and deliberately excluded from the import
+ * surface (docs/analyzer-integration-design.md, "Transfer exclusion"); the
+ * manifest's skippedAnalyses count keeps the omission visible. Reading the
+ * copy pins the count to the same consistent backup the bundle carries.
+ */
+function readAnalysisCounts(ledgerCopyPath: string): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  const database = new BetterSqlite3(ledgerCopyPath, { readonly: true });
+  try {
+    const rows = database.prepare("SELECT dump_id, COUNT(*) AS count FROM dump_analyses GROUP BY dump_id").all() as Array<{ dump_id: string; count: number | bigint }>;
+    for (const row of rows) counts.set(row.dump_id, Number(row.count));
+  } finally {
+    database.close();
+  }
+  return counts;
+}
+
+function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: string, generatorVersion: string, schemaMigrations: number, symbols: readonly ExportManifestSymbol[] | undefined, analysisCounts: ReadonlyMap<string, number>): ExportManifest {
   const dumps: ExportManifestDump[] = [];
   const skipped: ExportManifestSkipped[] = [];
   for (const dump of snapshot.dumps) {
@@ -322,6 +341,9 @@ function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: 
   skipped.sort((a, b) => (a.dumpId < b.dumpId ? -1 : a.dumpId > b.dumpId ? 1 : 0));
   const exported = new Set(dumps.map(dump => dump.dumpId));
   const auditEvents = snapshot.auditEvents.filter(event => event.dumpId === null || exported.has(event.dumpId)).length;
+  // Analysis reports never cross into an import (docs/analyzer-integration-design.md,
+  // "Transfer exclusion"); the count keeps the omission visible.
+  const skippedAnalyses = dumps.reduce((total, dump) => total + (analysisCounts.get(dump.dumpId) ?? 0), 0);
   return {
       schema: "dump-ledger.export-manifest/v1",
       createdAt,
@@ -335,6 +357,7 @@ function select(snapshot: DumpLedgerProjection, fingerprint: string, createdAt: 
         auditEvents,
         ...(symbols === undefined ? {} : { symbols: symbols.length }),
       },
+      skippedAnalyses,
       skipped,
       dumps,
       ...(symbols === undefined ? {} : { symbols }),
@@ -408,6 +431,7 @@ export async function openPreparedExport(prepared: PreparedExport, options: Expo
     snapshot = options.engine.snapshot();
     await options.engine.backup(ledgerCopyPath);
     const schemaMigrations = readSchemaMigrations(ledgerCopyPath);
+    const analysisCounts = readAnalysisCounts(ledgerCopyPath);
     // The opt-in symbol path joins the backup's stored facts against the
     // snapshot's registered artifacts; without the flag nothing is read and
     // the manifest is byte-identical to the pre-flag output.
@@ -418,7 +442,7 @@ export async function openPreparedExport(prepared: PreparedExport, options: Expo
         .map(dump => dump.dumpId as string);
       symbols = selectSymbols(snapshot.symbols, readStoredFacts(ledgerCopyPath), declaredIds);
     }
-    manifest = select(snapshot, options.engine.grantKeyFingerprint(), createdAt, options.generatorVersion ?? DEFAULT_GENERATOR_VERSION, schemaMigrations, symbols);
+    manifest = select(snapshot, options.engine.grantKeyFingerprint(), createdAt, options.generatorVersion ?? DEFAULT_GENERATOR_VERSION, schemaMigrations, symbols, analysisCounts);
   } catch (error) {
     rmSync(exportDir, { recursive: true, force: true });
     throw error;

@@ -40,6 +40,7 @@ export function createDumpLedgerSuiteAdapter(
       MarkQuarantined: (inputs) => harness.markQuarantined(inputs["Dump"]),
       PromoteObject: (inputs) => harness.promoteObject(inputs["Dump"]),
       PurgeSymbol: (inputs) => harness.purgeSymbol(inputs["Dump"]),
+      RecordAnalysis: (inputs) => harness.recordAnalysis(inputs["Dump"]),
       RejectDump: (inputs) => harness.rejectDump(inputs["Dump"]),
       ResolveCase: (inputs) => harness.resolveCase(inputs["Case"]),
       ResumeInvestigation: (inputs) => harness.resumeInvestigation(inputs["Case"]),
@@ -51,6 +52,7 @@ export function createDumpLedgerSuiteAdapter(
     observe: () => {
       const observed = harness.observe();
       return {
+        AnalysisRecorded: new Set(observed.analysisRecorded),
         BlobState: observed.blobState,
         CaseStatus: observed.caseStatus,
         Coverage: observed.coverage,
@@ -73,6 +75,7 @@ export function createDumpLedgerSuiteAdapter(
 
 /** Wire variable name -> capitalized native observation id. */
 const TRANSFER_NATIVE_KEYS: Record<string, string> = {
+  analysisRecorded: "AnalysisRecorded",
   blobState: "BlobState",
   bundle: "Bundle",
   bundleSymbols: "BundleSymbols",

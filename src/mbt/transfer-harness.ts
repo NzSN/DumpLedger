@@ -771,6 +771,10 @@ export class TransferMbtHarness {
         const sha256 = dumpBySlot(modelSlot)?.sha256;
         return sha256 !== null && sha256 !== undefined;
       }))),
+      analysisRecorded: vSetInt(new Set(MODEL_SLOTS.filter((modelSlot) => {
+        const dumpId = this.dumps.get(modelSlot);
+        return dumpId !== undefined && this.requireInstance().engine.listAnalyses(dumpId).length > 0;
+      }))),
       validation: vSeqStr(MODEL_SLOTS.map((modelSlot) => dumpBySlot(modelSlot)?.validation ?? "not-checked")),
       coverage: vSeqStr(MODEL_SLOTS.map((modelSlot) => dumpBySlot(modelSlot)?.coverage ?? NO_COVERAGE)),
       symbolRegistered: vSetInt(new Set(MODEL_SLOTS.filter((symbol) => this.registeredSymbolArtifact(symbol) !== undefined))),
