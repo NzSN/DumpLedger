@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>option2-mirrors-compiler-rebuild</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; color: #1a1a1a; }
+  h1 { border-bottom: 2px solid #444; padding-bottom: .3rem; font-size: 1.5rem; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: .2rem; margin-top: 2rem; }
+  code { background: #f0f0f0; padding: .1em .3em; border-radius: 3px; font-size: .92em; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; padding: .8rem; overflow-x: auto; border-radius: 6px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; font-size: .95em; }
+  th, td { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #efefef; }
+  blockquote { border-left: 3px solid #bbb; margin-left: 0; padding-left: 1rem; color: #555; }
+</style></head><body>
+<h1 id="option-2-explained-rebuild-the-matching-mirrors-compiler-then-ai3">Option 2 explained: rebuild the matching Mirrors compiler, then AI3</h1>
+<p>Decision aid written 2026-10-13 for the AI3 toolchain question. The user
+selected option 1 (regenerate against the current compiler) on 2026-10-14;
+this note remains as the record of the alternative.</p>
+<h2 id="the-situation">The situation</h2>
+<p><code>pnpm test</code> runs <code>check:model-interface</code> (<code>tools/check-model-interface.sh</code>),
+which invokes the external compiler
+<code>/home/nzsn/Repos/Mirrors/.lake/build/bin/model_interface_gen</code> and requires
+its output to be byte-identical to the committed generated bindings in
+<code>src/generated/</code>.</p>
+<p>It failed with <code>MIC-C-STALE-001 / generated output is stale</code> — not because
+any model input changed, but because of toolchain drift:</p>
+<table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Committed bindings date from</td>
+<td>dump-ledger commit <code>2d40371</code>, 2026-09-17 14:11 +0800</td>
+</tr>
+<tr>
+<td>Compiler binary rebuilt</td>
+<td>Oct 13, from a Mirrors checkout with unrelated dirty work at HEAD <code>66f9418</code></td>
+</tr>
+<tr>
+<td>Lock records only a coarse version</td>
+<td><code>compilerVersion: "model-interface-gen/1"</code> — no git revision, so matching is empirical</td>
+</tr>
+</tbody>
+</table>
+<h2 id="what-option-2-meant">What option 2 meant</h2>
+<p>Restore the compiler that produced the committed bindings, verify the check
+goes green without changing anything in dump-ledger, and only then start AI3.
+AI3's Wave H would then regenerate against a known, pinned compiler, so its
+diff contains exactly the <code>RecordAnalysis</code> interface change and nothing else.</p>
+<h2 id="why-a-git-worktree-not-a-checkout">Why a git worktree, not a checkout</h2>
+<p>The Mirrors working copy has unrelated in-progress work. The check script
+reads <code>MIRRORS_ROOT</code> (default <code>/home/nzsn/Repos/Mirrors</code>), so a scratch build
+in a separate worktree can be pointed at it without touching the main
+checkout.</p>
+<h2 id="the-procedure-that-was-proposed">The procedure that was proposed</h2>
+<ol>
+<li>Pick the candidate revision: bindings committed Sep 17 14:11; Mirrors HEAD
+   then was around <code>09379ae</code> (Sep 17 12:35).</li>
+<li>Scratch build: <code>git -C /home/nzsn/Repos/Mirrors worktree add
+   /tmp/mirrors-pin 09379ae</code>, then <code>lake build model_interface_gen</code> there.</li>
+<li>Verify: <code>MIRRORS_ROOT=/tmp/mirrors-pin pnpm run check:model-interface</code>;
+   green means matched, red means bisect the Sep 16–17 window.</li>
+<li>Pin the matched revision in the repo for future builds.</li>
+<li>Start AI3; Wave H regenerates with the pinned compiler.</li>
+</ol>
+<h2 id="trade-offs-vs-option-1-regenerate-against-current-compiler">Trade-offs vs option 1 (regenerate against current compiler)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Option 2 (rebuild matching)</th>
+<th>Option 1 (regenerate now)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dump-ledger diff before AI3</td>
+<td>none</td>
+<td>large regenerated-artifact diff</td>
+</tr>
+<tr>
+<td>Real changes vs noise</td>
+<td>clean separation</td>
+<td>drift mixed into the same diff</td>
+</tr>
+<tr>
+<td>Compiler currency</td>
+<td>pinned at the Sep revision</td>
+<td>adopts current compiler state</td>
+</tr>
+<tr>
+<td>Cost</td>
+<td>one historical build + possible bisect</td>
+<td>none now, more review noise</td>
+</tr>
+</tbody>
+</table>
+<p>Option 1 was chosen: the drift was absorbed as a clean baseline regen before
+the <code>RecordAnalysis</code> spec change, keeping the AI3 interface diff honest.</p>
+<hr><p><small>Rendered from <code>.agents/chatdoc/option2-mirrors-compiler-rebuild.md</code>.</small></p>
+</body></html>

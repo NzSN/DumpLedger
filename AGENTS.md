@@ -37,6 +37,17 @@ DumpLedger is a self-hosted intake ledger for Windows minidumps: a TypeScript 7 
 - Commits use a short imperative summary, optionally area-prefixed (e.g., `Docs:`), with a body describing the phases or rationale.
 - PRs name the design doc or milestone implemented, confirm `pnpm test` passes, and list regenerated model-interface or trace artifacts separately.
 
+## Chat-Produced Documents
+
+Durable chat artifacts — milestone/gate reports, decision aids, rendered
+answer documents — live in `.agents/chatdoc/` as Markdown (kebab-case
+`<slug>.md`). Never leave the only copy in `/tmp` or other volatile storage;
+`/tmp` is wiped on restart. To view one in a browser, render the same-name
+`.html` companion with `python3 .agents/chatdoc/render.py <file.md>`
+(requires the `markdown` package; recreate a throwaway venv with
+`python3 -m venv /tmp/mdenv && /tmp/mdenv/bin/pip install markdown` when the
+render environment is gone) and open it with `wslview`.
+
 ## Security & Configuration Tips
 
 - Never commit secrets or `/data/` (gitignored). Keep the grant key stable across restarts and backed up separately from the SQLite file.

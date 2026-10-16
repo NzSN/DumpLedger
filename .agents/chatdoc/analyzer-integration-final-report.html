@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>analyzer-integration-final-report</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; color: #1a1a1a; }
+  h1 { border-bottom: 2px solid #444; padding-bottom: .3rem; font-size: 1.5rem; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: .2rem; margin-top: 2rem; }
+  code { background: #f0f0f0; padding: .1em .3em; border-radius: 3px; font-size: .92em; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; padding: .8rem; overflow-x: auto; border-radius: 6px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; font-size: .95em; }
+  th, td { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #efefef; }
+  blockquote { border-left: 3px solid #bbb; margin-left: 0; padding-left: 1rem; color: #555; }
+</style></head><body>
+<h1 id="analyzer-integration-final-report-ai1-ai2-ai3-complete">Analyzer integration — final report (AI1 + AI2 + AI3 complete)</h1>
+<p>Dates: 2026-10-13 → 2026-10-14 · Status: all three milestones delivered and
+verified; full <code>pnpm test</code> + e2e green. Commit <code>98e484c</code>.</p>
+<h2 id="what-dumpledger-offers-an-external-analyzer">What DumpLedger offers an external analyzer</h2>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Endpoint</th>
+<th>Auth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Catalog search (filters: case/customer/phase/validation/received range/architecture/exceptionCode/sha256; keyset pages of 200)</td>
+<td><code>GET /api/v1/dumps</code></td>
+<td>Analyzer token or session</td>
+</tr>
+<tr>
+<td>Duplicate lookup</td>
+<td><code>GET /api/v1/dumps/by-sha256/:sha256</code></td>
+<td>Analyzer token or session</td>
+</tr>
+<tr>
+<td>Dump detail (phase, sha256, validation, symbolCoverage)</td>
+<td><code>GET /api/v1/dumps/:dumpId</code></td>
+<td>Analyzer token or session</td>
+</tr>
+<tr>
+<td>Byte retrieval with strong ETag + 304 revalidation</td>
+<td><code>GET /api/v1/dumps/:dumpId/content</code></td>
+<td>Analyzer token or session</td>
+</tr>
+<tr>
+<td>Resumable audit event feed (rowid cursor, actions/case filters, 500/page, beyond-end echo)</td>
+<td><code>GET /api/v1/events</code></td>
+<td>Analyzer token or session</td>
+</tr>
+<tr>
+<td>Analysis write-back (idempotent on identity tuple; replay → 200)</td>
+<td><code>POST /api/v1/dumps/:dumpId/analyses</code></td>
+<td>Analyzer token or session+CSRF</td>
+</tr>
+<tr>
+<td>Analysis listing</td>
+<td><code>GET /api/v1/dumps/:dumpId/analyses</code></td>
+<td>Analyzer token or session</td>
+</tr>
+<tr>
+<td>Symbol resolution (pre-existing)</td>
+<td><code>GET /symbols/:name/:id/:file</code></td>
+<td>Public</td>
+</tr>
+</tbody>
+</table>
+<p>Analyzer token: <code>DUMP_LEDGER_ANALYZER_TOKEN_HASH</code> (sha256 digest at rest,
+disabled when unset, pinned bearer precedence, rotation by restart).</p>
+<h2 id="execution-summary-all-via-general-purpose-flash-agents">Execution summary (all via general-purpose-flash agents)</h2>
+<ul>
+<li>AI1 (6 tasks): catalog contracts · token module · ledger keyset reads +
+  migration 7 · application layer · routes/guard/ETag (+C1b scope extension
+  to dump detail/content) · docs.</li>
+<li>AI2 (3 tasks): events contracts · <code>readAuditEvents</code> ledger read · events
+  route + docs.</li>
+<li>AI3 (6 tasks): analysis contracts + <code>analysis_</code> IDs · <code>RecordAnalysis</code>
+  engine command + migration 8 (<code>dump_analyses</code>, purge cascade) · TLA+ action</li>
+<li>interface/bindings/traces regen · routes + write-back guard · export
+  manifest <code>skippedAnalyses</code> · docs + CONTEXT.md vocabulary.</li>
+<li>Toolchain decision: option 1 — bindings regenerated against the current
+  Mirrors compiler as a clean drift-absorbing baseline before the spec
+  change.</li>
+</ul>
+<h2 id="incidents-and-integrator-completions">Incidents and integrator completions</h2>
+<ol>
+<li>C1 agent stalled ~1h mid-task: interrupted, work verified independently;
+   it later recovered and reported.</li>
+<li>H1 agent vanished after its edits (no final report). The integrator
+   completed the DumpLedgerTransfer ripple: <code>analysisRecorded</code> added to 28
+   UNCHANGED lists in the transfer spec, the transfer interface observation,
+   transfer trace regeneration (<code>--replace</code>, authorized), all four negative
+   fixtures backfilled, and the transfer harness + suite-adapter observation
+   mappings.</li>
+<li>Pre-existing environment findings: socket-binding tests need escalated
+   runs (sandbox EPERM); TLC full model check exceeds the 570s smoke bound
+   as usual.</li>
+</ol>
+<h2 id="final-gate-integrator-run-2026-10-14">Final gate (integrator-run, 2026-10-14)</h2>
+<ul>
+<li>typecheck clean · build green · <code>check:model-interface</code> clean (both specs,
+  coverage, negative diagnostics, suite bundles)</li>
+<li>unit 149/149 · integration 143/143 · MBT 28/28 · e2e 13/13</li>
+<li>78 files changed (+1905/−196), incl. regenerated bindings/traces listed
+  separately per repo convention.</li>
+</ul>
+<h2 id="known-follow-ups-documented-in-the-design-doc">Known follow-ups (documented in the design doc)</h2>
+<ul>
+<li><code>downloadAuth</code> audit attribution on <code>AuthorizeDownload</code> — unimplemented.</li>
+<li>Case manifest not in token scope (open question 1, resolved-in-v1).</li>
+<li>AI4 deferred: query-scoped export, long-poll/webhooks; per-analyzer
+  digests; web UI for analysis reports.</li>
+</ul>
+<hr><p><small>Rendered from <code>.agents/chatdoc/analyzer-integration-final-report.md</code>.</small></p>
+</body></html>

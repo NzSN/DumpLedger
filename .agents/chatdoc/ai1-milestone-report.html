@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>ai1-milestone-report</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; color: #1a1a1a; }
+  h1 { border-bottom: 2px solid #444; padding-bottom: .3rem; font-size: 1.5rem; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: .2rem; margin-top: 2rem; }
+  code { background: #f0f0f0; padding: .1em .3em; border-radius: 3px; font-size: .92em; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; padding: .8rem; overflow-x: auto; border-radius: 6px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; font-size: .95em; }
+  th, td { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #efefef; }
+  blockquote { border-left: 3px solid #bbb; margin-left: 0; padding-left: 1rem; color: #555; }
+</style></head><body>
+<h1 id="ai1-milestone-gate-report-analyzer-integration-catalog-read-surface">AI1 milestone gate report — Analyzer integration (catalog read surface)</h1>
+<p>Date: 2026-10-13 · Status: AI1 complete, all six tasks accepted.</p>
+<h2 id="what-was-delegated-and-delivered">What was delegated and delivered</h2>
+<p>Task breakdown: <code>Plans/analyzer-integration-tasks.md</code> — fine-grained
+stage/task/dependency/acceptance tables for AI1–AI3, with per-task file
+ownership and exact acceptance commands.</p>
+<p>Execution (each task one <code>general-purpose-flash</code> agent, <code>fork_turns="none"</code>
+self-contained briefs, every acceptance independently re-run by the
+integrator):</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Result</th>
+<th>Verified evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1 catalog contracts</td>
+<td>done</td>
+<td><code>catalog.ts</code> + 23 subtests; contracts suite green</td>
+</tr>
+<tr>
+<td>A2 analyzer token</td>
+<td>done</td>
+<td><code>analyzer-token.ts</code> mirrors ingest-token; 5/5 unit tests</td>
+</tr>
+<tr>
+<td>B1 ledger reads + migration 7</td>
+<td>done</td>
+<td>Keyset <code>searchDumps</code>, <code>findDumpsBySha256</code>, indexes; integration 105→109</td>
+</tr>
+<tr>
+<td>B2 engine read-through + application</td>
+<td>done</td>
+<td>Read-only proof test; opaque base64url cursor codec</td>
+</tr>
+<tr>
+<td>C1 (+C1b) routes/guard/ETag/wiring</td>
+<td>done</td>
+<td><code>authorizeSessionOrAnalyzer</code>, 2 new GETs, ETag/304; C1b extended the guard to dump detail + content</td>
+</tr>
+<tr>
+<td>D1 docs</td>
+<td>done</td>
+<td>http-api.md inventory + <code>Analyzer</code> auth label, security-model.md section, README env var</td>
+</tr>
+</tbody>
+</table>
+<p>Incidents handled: the C1 agent stalled ~1h mid-task; it was interrupted, its
+already-written work verified independently (it later recovered and
+reported), and its scope extended via follow-up. All unrelated worktree state
+preserved.</p>
+<h2 id="gate-results-integrator-run">Gate results (integrator-run)</h2>
+<ul>
+<li>typecheck clean · build green · unit 20/20 · integration 116/116 · MBT
+  28/28 (socket tests need escalation; the sandbox blocks <code>listen 127.0.0.1</code>)</li>
+<li><code>check:model-interface</code> FAILS — pre-existing, unrelated to AI1: the Mirrors
+  <code>model_interface_gen</code> binary was rebuilt the same day and judges the
+  Sep-17 committed bindings stale. All check inputs clean at HEAD; no AI1
+  change touched them.</li>
+</ul>
+<h2 id="known-gaps-vs-the-design-agent-flagged-confirmed">Known gaps vs the design (agent-flagged, confirmed)</h2>
+<ol>
+<li>Token scope = 4 routes (catalog GETs + dump detail + content).
+   Cases/symbols list stay session-only — deliberate; revisited under AI2/AI3.</li>
+<li><code>downloadAuth</code> audit attribution not implemented (design "Attribution"
+   bullet) — needs an <code>AuthorizeDownload</code> detail change; follow-up candidate.</li>
+<li>ETag condition stricter than design text (available + downloadable +
+   sha256) — correct behavior; design wording tightened later.</li>
+</ol>
+<h2 id="next">Next</h2>
+<p>AI2 (event feed: E1 contracts → E2 ledger read → F1 route). AI3 (analysis
+write-back) follows after AI2's gate and includes the TLA+ action + MBT trace
+regeneration, an explicit maintainer step per AGENTS.md.</p>
+<hr><p><small>Rendered from <code>.agents/chatdoc/ai1-milestone-report.md</code>.</small></p>
+</body></html>
