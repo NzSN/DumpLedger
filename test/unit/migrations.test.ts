@@ -65,7 +65,7 @@ test("migration 5 preserves version-4 module and artifact rows and admits the EX
     );
     assert.deepEqual(
       (database.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map(row => row.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 10],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     );
 
     // The rebuilt shape admits a code identity: an EXE module carries NULL
@@ -156,3 +156,21 @@ test("migration 6 preserves existing grants and widens both slot bounds", () => 
 });
 
 
+test("migration 9 preserves compact reports, enforces detail bounds, and cascades purge", () => {
+  const db = new BetterSqlite3(":memory:"); db.pragma("foreign_keys = ON");
+  try {
+    applyMigrations(db, 8);
+    db.prepare("INSERT INTO customers VALUES ('customer_A', 'Acme', ?)").run(NOW);
+    db.prepare("INSERT INTO cases VALUES ('case_A', 'customer_A', 'Case', 'new', ?)").run(NOW);
+    db.prepare("INSERT INTO dumps(dump_id,case_id,phase,blob_state,original_name,byte_size,sha256,validation,coverage,downloadable,received_at) VALUES ('dump_A','case_A','available','vault','crash.dmp','4',?,'valid','partial',1,?)").run(SHA256, NOW);
+    db.prepare("INSERT INTO dump_analyses VALUES ('analysis_A','dump_A','tool','0.1','triage',?,'completed','legacy summary','{}',NULL,?)").run(SHA256, NOW);
+    const before = db.prepare("SELECT * FROM dump_analyses").all(); applyMigrations(db);
+    assert.deepEqual(db.prepare("SELECT * FROM dump_analyses").all(), before);
+    assert.deepEqual(db.prepare("SELECT * FROM analysis_details").all(), []);
+    assert.throws(() => db.prepare("INSERT INTO analysis_details VALUES ('analysis_A',?,?)").run("a".repeat(64), "中".repeat(174763)), /CHECK constraint failed/);
+    assert.throws(() => db.prepare("INSERT INTO analysis_details VALUES ('analysis_A','UPPERCASE','{}')").run(), /CHECK constraint failed/);
+    db.prepare("INSERT INTO analysis_details VALUES ('analysis_A',?,'{}')").run("a".repeat(64));
+    db.prepare("DELETE FROM dump_analyses WHERE analysis_id='analysis_A'").run();
+    assert.deepEqual(db.prepare("SELECT * FROM analysis_details").all(), []); assert.deepEqual(db.pragma("foreign_key_check"), []);
+  } finally { db.close(); }
+});

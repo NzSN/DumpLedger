@@ -20,6 +20,8 @@ import type {
   GrantQuotaResponse,
   GrantRecord,
   RecordAnalysisRequest,
+  RecordRichAnalysisRequest,
+  RichAnalysisReport,
   SymbolKind,
   SymbolListResponse,
   TransitionResponse,
@@ -127,6 +129,8 @@ export interface HttpApplicationPort {
    * `not_found`). */
   recordAnalysis(dumpId: string, request: RecordAnalysisRequest): AnalysisRecordOutcome;
   listAnalyses(dumpId: string): AnalysisListResponse | undefined;
+  recordRichAnalysis?(dumpId: string, request: RecordRichAnalysisRequest): AnalysisRecordOutcome;
+  richAnalysis?(dumpId: string, analysisId: string): RichAnalysisReport | undefined;
 
   /* Symbol store (docs/symbols-design.md): operator list + ingest lifecycle
    * + purge, and the unauthenticated symsrv read surface. */

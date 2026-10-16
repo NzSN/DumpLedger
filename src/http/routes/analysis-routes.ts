@@ -2,6 +2,10 @@ import type { FastifyInstance } from "fastify";
 
 import {
   decodeRecordAnalysisRequest,
+  decodeRecordRichAnalysisRequest,
+  encodeRichAnalysisReport,
+  MAX_RICH_ANALYSIS_REQUEST_BYTES,
+  MAX_RICH_REPORT_BYTES,
   encodeAnalysisListResponse,
   encodeAnalysisReport,
 } from "@dump-ledger/http-contracts";
@@ -41,6 +45,30 @@ import type { RouteContext } from "./common.js";
 
 export function registerAnalysisRoutes(server: FastifyInstance, ctx: RouteContext): void {
   const { options } = ctx;
+
+  server.get("/api/v2/capabilities", async (request, reply) => {
+    if (authorizeSessionOrAnalyzer(request, reply, options) === undefined) return reply;
+    return { richReports: options.application.recordRichAnalysis === undefined || options.application.richAnalysis === undefined ? null : { schemaVersion: 2, maxReportBytes: MAX_RICH_REPORT_BYTES, maxRequestBytes: MAX_RICH_ANALYSIS_REQUEST_BYTES } };
+  });
+
+  server.post<{ Params: { dumpId: string } }>("/api/v2/dumps/:dumpId/analyses", { bodyLimit: MAX_RICH_ANALYSIS_REQUEST_BYTES }, async (request, reply) => {
+    if (authorizeSessionOrAnalyzerMutation(request, reply, options) === undefined) return reply;
+    if (options.application.recordRichAnalysis === undefined || options.application.richAnalysis === undefined) return sendError(reply, "not_found");
+    const decoded = decodeJsonRequest(request, decodeRecordRichAnalysisRequest);
+    if (!decoded.ok) return sendError(reply, "invalid_request");
+    const outcome = options.application.recordRichAnalysis(request.params.dumpId, decoded.value);
+    if (!outcome.ok) return sendError(reply, contractErrorFor(outcome.code));
+    const report = options.application.richAnalysis(request.params.dumpId, outcome.report.analysisId);
+    if (report === undefined) return sendError(reply, "integrity_failure");
+    return reply.code(outcome.replayed ? 200 : 201).type("application/json; charset=utf-8").send(encodeRichAnalysisReport(report));
+  });
+
+  server.get<{ Params: { dumpId: string; analysisId: string } }>("/api/v2/dumps/:dumpId/analyses/:analysisId", async (request, reply) => {
+    if (authorizeSessionOrAnalyzer(request, reply, options) === undefined) return reply;
+    const report = options.application.richAnalysis?.(request.params.dumpId, request.params.analysisId);
+    if (report === undefined) return sendError(reply, "not_found");
+    return reply.type("application/json; charset=utf-8").send(encodeRichAnalysisReport(report));
+  });
 
   server.post<{ Params: { dumpId: string } }>("/api/v1/dumps/:dumpId/analyses", async (request, reply) => {
     if (authorizeSessionOrAnalyzerMutation(request, reply, options) === undefined) return reply;

@@ -1,3 +1,4 @@
+import type { RichAnalysisDetail } from "../domain/rich-report.js";
 import type { AuditEventId, CaseId, CustomerId, DumpId, GrantId, SymbolArtifactId } from "../domain/ids.js";
 import type { CaseStatus, CoverageKind, SymbolArtifactKind, SymbolIngestAuthChannel, TokenState, ValidationState } from "../domain/lifecycle.js";
 
@@ -129,5 +130,5 @@ export type LifecycleCommand =
    * The entity identity is (dumpId, analyzerName, analyzerVersion, kind,
    * inputSha256); a repeat of an existing identity is an idempotent replay, so
    * the engine returns the stored report instead of recording a second row. */
-  | { readonly type: "RecordAnalysis"; readonly dumpId: DumpId; readonly analyzerName: string; readonly analyzerVersion: string; readonly kind: string; readonly inputSha256: string; readonly outcome: AnalysisOutcome; readonly summary: string; readonly facts?: Readonly<Record<string, unknown>>; readonly duplicateOf?: DumpId | null };
+  | { readonly type: "RecordAnalysis"; readonly dumpId: DumpId; readonly analyzerName: string; readonly analyzerVersion: string; readonly kind: string; readonly inputSha256: string; readonly outcome: AnalysisOutcome; readonly summary: string; readonly facts?: Readonly<Record<string, unknown>>; readonly duplicateOf?: DumpId | null; readonly detail?: RichAnalysisDetail };
 export type LifecycleAction = LifecycleCommand["type"];

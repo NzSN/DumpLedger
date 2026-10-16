@@ -35,6 +35,8 @@ import {
   MAX_EVENT_DETAIL_BYTES,
   MAX_MODULE_NAME_LENGTH,
   type RecordAnalysisRequest,
+  type RecordRichAnalysisRequest,
+  type RichAnalysisReport,
   type SymbolKind,
 } from "@dump-ledger/http-contracts";
 import { DumpLedgerError } from "../domain/errors.js";
@@ -426,6 +428,31 @@ export class EngineHttpApplication implements HttpApplicationPort {
     if (!receipt.ok) return { ok: false, code: receipt.error.code };
     if (receipt.analysis === undefined) return { ok: false, code: "integrity_failure" };
     return { ok: true, report: analysisReportOf(receipt.analysis), replayed: receipt.replayed === true };
+  }
+
+  recordRichAnalysis(dumpIdText: string, request: RecordRichAnalysisRequest): AnalysisRecordOutcome {
+    let dumpId;
+    try { dumpId = parseDumpId(dumpIdText); } catch { return { ok: false, code: "dump_not_found" }; }
+    const stored = this.engine.listAnalyses(dumpId);
+    if (stored.length >= MAX_ANALYSES_PER_DUMP && !stored.some(report => sameAnalysisIdentity(report, request))) return { ok: false, code: "invalid_transition" };
+    const receipt = this.engine.execute({ type: "RecordAnalysis", dumpId,
+      analyzerName: request.analyzer.name, analyzerVersion: request.analyzer.version,
+      kind: request.kind, inputSha256: request.inputSha256, outcome: request.outcome, summary: request.summary,
+      ...(request.facts === undefined ? {} : { facts: request.facts }),
+      ...(request.duplicateOf === undefined ? {} : { duplicateOf: request.duplicateOf as never }),
+      detail: { reportJson: request.reportJson, reportDigest: request.reportDigest },
+    });
+    if (!receipt.ok) return { ok: false, code: receipt.error.code };
+    if (receipt.analysis === undefined) return { ok: false, code: "integrity_failure" };
+    return { ok: true, report: analysisReportOf(receipt.analysis), replayed: receipt.replayed === true };
+  }
+
+  richAnalysis(dumpIdText: string, analysisId: string): RichAnalysisReport | undefined {
+    let dumpId;
+    try { dumpId = parseDumpId(dumpIdText); } catch { return undefined; }
+    const report = this.engine.listAnalyses(dumpId).find(r => r.analysisId === analysisId);
+    const detail = this.engine.analysisDetail(dumpId, analysisId);
+    return report === undefined || detail === null ? undefined : { ...analysisReportOf(report), ...detail };
   }
 
   /** Every stored report for one dump, ordered by `(createdAt, analysisId)`

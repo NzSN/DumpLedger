@@ -150,6 +150,15 @@ const migrations: readonly Migration[] = [
     ) STRICT;
     CREATE INDEX dump_analyses_dump_idx ON dump_analyses(dump_id);
   ` },
+  /* Canonical rich reports are immutable children of their compact identity.
+   * Purge explicitly deletes the summary, cascading this detail atomically. */
+  { version: 9, sql: `
+    CREATE TABLE analysis_details (
+      analysis_id TEXT PRIMARY KEY REFERENCES dump_analyses(analysis_id) ON DELETE CASCADE,
+      report_digest TEXT NOT NULL CHECK (length(report_digest) = 64 AND report_digest NOT GLOB '*[^0-9a-f]*'),
+      report_json TEXT NOT NULL CHECK (length(CAST(report_json AS BLOB)) <= 524288)
+    ) STRICT;
+  ` },
   /* Customer display numbers: every customer carries an instance-wide
    * sequential customer_no (#N) assigned at creation. Backfill follows
    * (created_at, customer_id) so existing ledgers keep deterministic,

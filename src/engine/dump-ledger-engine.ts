@@ -1,3 +1,4 @@
+import { assertRichAnalysis, type RichAnalysisDetail } from "../domain/rich-report.js";
 import { createHash, createHmac } from "node:crypto";
 import { DumpLedgerError, SimulatedCrash } from "../domain/errors.js";
 import { parseAuditEventId, parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type AuditEventId, type CaseId, type DumpId, type IdSource } from "../domain/ids.js";
@@ -66,6 +67,7 @@ export interface DumpLedgerEngine {
    * analysis_id)` (docs/analyzer-integration-design.md, "Analysis write-back"):
    * a read-only ledger read with no command, audit event, or projection change. */
   listAnalyses(dumpId: DumpId): readonly StoredAnalysisReport[];
+  analysisDetail(dumpId: DumpId, analysisId: string): RichAnalysisDetail | null;
   backupInventory(): BackupInventory;
   integrityCheck(): readonly string[];
   backup(destination: string): Promise<void>;
@@ -200,6 +202,9 @@ class Engine implements DumpLedgerEngine {
   dumpsBySha256(sha256: string): readonly DumpCatalogRow[] { return this.ledger.findDumpsBySha256(sha256); }
   readAuditEvents(afterRowid?: number, filter?: AuditFeedFilter, limit?: number): AuditFeedPage { return this.ledger.readAuditEvents(afterRowid, filter, limit); }
   listAnalyses(dumpId: DumpId): readonly StoredAnalysisReport[] { return this.ledger.listAnalyses(dumpId); }
+  analysisDetail(dumpId: DumpId, analysisId: string): RichAnalysisDetail | null {
+    return this.ledger.listAnalyses(dumpId).some(r => r.analysisId === analysisId) ? this.ledger.analysisDetail(analysisId) : null;
+  }
   backupInventory(): BackupInventory {
     return { schema:"dump-ledger.backup-inventory/v1", generatedAt:assertIsoTimestamp(this.clock.now(), "clock"), includesVaultBytes:false,
       dumps:this.snapshot().dumps.map(dump => ({dumpId:dump.dumpId,caseId:dump.caseId,phase:dump.phase,byteSize:dump.byteSize?.toString() ?? null,sha256:dump.sha256,purgeAt:dump.purgeAt,purgedAt:dump.purgedAt})) };
@@ -259,8 +264,9 @@ class Engine implements DumpLedgerEngine {
         const dump=this.requirePhase(dumpId,"available");
         if (dump.sha256===null||dump.sha256!==inputSha256) throw new DumpLedgerError("invalid_input","inputSha256 must equal the dump's sealed sha256");
         const existing=this.ledger.findAnalysisByIdentity(dumpId,analyzerName,analyzerVersion,kind,inputSha256);
-        if (existing!==null) return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,analysis:existing,replayed:true};
-        const recorded=this.ledger.recordAnalysis({analysisId:this.ids.next("analysis"),dumpId,analyzerName,analyzerVersion,kind,inputSha256,outcome,summary,facts,duplicateOf,createdAt:occurredAt},event());
+        if (command.detail !== undefined) assertRichAnalysis(command.detail, { dumpId, analyzerName, analyzerVersion, kind, inputSha256, outcome, summary, facts });
+        if (existing!==null && command.detail === undefined) return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,analysis:existing,replayed:true};
+        const recorded=this.ledger.recordAnalysis({analysisId:this.ids.next("analysis"),dumpId,analyzerName,analyzerVersion,kind,inputSha256,outcome,summary,facts,duplicateOf,createdAt:occurredAt},event(),command.detail);
         return {ok:true,action:command.type,occurredAt,dumpId,caseId:dump.caseId,analysis:recorded.report,replayed:recorded.deduplicated};
       }
       case "IngestSymbol": {

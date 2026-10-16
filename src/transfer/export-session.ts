@@ -432,6 +432,10 @@ export async function openPreparedExport(prepared: PreparedExport, options: Expo
     await options.engine.backup(ledgerCopyPath);
     const schemaMigrations = readSchemaMigrations(ledgerCopyPath);
     const analysisCounts = readAnalysisCounts(ledgerCopyPath);
+    const richBackup = new BetterSqlite3(ledgerCopyPath, { readonly: true });
+    try {
+      if (richBackup.prepare("SELECT 1 FROM analysis_details LIMIT 1").get() !== undefined) throw new DumpLedgerError("invalid_transition", "export format v1 cannot preserve canonical analysis details");
+    } finally { richBackup.close(); }
     // The opt-in symbol path joins the backup's stored facts against the
     // snapshot's registered artifacts; without the flag nothing is read and
     // the manifest is byte-identical to the pre-flag output.

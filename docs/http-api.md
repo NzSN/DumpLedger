@@ -902,3 +902,6 @@ responses. Use the deployment's HTTPS origin for remote calls.
 7. Use `/api/v1/cases/<caseId>/transitions` to record investigation progress,
    and `/api/v1/dumps/<dumpId>/retention` to assign a purge deadline separately.
 
+## Rich reports v2
+
+See [Rich report delivery v2](rich-reports.md) for the bounded canonical report POST, authenticated detail GET, capabilities, digest-bound promotion, and transfer restriction. Existing v1 limits and response shapes are unchanged.

@@ -225,3 +225,7 @@ Production audit rows are security records and are not reused as a claim of
 formal conformance. No current result is a proof that HTTP, SQLite, filesystem,
 cryptography, minidump bytes, or the overall application refines the TLA+
 model for all inputs and environments.
+
+## Rich-report detail coverage
+
+Migration 9 canonical analysis details refine the existing recorded-analysis state without changing the checked-in lifecycle traces. Digest-bound detail attachment and exact byte preservation are not represented by the Boolean `analysisRecorded` observation; real SQLite, HTTP, contract, and transfer tests cover these additional obligations. The implementation never treats citation validity as root-cause proof. See [rich-reports.md](rich-reports.md).

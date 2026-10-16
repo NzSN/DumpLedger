@@ -1,3 +1,4 @@
+import type { RichAnalysisDetail } from "../domain/rich-report.js";
 import { createHash } from "node:crypto";
 import BetterSqlite3 from "better-sqlite3";
 import { DumpLedgerError } from "../domain/errors.js";
@@ -469,14 +470,32 @@ export class SqliteLedger {
    * no second event. The audit detail carries identifiers and outcome only —
    * never the summary or the analyzer's facts.
    */
-  recordAnalysis(insert: AnalysisInsert, event: EventIdentity): { readonly report: StoredAnalysisReport; readonly deduplicated: boolean } {
+  recordAnalysis(insert: AnalysisInsert, event: EventIdentity, detail?: RichAnalysisDetail): { readonly report: StoredAnalysisReport; readonly deduplicated: boolean } {
     return this.database.transaction(() => {
       const dump = this.getDump(insert.dumpId);
       if (dump === null) throw new DumpLedgerError("not_found", "dump was not found");
       const existing = this.findAnalysisByIdentity(insert.dumpId, insert.analyzerName, insert.analyzerVersion, insert.kind, insert.inputSha256);
-      if (existing !== null) return { report: existing, deduplicated: true };
+      if (existing !== null) {
+        if (detail === undefined) return { report: existing, deduplicated: true };
+        // V1 summary fallback may be promoted only with its original immutable
+        // metadata and explicit v2 digest/report-ID binding. Never bless legacy facts.
+        const equalJson = (a: unknown, b: unknown): boolean => {
+          const stable = (v: unknown): unknown => Array.isArray(v) ? v.map(stable) : v !== null && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, value]) => [k, stable(value)])) : v;
+          return JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+        };
+        if (existing.outcome !== insert.outcome || existing.summary !== insert.summary || existing.duplicateOf !== insert.duplicateOf || !equalJson(existing.facts, insert.facts) || existing.facts?.schemaVersion !== 2 || existing.facts?.reportDigest !== detail.reportDigest || typeof existing.facts?.reportId !== "string") throw new DumpLedgerError("invalid_transition", "analysis identity has conflicting compact metadata");
+        const stored = this.analysisDetail(existing.analysisId);
+        if (stored !== null) {
+          if (stored.reportDigest !== detail.reportDigest || stored.reportJson !== detail.reportJson) throw new DumpLedgerError("invalid_transition", "analysis identity has conflicting canonical content");
+          return { report: existing, deduplicated: true };
+        }
+        this.prepare("INSERT INTO analysis_details(analysis_id, report_digest, report_json) VALUES (?, ?, ?)").run(existing.analysisId, detail.reportDigest, detail.reportJson);
+        this.insertAudit(event, "AttachAnalysisDetail", this.customerForCase(dump.caseId), dump.caseId, insert.dumpId, { analysisId: existing.analysisId, reportDigest: detail.reportDigest });
+        return { report: existing, deduplicated: false };
+      }
       this.prepare("INSERT INTO dump_analyses(analysis_id, dump_id, analyzer_name, analyzer_version, kind, input_sha256, outcome, summary, facts_json, duplicate_of, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(insert.analysisId, insert.dumpId, insert.analyzerName, insert.analyzerVersion, insert.kind, insert.inputSha256, insert.outcome, insert.summary, insert.facts === null ? null : stringifyJson(insert.facts), insert.duplicateOf, insert.createdAt);
+      if (detail !== undefined) this.prepare("INSERT INTO analysis_details(analysis_id, report_digest, report_json) VALUES (?, ?, ?)").run(insert.analysisId, detail.reportDigest, detail.reportJson);
       this.insertAudit(event, "RecordAnalysis", this.customerForCase(dump.caseId), dump.caseId, insert.dumpId, {
         analysisId: insert.analysisId, dumpId: insert.dumpId, caseId: dump.caseId,
         analyzerName: insert.analyzerName, analyzerVersion: insert.analyzerVersion, kind: insert.kind, outcome: insert.outcome,
@@ -485,6 +504,12 @@ export class SqliteLedger {
       if (report === null || report.analysisId !== insert.analysisId) throw new DumpLedgerError("integrity_failure", "recorded analysis report was not found after insert");
       return { report, deduplicated: false };
     })();
+  }
+
+  /** Read only the selected canonical report, never part of list queries. */
+  analysisDetail(analysisId: string): RichAnalysisDetail | null {
+    const row = this.prepare("SELECT report_digest, report_json FROM analysis_details WHERE analysis_id = ?").get(analysisId) as Row | undefined;
+    return row === undefined ? null : { reportDigest: requiredString(row, "report_digest"), reportJson: requiredString(row, "report_json") };
   }
 
   /** Identity-tuple lookup, served by the UNIQUE `(dump_id, analyzer_name, analyzer_version, kind, input_sha256)`. */

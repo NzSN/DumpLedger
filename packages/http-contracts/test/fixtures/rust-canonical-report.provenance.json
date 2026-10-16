@@ -1,0 +1,15 @@
+{
+  "kind": "synthetic cross-language serialization fixture; no production dump bytes",
+  "generatedAt": "2026-10-15",
+  "generator": "Compiled public Rust runner::parse_triage and CrashReportV2::from_output/canonical_json/digest",
+  "dumpAnalyzerBaseCommit": "0bb92ae716a32e77a3f92fc9c4830080cf0abfdb",
+  "compiledLibrarySha256": "287a124995088649ddce203c3c5356224b8cac2b4f2a7ceddfab8a58496b4e16",
+  "rustSourcesObservedAtCapture": {
+    "src/report.rs": "b4c56bb33ab1275f404e8efc709ca147c94d7ee9aa3d22496e20f3c4d733edde",
+    "src/runner.rs": "8825dcd6fcecae28c82ef19795feabd06f72245ceb5c1fb731d35a11bdf0d614",
+    "src/assessment.rs": "eb71c14b035fc097e4cb19b613451597fed800a82ce72b6279e2606b207093f2",
+    "tests/fixtures/report-v2/marked-av.log": "b08775464856b39c30c38e879e6418d07dfcc982475b23d4d9b1fa91e944795c"
+  },
+  "reportSha256": "8f63144361a5407fa16f78eb229cbc9097d124f8d6681ad5fe8cc46bfce5873e",
+  "reportBytes": 6250
+}

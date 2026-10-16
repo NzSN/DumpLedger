@@ -246,6 +246,7 @@ test("a second transfer job conflicts (409) while one is running", async t => {
     dumpsBySha256: sha256 => engine.dumpsBySha256(sha256),
     readAuditEvents: (afterRowid, filter, limit) => engine.readAuditEvents(afterRowid, filter, limit),
     listAnalyses: dumpId => engine.listAnalyses(dumpId),
+    analysisDetail: (dumpId, analysisId) => engine.analysisDetail(dumpId, analysisId),
     backupInventory: () => engine.backupInventory(),
     integrityCheck: () => engine.integrityCheck(),
     backup: destination => (gateOpen ? engine.backup(destination) : backupGate.then(() => engine.backup(destination))),

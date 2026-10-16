@@ -22,3 +22,5 @@ export * from "./symbols.js";
 export * from "./catalog.js";
 export * from "./events.js";
 export * from "./analyses.js";
+
+export * from "./rich-analyses.js";

@@ -339,6 +339,7 @@ function readBundleLedger(copyPath: string, currentVersion: number): BundleRows 
     }
     if (Number(bundleVersion) > currentVersion) throw invalid(`bundle schema version ${Number(bundleVersion)} is newer than this instance's ${currentVersion}`);
     if (Number(bundleVersion) < currentVersion) applyMigrations(database);
+    if (database.prepare("SELECT 1 FROM analysis_details LIMIT 1").get() !== undefined) throw invalid("import format v1 cannot preserve canonical analysis details");
 
     // customer_no is always present here: older bundle copies are migrated
     // forward above, and migration 10 backfills creation-ordered numbers.

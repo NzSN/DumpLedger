@@ -10,6 +10,7 @@
  */
 
 import assert from "node:assert/strict";
+import { bindRichFixture, richFixture } from "../../packages/http-contracts/test/rich-fixture.js";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 
@@ -405,4 +406,37 @@ test("malformed write-back bodies are invalid_request before any engine work", a
   // The well-formed control body still records after every rejection.
   const control = await postAnalysis(fixture, dumpId, base, mutationHeaders(fixture));
   assert.equal(control.statusCode, 201);
+});
+
+test("v2 preserves full bytes beyond v1 limit, authenticates detail reads, and promotes summary", async t => {
+  const fixture = await makeFixture({ analyzerTokenHash: ANALYZER_TOKEN_HASH }); t.after(async () => { await fixture.server.close(); fixture.engine.close(); });
+  const dumpId = seedAvailableDump(fixture), { document } = richFixture(dumpId, DUMP_SHA256);
+  (document.evidence as Array<Record<string, unknown>>)[0]!.text = "e".repeat(8192);
+  (document.completeness as Record<string, unknown>).omissions = ["x".repeat(8192), "y".repeat(8192)];
+  const body = bindRichFixture(document), { reportJson, reportDigest, ...summary } = body;
+  const cap = await fixture.server.inject({ method: "GET", url: "/api/v2/capabilities", headers: bearer(ANALYZER_TOKEN) });
+  assert.equal(cap.statusCode, 200); assert.equal(cap.json().richReports.maxReportBytes, 524288);
+  assert.equal((await fixture.server.inject({ method: "GET", url: "/api/v2/capabilities" })).statusCode, 401);
+  const first = await postAnalysis(fixture, dumpId, summary); assert.equal(first.statusCode, 201); const analysisId = first.json().analysisId as string;
+  const post = () => fixture.server.inject({ method: "POST", url: `/api/v2/dumps/${dumpId}/analyses`, headers: { "content-type": "application/json", ...bearer(ANALYZER_TOKEN) }, payload: JSON.stringify(body) });
+  const promoted = await post(); assert.equal(promoted.statusCode, 201, promoted.body); assert.equal(promoted.json().analysisId, analysisId);
+  assert.equal(promoted.json().reportJson, reportJson); assert.equal(promoted.json().reportDigest, reportDigest);
+  const replay = await post(); assert.equal(replay.statusCode, 200);
+  const path = `/api/v2/dumps/${dumpId}/analyses/${analysisId}`;
+  assert.equal((await fixture.server.inject({ method: "GET", url: path })).statusCode, 401);
+  const read = await fixture.server.inject({ method: "GET", url: path, headers: bearer(ANALYZER_TOKEN) }); assert.equal(read.statusCode, 200); assert.equal(read.json().reportJson, reportJson);
+  const list = await getAnalyses(fixture, dumpId); assert.equal(list.json().analyses.length, 1); assert.equal(list.json().analyses[0].reportJson, undefined);
+  const changed = richFixture(dumpId, DUMP_SHA256); changed.document.completeness = { omissions: ["changed"], truncated: false };
+  const conflict = await fixture.server.inject({ method: "POST", url: `/api/v2/dumps/${dumpId}/analyses`, headers: { "content-type": "application/json", ...bearer(ANALYZER_TOKEN) }, payload: JSON.stringify(bindRichFixture(changed.document)) }); assert.equal(conflict.statusCode, 409);
+});
+
+test("v2 rejects invalid hash/identity/references and request overflow without writes", async t => {
+  const fixture = await makeFixture({ analyzerTokenHash: ANALYZER_TOKEN_HASH }); t.after(async () => { await fixture.server.close(); fixture.engine.close(); });
+  const dumpId = seedAvailableDump(fixture), { request } = richFixture(dumpId, DUMP_SHA256);
+  const path = `/api/v2/dumps/${dumpId}/analyses`;
+  for (const body of [ { ...request, reportDigest: "b".repeat(64), facts: { ...request.facts, reportDigest: "b".repeat(64) } }, { ...request, reportJson: request.reportJson.replace(dumpId, UNKNOWN_DUMP_ID) }, { ...request, reportJson: request.reportJson.replace('"evidenceRefs":["exception"]', '"evidenceRefs":["fabricated"]') } ]) {
+    const response = await fixture.server.inject({ method: "POST", url: path, headers: { "content-type": "application/json", ...bearer(ANALYZER_TOKEN) }, payload: JSON.stringify(body) }); assert.equal(response.statusCode, 400, response.body);
+  }
+  const oversized = await fixture.server.inject({ method: "POST", url: path, headers: { "content-type": "application/json", ...bearer(ANALYZER_TOKEN) }, payload: "x".repeat(1048577) }); assert.equal(oversized.statusCode, 413);
+  assert.deepEqual(fixture.engine.listAnalyses(parseDumpId(dumpId)), []);
 });

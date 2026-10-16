@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { richFixture } from "../../packages/http-contracts/test/rich-fixture.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -573,3 +574,21 @@ function entrySlice(bytes: Uint8Array, name: string): Uint8Array {
   const entry = [...readTar(bufferSource(bytes))].find(candidate => candidate.name === name)!;
   return bytes.slice(offset, offset + Number(entry.size));
 }
+
+it("blocks v1 export and import that would silently discard canonical rich reports", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dump-ledger-rich-transfer-"));
+  const a = makeInstance(join(root, "a")), b = makeInstance(join(root, "b"));
+  try {
+    const populated = populate(a), exportsDir = join(root, "exports");
+    const baseline = await exportBundle({ engine: a.engine, vault: a.vault, exportsDir }); assert.equal(baseline.status, "sealed");
+    const baselineBytes = readFileSync(join(exportsDir, baseline.exportId, "bundle.tar"));
+    const { request } = richFixture(populated.dumpAvailable, sha256hex(populated.dumpBytes));
+    must(a.engine.execute({ type: "RecordAnalysis", dumpId: populated.dumpAvailable, analyzerName: request.analyzer.name, analyzerVersion: request.analyzer.version, kind: request.kind, inputSha256: request.inputSha256, outcome: request.outcome, summary: request.summary, facts: request.facts!, detail: { reportJson: request.reportJson, reportDigest: request.reportDigest } }));
+    await assert.rejects(() => createExportSession({ engine: a.engine, vault: a.vault, exportsDir }), /cannot preserve canonical analysis details/);
+    const richCopy = join(root, "rich.sqlite"); await a.engine.backup(richCopy);
+    const bundle = buildTar([{ name: "manifest.json", data: entryBytes(baselineBytes, "manifest.json") }, { name: "ledger.sqlite", data: readFileSync(richCopy) }, { name: dumpEntryName(populated.dumpAvailable), data: populated.dumpBytes }]);
+    const bundlePath = join(root, "rich.tar"); writeFileSync(bundlePath, bundle);
+    const before = b.engine.snapshot(), outcome = importBundle({ engine: b.engine, vault: b.vault, bundlePath }); assert.equal(outcome.status, "failed", show(outcome));
+    assert.deepEqual(b.engine.snapshot(), before);
+  } finally { a.engine.close(); b.engine.close(); rmSync(root, { recursive: true, force: true }); }
+});

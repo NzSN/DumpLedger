@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { bindRichFixture, richFixture } from "../../packages/http-contracts/test/rich-fixture.js";
+import type { RecordRichAnalysisRequest } from "@dump-ledger/http-contracts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -383,7 +386,7 @@ describe("migration 8 (dump_analyses)", () => {
 
         applyMigrations(database);
 
-        assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7, 8, 10]);
+        assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         assert.deepEqual(seedRows(), before, "prior rows survive migrations 8-10 unchanged");
         assert.equal(
           (database.prepare("SELECT customer_no FROM customers WHERE customer_id = ?").get(CUSTOMER_ID) as { customer_no: number }).customer_no,
@@ -428,3 +431,49 @@ describe("migration 8 (dump_analyses)", () => {
   });
 });
 
+function richCommand(dumpId: DumpId, request: RecordRichAnalysisRequest): LifecycleCommand {
+  return { type: "RecordAnalysis", dumpId, analyzerName: request.analyzer.name, analyzerVersion: request.analyzer.version, kind: request.kind, inputSha256: request.inputSha256, outcome: request.outcome, summary: request.summary, facts: request.facts!, detail: { reportJson: request.reportJson, reportDigest: request.reportDigest } };
+}
+
+describe("canonical analysis persistence", () => {
+  it("stores exact bytes, replays ACK loss, and purges summary plus detail", () => withEngine(({ engine, vault }) => {
+    const dumpId = createAvailableDump(engine, vault), { request } = richFixture(dumpId, SHA), command = richCommand(dumpId, request);
+    const first = engine.execute(command); assert.ok(first.ok && first.analysis !== undefined && !first.replayed);
+    assert.deepEqual(engine.analysisDetail(dumpId, first.analysis.analysisId), { reportJson: request.reportJson, reportDigest: request.reportDigest });
+    const replay = engine.execute(command); assert.ok(replay.ok && replay.replayed && replay.analysis?.analysisId === first.analysis.analysisId);
+    assert.equal(engine.readAuditEvents(0, { actions: ["RecordAnalysis"] }).events.length, 1);
+    assert.ok(engine.execute({ type: "BeginPurge", dumpId }).ok); assert.ok(engine.execute({ type: "FinishPurge", dumpId }).ok);
+    assert.equal(engine.analysisDetail(dumpId, first.analysis.analysisId), null); assert.deepEqual(engine.listAnalyses(dumpId), []);
+  }));
+  it("promotes only digest-bound matching summary under its original analysis ID", () => withEngine(({ engine, vault }) => {
+    const dumpId = createAvailableDump(engine, vault), { request } = richFixture(dumpId, SHA), command = richCommand(dumpId, request);
+    const { detail: _detail, ...summary } = command as Extract<LifecycleCommand, { type: "RecordAnalysis" }>;
+    const first = engine.execute(summary); assert.ok(first.ok && first.analysis !== undefined);
+    assert.equal(engine.analysisDetail(dumpId, first.analysis.analysisId), null);
+    const attached = engine.execute(command); assert.ok(attached.ok && attached.analysis?.analysisId === first.analysis.analysisId);
+    const replay = engine.execute(command); assert.ok(replay.ok && replay.replayed);
+    assert.equal(engine.listAnalyses(dumpId).length, 1);
+    assert.equal(engine.readAuditEvents(0, { actions: ["AttachAnalysisDetail"] }).events.length, 1);
+    const changed = richFixture(dumpId, SHA); changed.document.completeness = { omissions: ["Changed"], truncated: false };
+    const conflict = engine.execute(richCommand(dumpId, bindRichFixture(changed.document))); assert.ok(!conflict.ok && conflict.error.code === "invalid_transition");
+  }));
+  it("rejects unbound legacy promotion, bad digest, wrong stable ID, and forged confirmed cause", () => withEngine(({ engine, vault }) => {
+    const dumpId = createAvailableDump(engine, vault), { request } = richFixture(dumpId, SHA), command = richCommand(dumpId, request);
+    const { detail: _detail, ...summary } = command as Extract<LifecycleCommand, { type: "RecordAnalysis" }>;
+    assert.ok(engine.execute({ ...summary, facts: {} }).ok);
+    const conflict = engine.execute(command); assert.ok(!conflict.ok && conflict.error.code === "invalid_transition");
+    const badDigest = engine.execute({ ...summary, detail: { reportJson: request.reportJson, reportDigest: "b".repeat(64) } }); assert.ok(!badDigest.ok && badDigest.error.code === "invalid_input");
+    const confirmed = richFixture(dumpId, SHA); (confirmed.document.rootCause as Record<string, unknown>).status = "confirmed";
+    const confirmedResult = engine.execute(richCommand(dumpId, bindRichFixture(confirmed.document))); assert.ok(!confirmedResult.ok && confirmedResult.error.code === "invalid_input");
+    const reportId = `r2_${"0".repeat(64)}`, reportJson = request.reportJson.replace(/r2_[0-9a-f]{64}/, reportId), reportDigest = createHash("sha256").update(reportJson).digest("hex");
+    const badId = engine.execute(richCommand(dumpId, { ...request, reportJson, reportDigest, facts: { ...request.facts, reportId, reportDigest } })); assert.ok(!badId.ok && badId.error.code === "invalid_input");
+  }));
+  it("rolls back summary and audit when detail persistence fails", () => withEngine(({ engine, vault, databasePath }) => {
+    const dumpId = createAvailableDump(engine, vault), { request } = richFixture(dumpId, SHA), db = new BetterSqlite3(databasePath);
+    db.exec("CREATE TRIGGER reject_detail BEFORE INSERT ON analysis_details BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");
+    const failed = engine.execute(richCommand(dumpId, request)); assert.ok(!failed.ok);
+    assert.deepEqual(engine.listAnalyses(dumpId), []); assert.equal(engine.readAuditEvents(0, { actions: ["RecordAnalysis"] }).events.length, 0);
+    db.exec("DROP TRIGGER reject_detail"); db.close();
+    const retry = engine.execute(richCommand(dumpId, request)); assert.ok(retry.ok);
+  }));
+});
