@@ -41,7 +41,11 @@ HTTPS origin when accessing a remote instance. Most endpoints start with
 - Dump and symbol uploads use raw `application/octet-stream`, one file per
   request. Do not wrap file bytes in JSON, multipart, or base64.
 - IDs are opaque, server-issued strings. Substitute and URL-encode path
-  parameters such as `:caseId`; never infer an ID from a filename.
+  parameters such as `:caseId`; never infer an ID from a filename. Customer
+  IDs are canonical UUIDs; the older `customer_<uuid>` and Crockford-body
+  `customer_<body>` forms remain valid everywhere an ID is accepted. Every
+  customer also carries a 1-based `customerNo` display number, rendered in
+  the UI as `#N`; it is a presentation handle, not an identifier.
 - Byte counts (`maxBytes`, `byteSize`) are **decimal strings** on the wire,
   such as `"1073741824"`. Counts, durations, and slot quotas are JSON numbers.
 - Timestamps are canonical UTC ISO strings, such as
@@ -186,14 +190,14 @@ Source: [auth routes](../src/http/routes/auth-routes.ts),
 The name must be nonempty and at most 200 characters. It returns `201`:
 
 ```json
-{ "customer": { "customerId": "<id>", "displayName": "Example customer" } }
+{ "customer": { "customerId": "<id>", "displayName": "Example customer", "customerNo": 1 } }
 ```
 
 `GET /api/v1/customers/:customerId` returns:
 
 ```text
 {
-  customer: { customerId, displayName, createdAt },
+  customer: { customerId, displayName, createdAt, customerNo },
   cases: CaseSummary[]
 }
 CaseSummary = { caseId, customerId, title, status, createdAt }
@@ -211,7 +215,7 @@ A missing customer returns `404 not_found`.
 ```text
 {
   counts: { customers, activeCases, availableDumps, processingDumps },
-  customers: [{ customerId, displayName }],
+  customers: [{ customerId, displayName, customerNo }],
   recentCases: CaseSummary[]
 }
 ```
@@ -240,7 +244,7 @@ does not pin a snapshot across requests.
 
 ```text
 {
-  customer: { customerId, displayName },
+  customer: { customerId, displayName, customerNo },
   allowedActions: CaseAction[],
   grants: [{ grantId, state, createdAt, expiresAt, maxBytes, maxUploads, uploadsUsed }],
   dumps: [{ dumpId, phase, originalName, byteSize: string | null, receivedAt }],
@@ -290,7 +294,7 @@ An illegal transition returns `409 invalid_transition`; a missing case returns
 {
   schema: "dump-ledger.case-manifest/v1",
   case: CaseSummary,
-  customer: { customerId, displayName, createdAt },
+  customer: { customerId, displayName, createdAt, customerNo },
   grants: GrantRecord[],
   dumps: DumpProjection[],
   auditEvents: [{ eventId, occurredAt, action, customerId, caseId, dumpId, detail }]
@@ -897,3 +901,4 @@ responses. Use the deployment's HTTPS origin for remote calls.
    and `/api/v1/dumps/<dumpId>/content` to download available bytes.
 7. Use `/api/v1/cases/<caseId>/transitions` to record investigation progress,
    and `/api/v1/dumps/<dumpId>/retention` to assign a purge deadline separately.
+

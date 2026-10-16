@@ -25,8 +25,8 @@ import {
 } from "./operator-fake-http-client";
 
 const CUSTOMERS: readonly CustomerSummary[] = [
-  { customerId: "customer-acme", displayName: "Acme Corp" },
-  { customerId: "customer-globex", displayName: "Globex Ltd" },
+  { customerId: "customer-acme", displayName: "Acme Corp", customerNo: 1 },
+  { customerId: "customer-globex", displayName: "Globex Ltd", customerNo: 2 },
 ];
 
 const RECENT_CASES: readonly CaseSummary[] = [

@@ -16,6 +16,7 @@ import {
   counterField,
   field,
   identifierField,
+  integerField,
   object,
   text,
   type Decoder,
@@ -34,6 +35,8 @@ export const MAX_DASHBOARD_RECENT_CASES = 20;
 export interface CustomerSummary {
   readonly customerId: string;
   readonly displayName: string;
+  /** Instance-wide sequential display number, rendered as `#N`; 1-based. */
+  readonly customerNo: number;
 }
 
 export const decodeCustomerSummary: Decoder<CustomerSummary> = (value, path) => {
@@ -41,14 +44,15 @@ export const decodeCustomerSummary: Decoder<CustomerSummary> = (value, path) => 
     {
       customerId: field(identifierField("customerId")),
       displayName: field(text({ max: MAX_DISPLAY_NAME_LENGTH, label: "displayName" })),
+      customerNo: field(integerField({ min: 1, label: "customerNo" })),
     },
     "customer summary",
   )(value, path);
-  return { customerId: decoded.customerId, displayName: decoded.displayName };
+  return { customerId: decoded.customerId, displayName: decoded.displayName, customerNo: decoded.customerNo };
 };
 
 export function encodeCustomerSummary(customer: CustomerSummary): Record<string, unknown> {
-  return { customerId: customer.customerId, displayName: customer.displayName };
+  return { customerId: customer.customerId, displayName: customer.displayName, customerNo: customer.customerNo };
 }
 
 /** `GET /api/v1/customers` success: every customer (id + display name). */
@@ -176,6 +180,7 @@ export interface CustomerDetail {
   readonly customerId: string;
   readonly displayName: string;
   readonly createdAt: string;
+  readonly customerNo: number;
 }
 
 export const decodeCustomerDetail: Decoder<CustomerDetail> = (value, path) => {
@@ -184,6 +189,7 @@ export const decodeCustomerDetail: Decoder<CustomerDetail> = (value, path) => {
       customerId: field(identifierField("customerId")),
       displayName: field(text({ max: MAX_DISPLAY_NAME_LENGTH, label: "displayName" })),
       createdAt: field(canonicalTimestamp("createdAt")),
+      customerNo: field(integerField({ min: 1, label: "customerNo" })),
     },
     "customer detail",
   )(value, path);
@@ -191,6 +197,7 @@ export const decodeCustomerDetail: Decoder<CustomerDetail> = (value, path) => {
     customerId: decoded.customerId,
     displayName: decoded.displayName,
     createdAt: decoded.createdAt,
+    customerNo: decoded.customerNo,
   };
 };
 
@@ -199,6 +206,7 @@ export function encodeCustomerDetail(customer: CustomerDetail): Record<string, u
     customerId: customer.customerId,
     displayName: customer.displayName,
     createdAt: customer.createdAt,
+    customerNo: customer.customerNo,
   };
 }
 

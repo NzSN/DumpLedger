@@ -42,3 +42,8 @@ export function formatUtcDate(iso: string): string {
   if (Number.isNaN(date.getTime())) return iso;
   return date.toISOString().slice(0, 10);
 }
+
+/** Customer display label: the `#N` handle plus the display name. */
+export function formatCustomerLabel(customer: { readonly displayName: string; readonly customerNo: number }): string {
+  return `#${customer.customerNo} ${customer.displayName}`;
+}

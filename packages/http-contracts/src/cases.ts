@@ -290,6 +290,7 @@ export function encodeMissingSymbolIdentity(identity: MissingSymbolIdentity): Re
 export interface CaseCustomer {
   readonly customerId: string;
   readonly displayName: string;
+  readonly customerNo: number;
 }
 
 export interface CaseDetailResponse {
@@ -321,10 +322,11 @@ export const decodeCaseDetailResponse: Decoder<CaseDetailResponse> = (value, pat
           {
             customerId: field(identifierField("customerId")),
             displayName: field(text({ max: 200, label: "displayName" })),
+            customerNo: field(integerField({ min: 1, label: "customerNo" })),
           },
           "customer",
         )(entry, entryPath);
-        return { customerId: customer.customerId, displayName: customer.displayName };
+        return { customerId: customer.customerId, displayName: customer.displayName, customerNo: customer.customerNo };
       }),
       allowedActions: field(arrayOf(caseActionDecoder, { label: "allowedActions", maxLength: 5 })),
       grants: field(arrayOf(decodeCaseGrantSummary, { label: "grants", maxLength: MAX_CASE_LIST_ITEMS })),
@@ -345,7 +347,7 @@ export const decodeCaseDetailResponse: Decoder<CaseDetailResponse> = (value, pat
     title: decoded.title,
     status: decoded.status,
     createdAt: decoded.createdAt,
-    customer: { customerId: decoded.customer.customerId, displayName: decoded.customer.displayName },
+    customer: { customerId: decoded.customer.customerId, displayName: decoded.customer.displayName, customerNo: decoded.customer.customerNo },
     allowedActions: decoded.allowedActions,
     grants: decoded.grants,
     dumps: decoded.dumps,
@@ -361,7 +363,7 @@ export function encodeCaseDetailResponse(detail: CaseDetailResponse): Record<str
     title: detail.title,
     status: detail.status,
     createdAt: detail.createdAt,
-    customer: { customerId: detail.customer.customerId, displayName: detail.customer.displayName },
+    customer: { customerId: detail.customer.customerId, displayName: detail.customer.displayName, customerNo: detail.customer.customerNo },
     allowedActions: detail.allowedActions,
     grants: detail.grants.map(encodeCaseGrantSummary),
     dumps: detail.dumps.map(encodeCaseDumpSummary),

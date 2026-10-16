@@ -36,7 +36,7 @@ export class RandomIds implements IdSource {
   next(kind: "analysis"): AnalysisId;
   next(kind: IdentifierKind): AnyId {
     if (kind === "customer") {
-      return parseGeneratedId(kind, `${kind}_${randomUUID()}`) as AnyId;
+      return parseGeneratedId(kind, randomUUID()) as AnyId;
     }
     const body = randomUUID().replaceAll("-", "").slice(0, 26).toUpperCase();
     return parseGeneratedId(kind, `${kind}_${body}`) as AnyId;
@@ -54,6 +54,10 @@ export class DeterministicIds implements IdSource {
   next(kind: "analysis"): AnalysisId;
   next(kind: IdentifierKind): AnyId {
     this.sequence += 1;
+    if (kind === "customer") {
+      const suffix = this.sequence.toString(16).padStart(12, "0");
+      return parseGeneratedId(kind, `00000000-0000-4000-8000-${suffix}`) as AnyId;
+    }
     const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     let remaining = this.sequence;
     let encoded = "";

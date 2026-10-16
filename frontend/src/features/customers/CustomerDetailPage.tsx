@@ -18,7 +18,7 @@ import { Panel } from "../../shared/components/panel";
 import { EmptyState } from "../../shared/components/empty-state";
 import { StatusPill } from "../../shared/components/status-pill";
 import { caseStatusPresentation } from "../../shared/status";
-import { formatUtcDate, formatUtcTimestamp } from "../../shared/format";
+import { formatUtcDate, formatUtcTimestamp, formatCustomerLabel } from "../../shared/format";
 import { HttpRequestError } from "../../shared/http-client";
 import { CreateCaseForm } from "./customer-forms";
 
@@ -52,7 +52,7 @@ export function CustomerDetailPage(): ReactNode {
 
   return (
     <FeaturePage
-      title={state.status === "ready" ? state.data.customer.displayName : "Customer"}
+      title={state.status === "ready" ? formatCustomerLabel(state.data.customer) : "Customer"}
       subtitle={
         state.status === "ready"
           ? `Created ${formatUtcTimestamp(state.data.customer.createdAt)}`
@@ -71,7 +71,7 @@ export function CustomerDetailPage(): ReactNode {
         <div className="stack">
           <Panel title="Customer" subtitle="Identity and creation metadata" className="panel-accent">
             <div className="record-main">
-              <span className="record-title">{state.data.customer.displayName}</span>
+              <span className="record-title">{formatCustomerLabel(state.data.customer)}</span>
               <div className="record-meta">
                 <span className="mono subtle-id">{state.data.customer.customerId}</span>
                 <span>
@@ -84,7 +84,7 @@ export function CustomerDetailPage(): ReactNode {
           <Panel title="New case" subtitle="Create a case directly under this customer.">
             <CreateCaseForm
               customerId={state.data.customer.customerId}
-              customerName={state.data.customer.displayName}
+              customerName={formatCustomerLabel(state.data.customer)}
               onCreated={handleCaseCreated}
             />
           </Panel>

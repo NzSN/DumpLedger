@@ -84,7 +84,7 @@ export interface AuditFeedEntry {
 }
 
 export interface GrantRecord extends GrantProjection { readonly secretDigest: string }
-export interface ImportCustomerInsert { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string }
+export interface ImportCustomerInsert { readonly customerId: CustomerId; readonly displayName: string; readonly createdAt: string; readonly customerNo?: number }
 export interface ImportCaseInsert { readonly caseId: CaseId; readonly customerId: CustomerId; readonly title: string; readonly status: CaseStatus; readonly createdAt: string }
 export interface ImportGrantInsert { readonly grantId: GrantId; readonly caseId: CaseId; readonly secretDigest: string; readonly state: TokenState; readonly expiresAt: string; readonly maxBytes: bigint; readonly maxUploads: number; readonly uploadsUsed: number; readonly consumedByDumpId: DumpId | null; readonly createdAt: string }
 export interface ImportDumpStagedInsert { readonly dumpId: DumpId; readonly caseId: CaseId; readonly originalName: string; readonly byteSize: bigint; readonly sha256: string; readonly receivedAt: string; readonly purgeAt: string | null }
@@ -370,7 +370,15 @@ export class SqliteLedger {
   integrityCheck(): readonly string[] { return (this.database.pragma("integrity_check") as Array<{integrity_check:string}>).map(row => row.integrity_check).filter(finding => finding !== "ok"); }
   async backup(destination: string): Promise<void> { await this.database.backup(destination); }
 
-  createCustomer(customerId: CustomerId, displayName: string, event: EventIdentity): void { this.database.transaction(() => { this.prepare("INSERT INTO customers(customer_id, display_name, created_at) VALUES (?, ?, ?)").run(customerId, displayName, event.occurredAt); this.insertAudit(event, "CreateCustomer", customerId, null, null, {}); })(); }
+  createCustomer(customerId: CustomerId, displayName: string, event: EventIdentity): number {
+    return this.database.transaction(() => {
+      const no = (this.prepare("SELECT COALESCE(MAX(customer_no), 0) + 1 AS n FROM customers").get() as { n: number | bigint }).n;
+      const customerNo = Number(no);
+      this.prepare("INSERT INTO customers(customer_id, display_name, created_at, customer_no) VALUES (?, ?, ?, ?)").run(customerId, displayName, event.occurredAt, customerNo);
+      this.insertAudit(event, "CreateCustomer", customerId, null, null, {});
+      return customerNo;
+    })();
+  }
   createCase(caseId: CaseId, customerId: CustomerId, title: string, event: EventIdentity): void { this.database.transaction(() => { this.prepare("INSERT INTO cases(case_id, customer_id, title, status, created_at) VALUES (?, ?, ?, 'new', ?)").run(caseId, customerId, title, event.occurredAt); this.insertAudit(event, "CreateCase", customerId, caseId, null, {}); })(); }
   startInvestigation(caseId: CaseId, event: EventIdentity): void { this.transitionCase(caseId, ["new"], event, "StartInvestigation", "investigating"); }
   waitForCustomer(caseId: CaseId, event: EventIdentity): void { this.transitionCase(caseId, ["investigating"], event, "WaitForCustomer", "waiting-for-customer"); }
@@ -545,7 +553,8 @@ export class SqliteLedger {
     this.database.transaction(() => {
       this.requireImportInProgress();
       if (this.customerExists(record.customerId)) throw new DumpLedgerError("invalid_input", "import customer already exists");
-      this.prepare("INSERT INTO customers(customer_id, display_name, created_at) VALUES (?, ?, ?)").run(record.customerId, record.displayName, record.createdAt);
+      const assigned = record.customerNo ?? Number((this.prepare("SELECT COALESCE(MAX(customer_no), 0) + 1 AS n FROM customers").get() as { n: number | bigint }).n);
+      this.prepare("INSERT INTO customers(customer_id, display_name, created_at, customer_no) VALUES (?, ?, ?, ?)").run(record.customerId, record.displayName, record.createdAt, assigned);
       this.insertAudit(event, "ImportCustomer", record.customerId, null, null, {});
     })();
   }
@@ -664,7 +673,7 @@ export class SqliteLedger {
   }
 
   snapshot(): DumpLedgerProjection {
-    const customers = (this.prepare("SELECT * FROM customers ORDER BY customer_id").all() as Row[]).map(row => ({ customerId: databaseValue("customer_id", parseCustomerId, row.customer_id), displayName: requiredString(row, "display_name"), createdAt: requiredString(row, "created_at") }));
+    const customers = (this.prepare("SELECT * FROM customers ORDER BY customer_id").all() as Row[]).map(row => ({ customerId: databaseValue("customer_id", parseCustomerId, row.customer_id), displayName: requiredString(row, "display_name"), createdAt: requiredString(row, "created_at"), customerNo: Number(row.customer_no) }));
     const cases = (this.prepare("SELECT * FROM cases ORDER BY case_id").all() as Row[]).map(row => ({ caseId: databaseValue("case_id", parseCaseId, row.case_id), customerId: databaseValue("customer_id", parseCustomerId, row.customer_id), title: requiredString(row, "title"), status: databaseValue("case status", parseCaseStatus, row.status), createdAt: requiredString(row, "created_at") }));
     const grants = (this.prepare("SELECT * FROM upload_grants ORDER BY grant_id").all() as Row[]).map(grantFromRow).map(({secretDigest: _secretDigest, ...grant}) => grant);
     const dumps = (this.prepare("SELECT * FROM dumps ORDER BY dump_id").all() as Row[]).map(dumpFromRow);

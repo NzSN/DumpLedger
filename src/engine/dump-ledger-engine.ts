@@ -212,7 +212,7 @@ class Engine implements DumpLedgerEngine {
     const occurredAt = assertIsoTimestamp(this.clock.now(), "clock");
     const event = (): {eventId:AuditEventId;occurredAt:string} => ({eventId:this.ids.next("audit"),occurredAt});
     switch (command.type) {
-      case "CreateCustomer": { const customerId=this.ids.next("customer"); this.ledger.createCustomer(customerId,assertText(command.displayName,"displayName",200),event()); return {ok:true,action:command.type,occurredAt,customerId}; }
+      case "CreateCustomer": { const customerId=this.ids.next("customer"); const customerNo=this.ledger.createCustomer(customerId,assertText(command.displayName,"displayName",200),event()); return {ok:true,action:command.type,occurredAt,customerId,customerNo}; }
       case "CreateCase": { const customerId=parseCustomerId(command.customerId), caseId=this.ids.next("case"); this.ledger.createCase(caseId,customerId,assertText(command.title,"title",500),event()); return {ok:true,action:command.type,occurredAt,caseId,customerId}; }
       case "StartInvestigation": { const caseId=parseCaseId(command.caseId); this.ledger.startInvestigation(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId}; }
       case "WaitForCustomer": { const caseId=parseCaseId(command.caseId); this.ledger.waitForCustomer(caseId,event()); return {ok:true,action:command.type,occurredAt,caseId}; }
@@ -309,7 +309,8 @@ class Engine implements DumpLedgerEngine {
       }
       case "ImportCustomer": {
         const record=command.record, customerId=parseCustomerId(record.customerId), displayName=assertText(record.displayName,"displayName",200), createdAt=assertIsoTimestamp(record.createdAt,"createdAt");
-        this.ledger.importCustomer({customerId,displayName,createdAt},event());
+        const customerNo=record.customerNo===undefined?undefined:assertCount(record.customerNo,"customerNo");
+        this.ledger.importCustomer({customerId,displayName,createdAt,...(customerNo===undefined?{}:{customerNo})},event());
         return {ok:true,action:command.type,occurredAt,customerId};
       }
       case "ImportCase": {

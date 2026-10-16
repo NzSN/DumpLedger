@@ -249,10 +249,10 @@ describe("authentication (7.2)", () => {
 });
 
 describe("customers and dashboard (7.3)", () => {
-  const created: CreateCustomerResponse = { customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp" } };
+  const created: CreateCustomerResponse = { customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp", customerNo: 1 } };
   const dashboard: DashboardResponse = {
     counts: { customers: 3, activeCases: 2, availableDumps: 5, processingDumps: 1 },
-    customers: [{ customerId: ID_CUSTOMER, displayName: "Acme Corp" }],
+    customers: [{ customerId: ID_CUSTOMER, displayName: "Acme Corp", customerNo: 1 }],
     recentCases: [
       { caseId: ID_CASE, customerId: ID_CUSTOMER, title: "Crash on 1.4.2", status: "investigating", createdAt: NOW },
     ],
@@ -326,7 +326,7 @@ describe("cases (7.3/7.4)", () => {
     title: "Crash on 1.4.2",
     status: "investigating",
     createdAt: NOW,
-    customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp" },
+    customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp", customerNo: 1 },
     allowedActions: ["StartInvestigation", "WaitForCustomer", "ResumeInvestigation", "ResolveCase", "CloseCase"],
     grants: [grantRow],
     dumps: [dumpRow],
@@ -452,7 +452,7 @@ describe("case transitions (7.4)", () => {
 
 describe("customer detail panel", () => {
   const detail: CustomerDetailResponse = {
-    customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp", createdAt: NOW },
+    customer: { customerId: ID_CUSTOMER, displayName: "Acme Corp", createdAt: NOW, customerNo: 1 },
     cases: [
       {
         caseId: ID_CASE,

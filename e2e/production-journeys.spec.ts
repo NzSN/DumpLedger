@@ -181,18 +181,18 @@ test("(a2) the individual customer panel lists its cases and links through", asy
   await expect(page.getByRole("heading", { name: "Customers", exact: true })).toBeVisible();
   // Each customer is an individual widget that switches to its panel.
   const acmeCard = page.locator(".customer-card", { hasText: "Acme E2E" });
-  await acmeCard.getByRole("link", { name: "Acme E2E", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Acme E2E" })).toBeVisible();
+  await acmeCard.getByRole("link", { name: "#2 Acme E2E", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "#2 Acme E2E" })).toBeVisible();
   const caseRow = page.getByRole("link", { name: /Renderer crash on startup/ });
   await expect(caseRow).toBeVisible();
   await caseRow.click();
   await expect(page.getByRole("heading", { name: "Case detail" })).toBeVisible();
   await expect(page.getByText("Renderer crash on startup", { exact: true })).toBeVisible();
   // The case shows its customer in the breadcrumb and links back to the panel.
-  const customerCrumb = page.getByRole("link", { name: "Acme E2E", exact: true });
+  const customerCrumb = page.getByRole("link", { name: "#2 Acme E2E", exact: true });
   await expect(customerCrumb).toBeVisible();
   await customerCrumb.click();
-  await expect(page.getByRole("heading", { name: "Acme E2E" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#2 Acme E2E" })).toBeVisible();
   await expect(page).toHaveURL(/\/customers\/[^/]+$/);
 });
 

@@ -91,15 +91,15 @@ export class EngineHttpApplication implements HttpApplicationPort {
         createdAt: item.createdAt,
       }));
     return {
-      customer: { customerId: customer.customerId, displayName: customer.displayName, createdAt: customer.createdAt },
+      customer: { customerId: customer.customerId, displayName: customer.displayName, createdAt: customer.createdAt, customerNo: customer.customerNo },
       cases,
     };
   }
 
   createCustomer(displayName: string) {
     const receipt = this.engine.execute({ type: "CreateCustomer", displayName });
-    return receipt.ok && receipt.customerId !== undefined
-      ? { ok: true as const, id: receipt.customerId }
+    return receipt.ok && receipt.customerId !== undefined && receipt.customerNo !== undefined
+      ? { ok: true as const, id: receipt.customerId, customerNo: receipt.customerNo }
       : { ok: false as const, code: receipt.ok ? "integrity_failure" : receipt.error.code };
   }
 
@@ -297,6 +297,7 @@ export class EngineHttpApplication implements HttpApplicationPort {
       customers: projection.customers.map(item => ({
         customerId: item.customerId,
         displayName: item.displayName,
+        customerNo: item.customerNo,
       })),
     };
   }
@@ -307,6 +308,7 @@ export class EngineHttpApplication implements HttpApplicationPort {
     const customers = projection.customers.slice(0, MAX_DASHBOARD_CUSTOMERS).map(item => ({
       customerId: item.customerId,
       displayName: item.displayName,
+      customerNo: item.customerNo,
     }));
     const recentCases = cases.slice(-MAX_DASHBOARD_RECENT_CASES).reverse().map(item => ({
       caseId: item.caseId,
@@ -490,7 +492,7 @@ export class EngineHttpApplication implements HttpApplicationPort {
       title: item.title,
       status: item.status,
       createdAt: item.createdAt,
-      customer: { customerId: item.customerId, displayName: customer?.displayName ?? item.customerId },
+      customer: { customerId: item.customerId, displayName: customer?.displayName ?? item.customerId, customerNo: customer?.customerNo ?? 0 },
       allowedActions: allowedActionsFor(item.status),
       grants,
       dumps,

@@ -79,7 +79,7 @@ export function caseDetailFixture(overrides: CaseDetailOverrides = {}): CaseDeta
     title: overrides.title ?? "Renderer crash on startup",
     status: overrides.status ?? "new",
     createdAt: "2026-09-01T10:00:00.000Z",
-    customer: { customerId: overrides.customerId ?? "customer-acme", displayName: "Acme Corp" },
+    customer: { customerId: overrides.customerId ?? "customer-acme", displayName: "Acme Corp", customerNo: 1 },
     allowedActions: overrides.allowedActions ?? ["StartInvestigation", "CloseCase"],
     grants: overrides.grants ?? [],
     dumps: overrides.dumps ?? [],

@@ -340,10 +340,13 @@ function readBundleLedger(copyPath: string, currentVersion: number): BundleRows 
     if (Number(bundleVersion) > currentVersion) throw invalid(`bundle schema version ${Number(bundleVersion)} is newer than this instance's ${currentVersion}`);
     if (Number(bundleVersion) < currentVersion) applyMigrations(database);
 
-    const customers = (database.prepare("SELECT customer_id, display_name, created_at FROM customers ORDER BY customer_id").all() as Row[]).map((row): ImportCustomerRecord => ({
+    // customer_no is always present here: older bundle copies are migrated
+    // forward above, and migration 10 backfills creation-ordered numbers.
+    const customers = (database.prepare("SELECT customer_id, display_name, created_at, customer_no FROM customers ORDER BY customer_id").all() as Row[]).map((row): ImportCustomerRecord => ({
       customerId: rowId(row, "customer_id", parseCustomerId),
       displayName: rowString(row, "display_name"),
       createdAt: rowIso(row, "created_at"),
+      customerNo: Number(row.customer_no),
     }));
     const cases = (database.prepare("SELECT case_id, customer_id, title, status, created_at FROM cases ORDER BY case_id").all() as Row[]).map((row): ImportCaseRecord => ({
       caseId: rowId(row, "case_id", parseCaseId),

@@ -369,15 +369,27 @@ describe("migration 8 (dump_analyses)", () => {
         database.prepare("INSERT INTO audit_events(event_id, occurred_at, action, customer_id, case_id, dump_id, detail_json) VALUES (?, ?, 'AcceptDump', ?, ?, ?, '{}')").run(EVENT_ID, NOW, CUSTOMER_ID, CASE_ID, DUMP_ID);
 
         const tables = ["customers", "cases", "upload_grants", "dumps", "audit_events"] as const;
+        // customer_no is the one additive exception: migration 10 backfills it
+        // into pre-existing customer rows, so the comparison strips it and the
+        // backfill is asserted separately below.
+        const stripCustomerNo = (table: string, row: unknown): unknown =>
+          table === "customers" && typeof row === "object" && row !== null
+            ? Object.fromEntries(Object.entries(row as Record<string, unknown>).filter(([key]) => key !== "customer_no"))
+            : row;
         const seedRows = (): ReadonlyArray<{ readonly table: string; readonly rows: readonly unknown[] }> =>
-          tables.map(table => ({ table, rows: database.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() }));
+          tables.map(table => ({ table, rows: database.prepare(`SELECT * FROM ${table} ORDER BY 1`).all().map(row => stripCustomerNo(table, row)) }));
         const before = seedRows();
         assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7]);
 
         applyMigrations(database);
 
-        assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7, 8]);
-        assert.deepEqual(seedRows(), before, "prior rows survive migration 8 unchanged");
+        assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7, 8, 10]);
+        assert.deepEqual(seedRows(), before, "prior rows survive migrations 8-10 unchanged");
+        assert.equal(
+          (database.prepare("SELECT customer_no FROM customers WHERE customer_id = ?").get(CUSTOMER_ID) as { customer_no: number }).customer_no,
+          1,
+          "migration 10 backfills the display number",
+        );
         assert.deepEqual(
           database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'dump_analyses_dump_idx'").all(),
           [{ name: "dump_analyses_dump_idx" }],
@@ -415,3 +427,4 @@ describe("migration 8 (dump_analyses)", () => {
     }
   });
 });
+

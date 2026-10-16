@@ -19,6 +19,8 @@ export interface ImportCustomerRecord {
   readonly customerId: CustomerId;
   readonly displayName: string;
   readonly createdAt: string;
+  /** Display number carried by the bundle; absent from pre-v10 bundles. */
+  readonly customerNo?: number;
 }
 /** A case row as exported: case workflow status is preserved as recorded. */
 export interface ImportCaseRecord {

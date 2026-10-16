@@ -21,8 +21,8 @@ import {
 } from "./operator-fake-http-client";
 
 const CUSTOMERS: readonly CustomerSummary[] = [
-  { customerId: "customer-alpha", displayName: "Alpha Systems" },
-  { customerId: "customer-beta", displayName: "Beta Labs" },
+  { customerId: "customer-alpha", displayName: "Alpha Systems", customerNo: 1 },
+  { customerId: "customer-beta", displayName: "Beta Labs", customerNo: 2 },
 ];
 
 function dashboardFixture(): DashboardResponse {
@@ -66,8 +66,8 @@ describe("Customers operator page", () => {
       await Promise.resolve();
     });
 
-    expect(await screen.findByText("Alpha Systems")).toBeTruthy();
-    expect(screen.getByText("Beta Labs")).toBeTruthy();
+    expect(await screen.findByText("#1 Alpha Systems")).toBeTruthy();
+    expect(screen.getByText("#2 Beta Labs")).toBeTruthy();
     // Each customer card exposes its own per-customer case creation form.
     expect(screen.getAllByRole("button", { name: "Create" })).toHaveLength(2);
   });
@@ -104,14 +104,14 @@ describe("Customers operator page", () => {
 
     expect(await screen.findByText("Customers could not be loaded.")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByText("Alpha Systems")).toBeTruthy();
+    expect(await screen.findByText("#1 Alpha Systems")).toBeTruthy();
   });
 
   it("creates a customer and refetches the directory", async () => {
     const fake = new OperatorFakeHttpClient();
     fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());
     fake.setMutationResponder("POST", "/api/v1/customers", () => ({
-      customer: { customerId: "customer-gamma", displayName: "Gamma Works" },
+      customer: { customerId: "customer-gamma", displayName: "Gamma Works", customerNo: 3 },
     }));
     const user = userEvent.setup();
     renderCustomers(fake);
@@ -133,7 +133,7 @@ describe("Customers operator page", () => {
     fake.setQueryResponder("/api/v1/dashboard", () => dashboardFixture());
     fake.setMutationResponder("POST", "/api/v1/customers", (call) => {
       const body = call.body as { readonly displayName: string };
-      return { customer: { customerId: "customer-generated", displayName: body.displayName } };
+      return { customer: { customerId: "customer-generated", displayName: body.displayName, customerNo: 4 } };
     });
     const user = userEvent.setup();
     renderCustomers(fake);
@@ -190,7 +190,7 @@ describe("Customers operator page", () => {
     const user = userEvent.setup();
     renderCustomers(fake);
 
-    const alphaCard = (await screen.findByText("Alpha Systems")).closest(".customer-card");
+    const alphaCard = (await screen.findByText("#1 Alpha Systems")).closest(".customer-card");
     if (alphaCard === null) throw new Error("customer card not found");
     const card = within(alphaCard as HTMLElement);
     await user.type(card.getByLabelText("New case"), "Crash under load");

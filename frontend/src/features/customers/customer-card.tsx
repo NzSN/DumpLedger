@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { CaseSummary, CustomerSummary } from "@dump-ledger/http-contracts";
 import { CreateCaseForm } from "./customer-forms";
+import { formatCustomerLabel } from "../../shared/format";
 
 export interface CustomerCardProps {
   readonly customer: CustomerSummary;
@@ -20,7 +21,7 @@ export function CustomerCard({ customer, onCaseCreated }: CustomerCardProps): Re
       <div>
         {/* Each customer widget switches to its individual panel. */}
         <Link className="customer-name" to={`/customers/${encodeURIComponent(customer.customerId)}`}>
-          {customer.displayName}
+          {formatCustomerLabel(customer)}
         </Link>
         <div className="mono subtle-id">{customer.customerId}</div>
       </div>

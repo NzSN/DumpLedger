@@ -21,6 +21,7 @@ function detailFixture(cases: CustomerDetailResponse["cases"] = []): CustomerDet
     customer: {
       customerId: CUSTOMER_ID,
       displayName: "Acme Corp",
+      customerNo: 1,
       createdAt: "2026-09-01T09:00:00.000Z",
     },
     cases,
@@ -43,7 +44,7 @@ describe("individual customer panel", () => {
     ]));
     renderPanel(fake);
 
-    expect((await screen.findByRole("heading", { name: "Acme Corp" })).textContent).toBe("Acme Corp");
+    expect((await screen.findByRole("heading", { name: "#1 Acme Corp" })).textContent).toBe("#1 Acme Corp");
     expect(screen.getByText(CUSTOMER_ID)).toBeTruthy();
     expect(await screen.findByText("Crash on 1.4.2")).toBeTruthy();
     expect(screen.getByText("Hang on save")).toBeTruthy();
@@ -84,7 +85,7 @@ describe("individual customer panel", () => {
     }));
     renderPanel(fake);
 
-    await screen.findByRole("heading", { name: "Acme Corp" });
+    await screen.findByRole("heading", { name: "#1 Acme Corp" });
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("New case"), "New intake");
     await user.click(screen.getByRole("button", { name: "Create" }));
@@ -102,6 +103,6 @@ describe("individual customer panel", () => {
       </StrictMode>
     );
     renderFeaturePage(fake, ui, { entry: `/customers/${CUSTOMER_ID}`, path: "/customers/:customerId" });
-    expect(await screen.findByRole("heading", { name: "Acme Corp" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "#1 Acme Corp" })).toBeTruthy();
   });
 });

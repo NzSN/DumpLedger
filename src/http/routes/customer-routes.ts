@@ -56,7 +56,7 @@ export function registerCustomerRoutes(server: FastifyInstance, ctx: RouteContex
     const decoded = decodeJsonRequest(request, decodeCreateCustomerRequest);
     if (!decoded.ok) return sendError(reply, "invalid_request");
     const result = options.application.createCustomer(decoded.value.displayName);
-    if (!result.ok || result.id === undefined) {
+    if (!result.ok || result.id === undefined || result.customerNo === undefined) {
       return sendError(reply, result.ok ? "internal_error" : contractErrorFor(result.code));
     }
     return reply
@@ -64,7 +64,7 @@ export function registerCustomerRoutes(server: FastifyInstance, ctx: RouteContex
       .type("application/json; charset=utf-8")
       .send(
         encodeCreateCustomerResponse({
-          customer: { customerId: result.id, displayName: decoded.value.displayName },
+          customer: { customerId: result.id, displayName: decoded.value.displayName, customerNo: result.customerNo },
         }),
       );
   });

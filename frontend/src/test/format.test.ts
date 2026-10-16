@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatUtcDate, formatUtcTimestamp } from "../shared/format";
+import { formatBytes, formatCustomerLabel, formatUtcDate, formatUtcTimestamp } from "../shared/format";
 
 describe("formatBytes", () => {
   it("renders nullish sizes as Unknown", () => {
@@ -45,5 +45,11 @@ describe("formatUtcTimestamp", () => {
 describe("formatUtcDate", () => {
   it("renders the UTC date component", () => {
     expect(formatUtcDate("2026-09-06T23:59:59.000Z")).toBe("2026-09-06");
+  });
+});
+
+describe("formatCustomerLabel", () => {
+  it("prefixes the display name with the #N handle", () => {
+    expect(formatCustomerLabel({ displayName: "Acme Corp", customerNo: 3 })).toBe("#3 Acme Corp");
   });
 });

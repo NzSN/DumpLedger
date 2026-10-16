@@ -403,7 +403,7 @@ describe("ledger catalog reads", () => {
         );
         assert.deepEqual(
           (inspect.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map(row => row.version),
-          [1, 2, 3, 4, 5, 6, 7, 8],
+          [1, 2, 3, 4, 5, 6, 7, 8, 10],
         );
       } finally {
         inspect.close();

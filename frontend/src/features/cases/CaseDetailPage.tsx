@@ -47,7 +47,7 @@ import { EmptyState } from "../../shared/components/empty-state";
 import { StatusPill } from "../../shared/components/status-pill";
 import { ConfirmationDialog } from "../../shared/components/confirmation-dialog";
 import { caseActionLabel, caseStatusPresentation, dumpPhasePresentation } from "../../shared/status";
-import { formatUtcDate, formatBytes } from "../../shared/format";
+import { formatUtcDate, formatBytes, formatCustomerLabel } from "../../shared/format";
 import { ActivityTimeline } from "./activity-timeline";
 import { CreateGrantForm, GrantRow } from "../grants/grant-components";
 import { MissingSymbolsList } from "../symbols/SymbolLinkageLists";
@@ -271,7 +271,7 @@ function CaseDetailReady({
         <span>/</span>
         {/* The case's owning customer, linked to its individual panel. */}
         <Link to={`/customers/${encodeURIComponent(detail.customer.customerId)}`}>
-          {detail.customer.displayName}
+          {formatCustomerLabel(detail.customer)}
         </Link>
         <span>/</span>
         <span>{detail.title}</span>

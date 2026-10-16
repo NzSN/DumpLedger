@@ -73,7 +73,9 @@ test("GET /api/v1/customers: analyzer token lists id + display name", async () =
   const body = decodeCustomerListResponse(response.json(), "$");
   const names = body.customers.map((c) => c.displayName).sort();
   assert.deepEqual(names, ["Acme", "Globex"]);
-  assert.ok(body.customers.every((c) => c.customerId.startsWith("customer_")));
+  // New canonical customer IDs are bare UUIDs; creation assigned #1 and #2.
+  assert.ok(body.customers.every((c) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(c.customerId)));
+  assert.deepEqual(body.customers.map((c) => c.customerNo).sort(), [1, 2]);
 });
 
 test("GET /api/v1/customers: session cookie still works; anonymous and wrong tokens 401", async () => {

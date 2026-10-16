@@ -24,7 +24,7 @@ import { Panel } from "../../shared/components/panel";
 import { EmptyState } from "../../shared/components/empty-state";
 import { StatusPill } from "../../shared/components/status-pill";
 import { caseStatusPresentation } from "../../shared/status";
-import { formatUtcDate } from "../../shared/format";
+import { formatUtcDate, formatCustomerLabel } from "../../shared/format";
 
 function MetricsGrid({ data }: { readonly data: DashboardResponse }): ReactNode {
   const counts = data.counts;
@@ -55,7 +55,7 @@ function MetricsGrid({ data }: { readonly data: DashboardResponse }): ReactNode 
 }
 
 function RecentCasesPanel({ data }: { readonly data: DashboardResponse }): ReactNode {
-  const nameByCustomer = new Map(data.customers.map((customer) => [customer.customerId, customer.displayName]));
+  const nameByCustomer = new Map(data.customers.map((customer) => [customer.customerId, formatCustomerLabel(customer)]));
   if (data.recentCases.length === 0) {
     return (
       <Panel

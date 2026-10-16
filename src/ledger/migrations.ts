@@ -150,6 +150,16 @@ const migrations: readonly Migration[] = [
     ) STRICT;
     CREATE INDEX dump_analyses_dump_idx ON dump_analyses(dump_id);
   ` },
+  /* Customer display numbers: every customer carries an instance-wide
+   * sequential customer_no (#N) assigned at creation. Backfill follows
+   * (created_at, customer_id) so existing ledgers keep deterministic,
+   * creation-ordered numbers. */
+  { version: 10, sql: `
+    ALTER TABLE customers ADD COLUMN customer_no INTEGER;
+    WITH ordered AS (SELECT customer_id, ROW_NUMBER() OVER (ORDER BY created_at, customer_id) AS n FROM customers)
+      UPDATE customers SET customer_no = (SELECT n FROM ordered WHERE ordered.customer_id = customers.customer_id);
+    CREATE UNIQUE INDEX customers_no_idx ON customers(customer_no);
+  ` },
 ];
 /**
  * Applies pending migrations in ascending version order, each inside its own

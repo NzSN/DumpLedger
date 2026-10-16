@@ -51,7 +51,7 @@ import { registerSymbolRoutes } from "./routes/symbol-routes.js";
 import { registerSymbolAdminRoutes } from "./routes/symbol-admin-routes.js";
 import { registerStaticWeb } from "./static-web.js";
 
-type MutationResult = { readonly ok: true; readonly id?: string; readonly secret?: string } | { readonly ok: false; readonly code: string };
+type MutationResult = { readonly ok: true; readonly id?: string; readonly secret?: string; readonly customerNo?: number } | { readonly ok: false; readonly code: string };
 
 /** The identity pair one symbol ingest carries, fixed by the artifact kind
  * (docs/symbols-design.md, "Identity model"): a PDB its RSDS debug identity,
