@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>webhook-deployment-windows-dev-report</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; color: #1a1a1a; }
+  h1 { border-bottom: 2px solid #444; padding-bottom: .3rem; font-size: 1.5rem; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: .2rem; margin-top: 2rem; }
+  code { background: #f0f0f0; padding: .1em .3em; border-radius: 3px; font-size: .92em; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; padding: .8rem; overflow-x: auto; border-radius: 6px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; font-size: .95em; }
+  th, td { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #efefef; }
+  blockquote { border-left: 3px solid #bbb; margin-left: 0; padding-left: 1rem; color: #555; }
+</style></head><body>
+<h1 id="deployment-report-webhook-notifications-on-windows-dev-wh1wh2">Deployment report — webhook notifications on windows-dev (WH1+WH2)</h1>
+<p>Date: 2026-10-20 · Status: deployed and verified live.</p>
+<p>First production deployment of the webhook design
+(<a href="../../docs/webhook-notifications-design.md">WH1</a>,
+<a href="../../docs/webhook-admin-token-design.md">WH2</a>) to the DumpLedger instance
+on the windows-dev machine (<code>/d/Services/dump-ledger</code>, runtime
+<code>/d/Services/dump-ledger-runtime</code>).</p>
+<h2 id="before-after">Before / after</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Before</th>
+<th>After</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Checkout</td>
+<td><code>7c2a51b</code> (pre-webhook)</td>
+<td><code>444cf1b</code> (WH1+WH2)</td>
+</tr>
+<tr>
+<td><code>/api/v1/webhooks</code> probe</td>
+<td><code>404</code> (route absent)</td>
+<td><code>401</code> (deployed, rejects anonymous)</td>
+</tr>
+<tr>
+<td><code>/api/v1/events</code> probe</td>
+<td><code>401</code></td>
+<td><code>401</code> (unchanged)</td>
+</tr>
+<tr>
+<td><code>schema_migrations</code></td>
+<td>10</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Webhook envs</td>
+<td>none</td>
+<td><code>DUMP_LEDGER_WEBHOOKS=on</code>, <code>DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH</code> set</td>
+</tr>
+</tbody>
+</table>
+<h2 id="data-safety-evidence">Data-safety evidence</h2>
+<ul>
+<li>Online backup of the live ledger first:
+  <code>D:/Services/dump-ledger-runtime/backups/ledger-pre-444cf1b.sqlite</code>.</li>
+<li>Baseline (v10): 20 customers, 18 cases, 30 grants, 128 dumps, 942 audit
+  events, 13 symbol artifacts, 34 analyses.</li>
+<li>Dry-run on a copy of the backup with the new build: migration 10 → 11
+  applied, <code>integrity_check = ok</code>, <code>foreign_key_check</code> empty, <strong>all counts
+  identical</strong>, <code>webhook_subscriptions</code> / <code>webhook_deliveries</code> present and
+  empty. Probe script: runtime <code>tmp/wh-dryrun.mjs</code> (may be deleted).</li>
+</ul>
+<h2 id="deploy-steps-executed">Deploy steps executed</h2>
+<ol>
+<li><code>git pull --ff-only</code> → <code>444cf1b</code>; lockfile unchanged, <code>pnpm run build</code>.</li>
+<li>Runtime <code>.env</code> appended: <code>DUMP_LEDGER_WEBHOOKS=on</code> and the admin-token
+   digest (value not recorded here).</li>
+<li>Backend restarted via the established
+   <code>name-upgrade-scripts/start-backend.sh</code> (old PID 51868 stopped; TLS
+   proxy on 4080 untouched the whole time).</li>
+</ol>
+<h2 id="live-verification">Live verification</h2>
+<ul>
+<li>Probes as in the table above; live <code>MAX(schema_migrations) = 11</code>.</li>
+<li>End-to-end admin-token proof on the live instance: bearer <code>POST</code> created
+  subscription <code>whs_LPA8LtgbgAJUHmrrB55j1w</code> (201), <code>GET</code> list → 200,
+  <code>DELETE</code> → 204 with cascade; tables empty afterwards.</li>
+<li>Backend log shows a clean boot (symbols listener line, no errors).</li>
+</ul>
+<h2 id="token-and-secret-locations">Token and secret locations</h2>
+<ul>
+<li>Webhook-admin token: <code>/home/nzsn/.dump-ledger-webhook-admin-token</code>
+  (mode 600, local machine) — move to DumpAnalyzer's secret store when its
+  receiver exists. Digest configured on the instance; token never written
+  to chat logs.</li>
+<li>Remote copy used for the live probe was deleted after use.</li>
+</ul>
+<h2 id="current-state-and-next-steps">Current state and next steps</h2>
+<p>Dispatcher ticking with zero subscriptions (idle-but-ready). Next: point
+DumpAnalyzer at it once it grows a receiver — registration is hot-plug, no
+restart. Rollback path: <code>DUMP_LEDGER_WEBHOOKS</code> off + restart; delete
+subscriptions; webhook tables are inert.</p>
+<hr><p><small>Rendered from <code>.agents/chatdoc/webhook-deployment-windows-dev-report.md</code>.</small></p>
+</body></html>

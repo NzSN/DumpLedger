@@ -218,6 +218,50 @@ delivers every audit event.
 | `DUMP_LEDGER_WEBHOOK_RETRY_BASE_MS` | `10000` | Backoff base (×5 per attempt) |
 | `DUMP_LEDGER_WEBHOOK_MAX_ATTEMPTS` | `5` | Attempts before exhaustion |
 
+## Deploying or upgrading an instance
+
+**Schema safety.** The entire webhook schema delta is migration 11: two
+`CREATE TABLE` statements and one `CREATE INDEX`. No `ALTER`, no `DROP`, no
+rebuild of existing tables, and no data-path code changes (intake, vault,
+recovery, retention are untouched by WH1/WH2). Booting the new build with no
+webhook envs is inert: the dispatcher stays off and the admin bearer path
+stays disabled.
+
+**Upgrade procedure** (an instance running a pre-webhook build):
+
+1. **Online-backup the live ledger** (better-sqlite3 backup API, safe against
+   the running service) into the deployment's dated backups convention:
+
+   ```sh
+   node -e "require('better-sqlite3')('…/data/ledger.sqlite',{readonly:true})\
+     .backup('…/backups/ledger-pre-<commit>.sqlite').then(()=>console.log('ok'))"
+   ```
+
+2. **Dry-run the migration against the backup copy** (recommended): copy the
+   backup, open the copy with the new build's `SqliteLedger` (its constructor
+   applies pending migrations), then assert `MAX(schema_migrations)` moved
+   10 → 11, `PRAGMA integrity_check` is `ok`, `PRAGMA foreign_key_check` is
+   empty, and every table's row count matches the pre-migration baseline.
+3. Pull to the target commit and `pnpm run build` (WH1/WH2 change no
+   dependencies).
+4. Set envs (see Configuration): `DUMP_LEDGER_WEBHOOKS=on` enables the
+   dispatcher; `DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH` enables machine
+   self-registration — mint with `npm run generate:webhook-admin-token`,
+   digest into the server env, token into the caller's secret store.
+5. Restart the service.
+6. **Verify**: `GET /api/v1/webhooks` answers `401` where the old build
+   answered `404`; `GET /api/v1/events` still answers `401`; live
+   `MAX(schema_migrations)` = 11; optionally a bearer create → list → delete
+   round-trip (deliveries cascade on delete, so the probe leaves no rows).
+
+**Later enablement.** The dispatcher and admin-token envs are read at boot —
+toggling them needs a restart. Subscriptions never do: registration and
+deletion are hot-plug, effective on the dispatcher's next tick.
+
+**Rollback.** Set `DUMP_LEDGER_WEBHOOKS` off and restart; delete any
+subscriptions. The two webhook tables are inert and may simply remain;
+dropping them is a manual, optional cleanup.
+
 ## Operations
 
 - **Watch** `GET /api/v1/webhooks/:id/deliveries` for `exhausted` rows and
