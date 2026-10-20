@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import type { ByteReader } from "../symbols/identity.js";
 
@@ -10,6 +11,8 @@ import {
   type CaseSearchParams,
   type CaseSearchResponse,
   type CaseSummary,
+  type CreateWebhookParams,
+  type CreateWebhookResponse,
   type CustomerDetailResponse,
   type CustomerListResponse,
   type DashboardResponse,
@@ -34,10 +37,15 @@ import {
   MAX_DEBUG_ID_LENGTH,
   MAX_EVENT_DETAIL_BYTES,
   MAX_MODULE_NAME_LENGTH,
+  MAX_WEBHOOK_URL_LENGTH,
   type RecordAnalysisRequest,
   type RecordRichAnalysisRequest,
   type RichAnalysisReport,
   type SymbolKind,
+  type WebhookDeliveriesResponse,
+  type WebhookDelivery,
+  type WebhookListResponse,
+  type WebhookSubscription,
 } from "@dump-ledger/http-contracts";
 import { DumpLedgerError } from "../domain/errors.js";
 import { parseCaseId, parseCustomerId, parseDumpId, parseGrantId, parseSymbolArtifactId, type CaseId } from "../domain/ids.js";
@@ -45,7 +53,27 @@ import type { AuditFeedFilter, DumpLedgerEngine } from "../engine/dump-ledger-en
 import type { DumpLedgerProjection, DumpProjection, StoredAnalysisReport, SymbolArtifactProjection } from "../engine/projection.js";
 import type { AuditFeedEntry, DumpCatalogAfter, DumpCatalogFilter, DumpCatalogRow } from "../ledger/sqlite-ledger.js";
 import type { SymbolVault, Vault, VaultReader } from "../vault/vault.js";
+import type { WebhookDeliveryRecord, WebhookStorage, WebhookSubscriptionRecord } from "../webhooks/storage.js";
 import type { AnalysisRecordOutcome, CaseTransitionOutcome, HttpApplicationPort, SymbolIngestInput } from "./server.js";
+
+/** `POST /api/v1/webhooks` outcome: the created row plus its one-time secret,
+ * or a stable failure code for the shared error envelope. */
+export type WebhookCreateOutcome =
+  | { readonly ok: true; readonly response: CreateWebhookResponse }
+  | { readonly ok: false; readonly code: string };
+
+/**
+ * Webhook management surface (docs/webhook-notifications-design.md,
+ * "Management API"): operator-owned operational configuration. These methods
+ * issue no engine command and append no audit event, the same boundary as the
+ * read-only catalog and feed queries.
+ */
+export interface WebhookApplicationPort {
+  createWebhook(params: CreateWebhookParams): WebhookCreateOutcome;
+  listWebhooks(): WebhookListResponse;
+  deleteWebhook(webhookId: string): boolean;
+  webhookDeliveries(webhookId: string): WebhookDeliveriesResponse | undefined;
+}
 
 function readerStream(reader: VaultReader): Readable {
   return Readable.from((async function* () {
@@ -65,7 +93,7 @@ function readerStream(reader: VaultReader): Readable {
   })());
 }
 
-export class EngineHttpApplication implements HttpApplicationPort {
+export class EngineHttpApplication implements HttpApplicationPort, WebhookApplicationPort {
   private readonly symbolVault: SymbolVault | undefined;
 
   constructor(
@@ -394,6 +422,55 @@ export class EngineHttpApplication implements HttpApplicationPort {
     return { events: page.events.map(eventFeedEntryOf), nextCursor: formatEventCursor(page.lastRowid) };
   }
 
+  /** `POST /api/v1/webhooks` (docs/webhook-notifications-design.md,
+   * "Management API"): validate the operator-supplied URL at this boundary,
+   * mint a subscription id and signing secret, and start the cursor at the
+   * audit feed's live edge so only future events are delivered. `createdAt`
+   * is operational wall-clock time, not a ledger timestamp: no engine command
+   * runs here and no audit event is appended. */
+  createWebhook(params: CreateWebhookParams): WebhookCreateOutcome {
+    const url = validatedWebhookUrl(params.url);
+    const caseId = params.caseId === undefined ? null : catalogIdentifier(parseCaseId, params.caseId, "caseId");
+    const storage = this.requireWebhookStorage();
+    const subscriptionId = `whs_${randomBytes(16).toString("base64url")}`;
+    const secret = `whsec_${randomBytes(32).toString("base64url")}`;
+    try {
+      const record = storage.createSubscription({
+        subscriptionId,
+        url,
+        secret,
+        actions: params.actions ?? null,
+        caseId,
+        cursorRowid: storage.auditLiveEdge(),
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: true, response: { subscription: webhookSubscriptionOf(record), secret } };
+    } catch (error) {
+      if (error instanceof DumpLedgerError) return { ok: false, code: error.code };
+      throw error;
+    }
+  }
+
+  /** `GET /api/v1/webhooks`: every subscription in creation order, never with
+   * the signing secret (it lives only in the creation response). */
+  listWebhooks(): WebhookListResponse {
+    return { subscriptions: this.requireWebhookStorage().listSubscriptions().map(webhookSubscriptionOf) };
+  }
+
+  /** `DELETE /api/v1/webhooks/:webhookId`: true when a row was removed
+   * (deliveries cascade); false is the route's `not_found`. */
+  deleteWebhook(webhookId: string): boolean {
+    return this.requireWebhookStorage().deleteSubscription(webhookId);
+  }
+
+  /** `GET /api/v1/webhooks/:webhookId/deliveries`: the latest 50 delivery
+   * rows, most recent first; `undefined` means the subscription is unknown. */
+  webhookDeliveries(webhookId: string): WebhookDeliveriesResponse | undefined {
+    const storage = this.requireWebhookStorage();
+    if (storage.findSubscription(webhookId) === null) return undefined;
+    return { deliveries: storage.listDeliveries(webhookId, 50).map(webhookDeliveryOf) };
+  }
+
   /** Analysis write-back (docs/analyzer-integration-design.md, "Analysis
    * write-back"): one analyzer verdict pinned to the dump's sealed bytes,
    * recorded through the `RecordAnalysis` engine command. The engine's
@@ -601,6 +678,17 @@ export class EngineHttpApplication implements HttpApplicationPort {
       uploadsUsed: grant.uploadsUsed,
     };
   }
+
+  /** Webhook tables are part of the same single-writer ledger; the base
+   * engine interface keeps the accessor optional for non-webhook fakes, while
+   * the factory's `DumpLedgerEngineWithWebhooks` return type guarantees it in
+   * production. */
+  private requireWebhookStorage(): WebhookStorage {
+    if (this.engine.webhookStorage === undefined) {
+      throw new DumpLedgerError("storage_unavailable", "webhook storage is not configured");
+    }
+    return this.engine.webhookStorage();
+  }
 }
 
 /** One stored analysis report as the wire shape. `facts` and `duplicateOf`
@@ -762,6 +850,57 @@ function boundedEventDetail(detail: Readonly<Record<string, unknown>>): Readonly
   const serialized = JSON.stringify(detail);
   if (serialized === undefined) return {};
   return Buffer.byteLength(serialized, "utf8") > MAX_EVENT_DETAIL_BYTES ? {} : detail;
+}
+
+/** One stored subscription as the operator-visible wire shape; the secret is
+ * deliberately not part of this projection. */
+function webhookSubscriptionOf(record: WebhookSubscriptionRecord): WebhookSubscription {
+  return {
+    id: record.subscriptionId,
+    url: record.url,
+    actions: record.actions,
+    caseId: record.caseId,
+    cursor: formatEventCursor(record.cursorRowid),
+    createdAt: record.createdAt,
+  };
+}
+
+/** One stored delivery row as the operator ops-view entry. */
+function webhookDeliveryOf(record: WebhookDeliveryRecord): WebhookDelivery {
+  return {
+    id: record.deliveryId,
+    subscriptionId: record.subscriptionId,
+    eventCursor: formatEventCursor(record.eventRowid),
+    action: record.action,
+    dumpId: record.dumpId,
+    status: record.status,
+    attempts: record.attempts,
+    lastStatusCode: record.lastStatusCode,
+    lastError: record.lastError,
+    nextAttemptAt: record.nextAttemptAt,
+    deliveredAt: record.deliveredAt,
+    createdAt: record.createdAt,
+  };
+}
+
+/** Management-API URL rule (docs/webhook-notifications-design.md,
+ * "Management API"): http/https only, no userinfo, at most 2048 characters.
+ * The contract decoder already enforces the length and rejects whitespace;
+ * direct application callers get the same boundary here. */
+function validatedWebhookUrl(value: string): string {
+  if (value.length < 1 || value.length > MAX_WEBHOOK_URL_LENGTH || /\s/.test(value)) {
+    throw new DumpLedgerError("invalid_input", "url is invalid");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new DumpLedgerError("invalid_input", "url is invalid");
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username.length > 0 || parsed.password.length > 0) {
+    throw new DumpLedgerError("invalid_input", "url is invalid");
+  }
+  return value;
 }
 
 /** One ledger catalog page as the wire response; `nextCursor` is present

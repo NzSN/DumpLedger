@@ -386,7 +386,7 @@ describe("migration 8 (dump_analyses)", () => {
 
         applyMigrations(database);
 
-        assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert.deepEqual(versionList(database), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         assert.deepEqual(seedRows(), before, "prior rows survive migrations 8-10 unchanged");
         assert.equal(
           (database.prepare("SELECT customer_no FROM customers WHERE customer_id = ?").get(CUSTOMER_ID) as { customer_no: number }).customer_no,

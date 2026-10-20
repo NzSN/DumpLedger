@@ -39,6 +39,7 @@ implemented by DumpLedger. The repository license also remains undecided.
 - Original dump bytes and derived metadata.
 - Customer-to-case-to-dump associations.
 - Upload-grant secrets and authenticated sessions.
+- Webhook signing secrets and their endpoint configuration.
 - Audit history and deletion evidence.
 - Vault encryption keys and backup credentials.
 - Availability of disk space and the intake endpoint.
@@ -251,6 +252,46 @@ session. The token is bearer-equivalent and otherwise read-only.
 - **Rotation by restart.** Generate a new token, replace the configured hash,
   and restart the process. There is no stateful revocation list; a replaced
   digest retires the old token immediately.
+
+### Webhook notifications
+
+Webhook subscriptions push audit-feed events to operator-registered HTTP
+endpoints (milestone WH1; see
+[webhook-notifications-design.md](webhook-notifications-design.md)). They are
+a delivery tap, not a second source of truth: the audit feed remains the
+resumable record.
+
+- **SSRF control is the operator gate.** Registration, not outbound URL
+  filtering, is the security boundary. Only a valid operator session — plus
+  CSRF and Origin/Fetch Metadata evidence for mutations — can create a
+  subscription; the analyzer and CI bearer tokens are rejected. The documented
+  deployment is LAN-resident and the analyzer receiver may legitimately sit on
+  a private address, so the server deliberately applies no
+  loopback/private-range/link-local filter to the registered URL. Compensating
+  controls are the operator-only registration path, the TLS and network
+  placement of the operator API, and treating the subscription list as
+  privileged configuration. An `http:` destination is accepted; use `https:`
+  or an authenticated tunnel whenever the receiver is not on a trusted LAN.
+- **Signing secrets at rest.** Each subscription carries an independent
+  `whsec_…` HMAC-SHA256 key. It is returned only in the creation response and
+  stored in plaintext in the `webhook_subscriptions` table in `ledger.sqlite`
+  (the same single-writer database as the ledger); it never appears in the
+  vault, the audit trail, delivery rows, or subscription list responses.
+  Protect it with the deployment's existing instance-private data directory
+  (mode 0700) and encrypted-volume controls. Deleting the subscription removes
+  the secret; v1 has no secret-display or rotation route.
+- **Signature verification contract.** Every delivery is a
+  `Content-Type: application/json` POST with
+  `User-Agent: DumpLedger-Webhook/1` and
+  `X-DumpLedger-Signature-256: sha256=<lowercase hex>`, the HMAC-SHA256 of the
+  exact raw request body under the subscription secret. A receiver must verify
+  before parsing: compute the digest over the unmodified body bytes, compare
+  it to the hex after `sha256=` in constant time, and reject a missing or
+  malformed header. `X-DumpLedger-Event`, `X-DumpLedger-Delivery`, and
+  `X-DumpLedger-Delivered-At` are delivery metadata;
+  `X-DumpLedger-Delivery` plus the body `cursor` is the dedupe key because
+  delivery is at-least-once. Payloads carry identifiers and outcomes, never
+  dump bytes or tokens.
 
 ### Dedicated symbols listener
 

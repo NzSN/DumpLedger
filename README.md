@@ -27,6 +27,9 @@ release.
   into independently verifiable milestones.
 - [`docs/import-export-design.md`](docs/import-export-design.md) proposes the
   export bundle format, verified import pipeline, and delivery milestones.
+- [`docs/webhook-notifications.md`](docs/webhook-notifications.md) documents
+  the shipped webhook tap: delivery semantics, wire format and signature
+  verification, subscription management, and operations.
 - [`specs/DumpLedger.tla`](specs/DumpLedger.tla) is the executable TLA+ model.
 - [`specs/DumpLedger.svg`](specs/DumpLedger.svg) visualizes its case workflow,
   association, grant, intake, validation, and deletion state machines.
@@ -177,6 +180,27 @@ disabled:
 ```sh
 export DUMP_LEDGER_ANALYZER_TOKEN_HASH='<64 lowercase hex characters>'
 ```
+
+Webhook notifications are off by default. Set `DUMP_LEDGER_WEBHOOKS='on'` to
+start the dispatcher; any other value leaves it off while subscriptions remain
+manageable and undelivered events accumulate behind each subscription's
+cursor. The tuning settings are positive integers, read only when the
+dispatcher is enabled:
+
+```sh
+export DUMP_LEDGER_WEBHOOKS='on'
+export DUMP_LEDGER_WEBHOOK_TICK_MS='2000'
+export DUMP_LEDGER_WEBHOOK_TIMEOUT_MS='10000'
+export DUMP_LEDGER_WEBHOOK_RETRY_BASE_MS='10000'
+export DUMP_LEDGER_WEBHOOK_MAX_ATTEMPTS='5'
+```
+
+Those are the defaults: `TICK_MS` is the poll interval, `TIMEOUT_MS` the
+per-attempt HTTP timeout, `RETRY_BASE_MS` the exponential backoff base (×5 per
+attempt), and `MAX_ATTEMPTS` the failed-attempt count before a delivery is
+marked `exhausted`. Subscription management is operator-session-only; see
+[`docs/http-api.md`](docs/http-api.md#webhooks) and
+[`docs/webhook-notifications-design.md`](docs/webhook-notifications-design.md).
 
 Debuggers can fetch symbols without touching the operator surface: set
 `DUMP_LEDGER_SYMBOLS_PORT` to start a dedicated, unauthenticated, read-only

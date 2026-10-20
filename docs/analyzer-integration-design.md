@@ -385,4 +385,7 @@ closes the loop so verdicts live next to the evidence they describe.
    blame or revocation granularity ever matters.
 3. **Push delivery.** A off-LAN or latency-critical consumer would motivate
    signed webhooks; none is known today, and the feed keeps that door open
-   without paying for it now.
+   without paying for it now. Signed webhooks subsequently landed as milestone
+   WH1 (operator-registered subscriptions) — see
+   [webhook-notifications-design.md](webhook-notifications-design.md). They are
+   a low-latency tap; the feed remains the resumable truth.

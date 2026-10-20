@@ -9,12 +9,14 @@ import type { AnalysisOutcome, ImportCounts, ImportSummary, LifecycleCommand } f
 import { CryptoEntropy, NoFailpoints, RandomIds, SystemClock, type Clock, type EntropySource, type FailpointPort } from "./dependencies.js";
 import type { InspectionPort } from "./inspection-port.js";
 import type { BackupInventory, DumpLedgerProjection, StoredAnalysisReport, StoredSymbolArtifact, TransitionReceipt, TransitionSuccess } from "./projection.js";
+import type { WebhookStorage } from "../webhooks/storage.js";
 
 export { DeterministicClock, DeterministicEntropy, DeterministicIds, ScriptedFailpoints } from "./dependencies.js";
 export type { DurableCheckpoint } from "./dependencies.js";
 export type { InspectionOutcome, InspectionPort } from "./inspection-port.js";
 export type { ImportAuditEventRecord, ImportCaseRecord, ImportCounts, ImportCustomerRecord, ImportDumpRecord, ImportGrantRecord, ImportSummary, LifecycleCommand } from "./commands.js";
 export type { BackupInventory, BackupInventoryDump, DumpLedgerProjection, StoredAnalysisReport, StoredSymbolArtifact, TransitionReceipt } from "./projection.js";
+export type { CreateWebhookDeliveryInput, CreateWebhookSubscriptionInput, WebhookDeliveryFailure, WebhookDeliveryRecord, WebhookDeliveryStatus, WebhookStorage, WebhookSubscriptionRecord } from "../webhooks/storage.js";
 
 export interface DumpLedgerEngineOptions { readonly databasePath: string; readonly vault: Vault; readonly inspection: InspectionPort; readonly grantSecretKey: Uint8Array; readonly symbolVault?: SymbolVault; readonly clock?: Clock; readonly entropy?: EntropySource; readonly ids?: IdSource; readonly failpoints?: FailpointPort }
 /** Public grant-quota answer (batch upload design): what the holder of a valid secret may still upload. */
@@ -63,6 +65,8 @@ export interface DumpLedgerEngine {
    * "Event feed"): a read-only ledger read with no command, audit event, or
    * projection change. */
   readAuditEvents(afterRowid?: number, filter?: AuditFeedFilter, limit?: number): AuditFeedPage;
+  /** Webhook operational storage (docs/webhook-notifications-design.md, "Storage (migration 11)"): a read-through to the ledger's tables. */
+  webhookStorage?(): WebhookStorage;
   /** Every stored analysis report for one dump, ordered by `(created_at,
    * analysis_id)` (docs/analyzer-integration-design.md, "Analysis write-back"):
    * a read-only ledger read with no command, audit event, or projection change. */
@@ -73,6 +77,7 @@ export interface DumpLedgerEngine {
   backup(destination: string): Promise<void>;
   close(): void;
 }
+export type DumpLedgerEngineWithWebhooks = DumpLedgerEngine & { webhookStorage(): WebhookStorage };
 function digestSecret(secret: string, key: Uint8Array): string { return createHmac("sha256", key).update(secret, "utf8").digest("hex"); }
 function assertText(value: unknown, name: string, maximum: number): string { if (typeof value !== "string" || value.length === 0 || value.length > maximum || value.includes("\0")) throw new DumpLedgerError("invalid_input", `${name} is invalid`); return value; }
 function assertIsoTimestamp(value: unknown, name: string): string { if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) throw new DumpLedgerError("invalid_input", `${name} must be a canonical ISO timestamp`); return value; }
@@ -201,6 +206,7 @@ class Engine implements DumpLedgerEngine {
   searchDumps(filter: DumpCatalogFilter, after?: DumpCatalogAfter): DumpCatalogPage { return this.ledger.searchDumps(filter, after); }
   dumpsBySha256(sha256: string): readonly DumpCatalogRow[] { return this.ledger.findDumpsBySha256(sha256); }
   readAuditEvents(afterRowid?: number, filter?: AuditFeedFilter, limit?: number): AuditFeedPage { return this.ledger.readAuditEvents(afterRowid, filter, limit); }
+  webhookStorage(): WebhookStorage { return this.ledger.webhookStorage(); }
   listAnalyses(dumpId: DumpId): readonly StoredAnalysisReport[] { return this.ledger.listAnalyses(dumpId); }
   analysisDetail(dumpId: DumpId, analysisId: string): RichAnalysisDetail | null {
     return this.ledger.listAnalyses(dumpId).some(r => r.analysisId === analysisId) ? this.ledger.analysisDetail(analysisId) : null;
@@ -374,4 +380,4 @@ class Engine implements DumpLedgerEngine {
   }
   private requireOneOfPhases(dumpId: DumpId, phases: readonly DumpPhase[]): DumpLedgerProjection["dumps"][number] { const dump=this.ledger.getDump(dumpId); if(dump===null) throw new DumpLedgerError("not_found","dump was not found"); if(!phases.includes(dump.phase)) throw new DumpLedgerError("invalid_transition",`dump phase ${dump.phase} is not valid for this action`); return dump; }
 }
-export function createDumpLedgerEngine(options: DumpLedgerEngineOptions): DumpLedgerEngine { return new Engine(options); }
+export function createDumpLedgerEngine(options: DumpLedgerEngineOptions): DumpLedgerEngineWithWebhooks { return new Engine(options); }

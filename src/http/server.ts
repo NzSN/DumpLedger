@@ -48,6 +48,7 @@ import { registerGrantRoutes } from "./routes/grant-routes.js";
 import { registerOperationRoutes } from "./routes/operation-routes.js";
 import { registerTransferRoutes } from "./routes/transfer-routes.js";
 import { registerUploadRoutes } from "./routes/upload-routes.js";
+import { registerWebhookRoutes } from "./routes/webhook-routes.js";
 import type { ByteReader } from "../symbols/identity.js";
 import { registerSymbolRoutes } from "./routes/symbol-routes.js";
 import { registerSymbolAdminRoutes } from "./routes/symbol-admin-routes.js";
@@ -285,6 +286,7 @@ export function buildHttpServer(options: HttpServerOptions): FastifyInstance {
   registerDumpCatalogRoutes(server, ctx);
   registerAnalysisRoutes(server, ctx);
   registerEventRoutes(server, ctx);
+  registerWebhookRoutes(server, ctx);
   registerOperationRoutes(server, ctx);
   registerTransferRoutes(server, ctx);
   registerUploadRoutes(server, ctx);

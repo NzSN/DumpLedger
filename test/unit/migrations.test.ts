@@ -65,7 +65,7 @@ test("migration 5 preserves version-4 module and artifact rows and admits the EX
     );
     assert.deepEqual(
       (database.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map(row => row.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     );
 
     // The rebuilt shape admits a code identity: an EXE module carries NULL

@@ -169,6 +169,37 @@ const migrations: readonly Migration[] = [
       UPDATE customers SET customer_no = (SELECT n FROM ordered WHERE ordered.customer_id = customers.customer_id);
     CREATE UNIQUE INDEX customers_no_idx ON customers(customer_no);
   ` },
+  /* Webhook notifications (docs/webhook-notifications-design.md, "Storage
+   * (migration 11)"): operator subscriptions and their durable delivery rows.
+   * Purely additive operational state; a retry reuses its delivery row through
+   * the UNIQUE (subscription_id, event_rowid) pair. */
+  { version: 11, sql: `
+    CREATE TABLE webhook_subscriptions (
+      subscription_id TEXT PRIMARY KEY,
+      url TEXT NOT NULL CHECK (length(url) BETWEEN 1 AND 2048),
+      secret TEXT NOT NULL,
+      actions_json TEXT,                              -- NULL = all actions
+      case_id TEXT REFERENCES cases(case_id),         -- NULL = all cases
+      cursor_rowid INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE webhook_deliveries (
+      delivery_id TEXT PRIMARY KEY,
+      subscription_id TEXT NOT NULL REFERENCES webhook_subscriptions(subscription_id) ON DELETE CASCADE,
+      event_rowid INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      dump_id TEXT,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'exhausted')),
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      last_status_code INTEGER,
+      last_error TEXT,
+      next_attempt_at TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (subscription_id, event_rowid)
+    ) STRICT;
+    CREATE INDEX webhook_deliveries_recent_idx ON webhook_deliveries(subscription_id, created_at);
+  ` },
 ];
 /**
  * Applies pending migrations in ascending version order, each inside its own

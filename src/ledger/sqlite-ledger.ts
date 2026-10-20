@@ -6,6 +6,8 @@ import { parseAnalysisId, parseAuditEventId, parseCaseId, parseCustomerId, parse
 import { isCoverageKind, parseBlobState, parseCaseStatus, parseDumpPhase, parseSymbolArtifactKind, parseTokenState, parseValidationState, type CaseStatus, type CoverageKind, type DumpPhase, type SymbolArtifactKind, type SymbolIngestAuthChannel, type TokenState, type ValidationState } from "../domain/lifecycle.js";
 import type { AnalysisOutcome } from "../engine/commands.js";
 import { isDebugSymbolArtifact, type AuditEventProjection, type DumpLedgerProjection, type DumpProjection, type GrantProjection, type StoredAnalysisReport, type StoredSymbolArtifact } from "../engine/projection.js";
+import { SqliteWebhookStorage } from "../webhooks/sqlite-storage.js";
+import type { WebhookStorage } from "../webhooks/storage.js";
 import { applyMigrations } from "./migrations.js";
 
 /** Mirrors the contract cap; kept local so the ledger imports no HTTP module. */
@@ -366,8 +368,10 @@ function artifactIdentityPair(artifact: {
 export class SqliteLedger {
   private readonly database: BetterSqlite3.Database;
   private readonly statements = new Map<string, BetterSqlite3.Statement<unknown[], unknown>>();
-  constructor(path: string) { this.database = new BetterSqlite3(path); this.database.pragma("foreign_keys = ON"); if (path !== ":memory:") this.database.pragma("journal_mode = WAL"); applyMigrations(this.database); }
+  private readonly webhookStore: WebhookStorage;
+  constructor(path: string) { this.database = new BetterSqlite3(path); this.database.pragma("foreign_keys = ON"); if (path !== ":memory:") this.database.pragma("journal_mode = WAL"); applyMigrations(this.database); this.webhookStore = new SqliteWebhookStorage(this.database); }
   close(): void { this.database.close(); }
+  webhookStorage(): WebhookStorage { return this.webhookStore; }
   integrityCheck(): readonly string[] { return (this.database.pragma("integrity_check") as Array<{integrity_check:string}>).map(row => row.integrity_check).filter(finding => finding !== "ok"); }
   async backup(destination: string): Promise<void> { await this.database.backup(destination); }
 

@@ -23,6 +23,7 @@ a route or contract, update this reference alongside it.
 - [Dump detail, download, and retention](#dump-detail-download-and-retention)
 - [Dump catalog](#dump-catalog)
 - [Audit event feed](#audit-event-feed)
+- [Webhooks](#webhooks)
 - [Analysis write-back](#analysis-write-back)
 - [Symbols](#symbols)
 - [Operations and transfers](#operations-and-transfers)
@@ -78,6 +79,8 @@ The inventory below uses these access labels:
 | Symbol ingest | Mutation authentication, or the dedicated CI bearer token |
 | Analyzer | Valid session cookie, or the dedicated analyzer bearer token |
 | Mutation or Analyzer | Mutation authentication, or the dedicated analyzer bearer token |
+| Operator session only | Valid `dump_ledger_session` cookie; no bearer token is accepted |
+| Operator mutation only | `Operator session only` plus `X-CSRF-Token` and the Origin/Fetch Metadata checks |
 
 Operator login sets an `HttpOnly; SameSite=Strict; Path=/` cookie, with `Secure`
 in HTTPS mode. Sessions expire after eight hours by default, live in process
@@ -114,6 +117,11 @@ no CSRF or Origin evidence applies. Its scope is exactly the five read routes
 retain access to those routes — the write-back as a mutation — and every other
 route, including the retention change, rejects a bearer token.
 
+Webhook administration is operator-session only: all four `/api/v1/webhooks`
+routes reject the analyzer and CI bearer tokens, and an `Authorization` header
+is not consulted at all. The mutation routes still require the CSRF token and
+Origin/Fetch Metadata evidence described above.
+
 See [security-model.md](security-model.md) for transport and deployment controls.
 
 ## Endpoint inventory
@@ -143,6 +151,10 @@ See [security-model.md](security-model.md) for transport and deployment controls
 | GET | `/api/v1/dumps/:dumpId/analyses` | Analyzer | 200 | List analysis reports |
 | GET | `/api/v1/events` | Analyzer | 200 | Audit event feed |
 | GET | `/api/v1/customers` | Analyzer | 200 | Customer list (id + display name; the analyzer's name-resolution surface) |
+| GET | `/api/v1/webhooks` | Operator session only | 200 | List webhook subscriptions |
+| POST | `/api/v1/webhooks` | Operator mutation only | 201 | Create webhook subscription |
+| DELETE | `/api/v1/webhooks/:webhookId` | Operator mutation only | 204 | Delete webhook subscription |
+| GET | `/api/v1/webhooks/:webhookId/deliveries` | Operator session only | 200 | Latest webhook delivery rows |
 | PUT | `/api/v1/dumps/:dumpId/retention` | Mutation | 200 | Schedule purge |
 | GET | `/api/v1/symbols` | Session | 200 | List PDB/image artifacts |
 | POST | `/api/v1/symbols` | Symbol ingest | 201 | Stream PDB/EXE/DLL |
@@ -587,6 +599,85 @@ and accepts the operator session or the analyzer bearer token.
 
 Source: [event routes](../src/http/routes/event-routes.ts),
 [event contracts](../packages/http-contracts/src/events.ts).
+
+## Webhooks
+
+Webhook subscriptions push audit events to operator-registered HTTP endpoints.
+They are a low-latency tap on the same `audit_events` feed as
+`GET /api/v1/events`; the feed remains the resumable truth for a consumer that
+must not miss events. Delivery is ordered per subscription and at-least-once,
+and it runs only while `DUMP_LEDGER_WEBHOOKS=on`; see
+[webhook-notifications-design.md](webhook-notifications-design.md) for retry
+and exhaustion semantics.
+
+All four routes use the operator session (mutations also require the CSRF
+token and Origin/Fetch Metadata checks); the analyzer and CI bearer tokens are
+not accepted. Subscription CRUD is operational configuration and appends no
+audit event.
+
+`POST /api/v1/webhooks` accepts:
+
+```text
+{ url: string, actions?: string[], caseId?: caseId }
+```
+
+`url` must be an absolute `http:` or `https:` URL of at most 2048 characters
+with no userinfo. Private and LAN addresses are deliberately allowed because
+the documented consumer is a LAN-resident analyzer. `actions` is an optional
+audit-action filter with at most 32 entries of 1–64 characters; `caseId` is an
+optional exact case filter and must name an existing case. Omitted filters
+mean all actions and all cases. The response is `201`:
+
+```text
+{ subscription: Subscription, secret: string }
+Subscription = {
+  id, url, actions: string[] | null, caseId: string | null,
+  cursor: string,                  // zero-padded 16-digit next audit rowid
+  createdAt: string
+}
+```
+
+`secret` is the per-subscription HMAC signing key and is returned **only in
+this creation response**; store it immediately. A new subscription starts at
+the feed's live edge, so it receives events created after registration, not
+history. Invalid input, including a `caseId` that does not name an existing
+case, returns `400 invalid_request`.
+
+`GET /api/v1/webhooks` returns
+`200 { "subscriptions": [Subscription…] }` in creation order; the secret is
+never included. `DELETE /api/v1/webhooks/:webhookId` returns `204` and
+cascades the subscription's delivery rows; an unknown subscription is
+`404 not_found`.
+
+`GET /api/v1/webhooks/:webhookId/deliveries` returns
+`200 { "deliveries": [Delivery…] }`: the latest 50 delivery rows, most recent
+first, for the ops view of retries and exhaustion. An unknown subscription is
+`404 not_found`.
+
+```text
+Delivery = {
+  id, subscriptionId, eventCursor, action,
+  dumpId: string | null,
+  status: "pending" | "delivered" | "exhausted",
+  attempts: number,
+  lastStatusCode: number | null,
+  lastError: string | null,
+  nextAttemptAt: string | null,
+  deliveredAt: string | null,
+  createdAt: string
+}
+```
+
+Each delivery `POST` carries the same feed-shaped `Event` body as
+`GET /api/v1/events`, with `X-DumpLedger-Event`, `X-DumpLedger-Delivery`,
+`X-DumpLedger-Delivered-At`, and `X-DumpLedger-Signature-256` headers. Any 2xx
+is success; other responses, connect failures, and timeouts retry with
+exponential backoff and are marked `exhausted` after the configured attempt
+limit. Delivery rows are an operations record, not a second event feed.
+
+Source: [webhook routes](../src/http/routes/webhook-routes.ts),
+[webhook contracts](../packages/http-contracts/src/webhooks.ts),
+[webhook storage](../src/webhooks/storage.ts).
 
 ## Analysis write-back
 

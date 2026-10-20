@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>webhook-notifications-wh1-report</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; color: #1a1a1a; }
+  h1 { border-bottom: 2px solid #444; padding-bottom: .3rem; font-size: 1.5rem; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: .2rem; margin-top: 2rem; }
+  code { background: #f0f0f0; padding: .1em .3em; border-radius: 3px; font-size: .92em; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; padding: .8rem; overflow-x: auto; border-radius: 6px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; font-size: .95em; }
+  th, td { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #efefef; }
+  blockquote { border-left: 3px solid #bbb; margin-left: 0; padding-left: 1rem; color: #555; }
+</style></head><body>
+<h1 id="wh1-milestone-gate-report-webhook-notifications">WH1 milestone gate report — Webhook notifications</h1>
+<p>Date: 2026-10-20 · Status: WH1 complete, all five tasks accepted.</p>
+<p>Resolves the AI4 open question ("long-poll or webhooks if pull proves
+insufficient") for the concrete case: notify an external analyzer that a new
+dump was uploaded — without polling. Canonical design:
+<a href="../../docs/webhook-notifications-design.md"><code>../../docs/webhook-notifications-design.md</code></a>;
+execution records:
+<a href="../../Plans/webhook-notifications-plan.md"><code>../../Plans/webhook-notifications-plan.md</code></a>,
+<a href="../../Plans/webhook-notifications-tasks.md"><code>../../Plans/webhook-notifications-tasks.md</code></a>.</p>
+<h2 id="the-mechanism-in-one-paragraph">The mechanism in one paragraph</h2>
+<p><strong>Tap, not truth.</strong> The AI2 audit event feed stays the resumable source of
+truth; webhooks are a low-latency push tap. An in-process <code>WebhookDispatcher</code>
+follows <code>audit_events</code> through the engine's existing <code>readAuditEvents</code> keyset
+read — read-only, no engine command, no TLA+ action, no projection change —
+and POSTs matching events to operator-registered URLs, signed with a
+per-subscription HMAC secret. Per-subscription durable cursor: restarts
+resume where delivery stopped; exhausted deliveries stay recoverable through
+the feed.</p>
+<h2 id="what-was-delegated-and-delivered">What was delegated and delivered</h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Delivered</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1 webhook contracts</td>
+<td><code>packages/http-contracts/src/webhooks.ts</code> — create/list/deliveries decoders+encoders, closed status union, URL/filter bounds; 27 tests</td>
+<td>contracts suite green</td>
+</tr>
+<tr>
+<td>A2 storage + migration 11</td>
+<td><code>webhook_subscriptions</code> + <code>webhook_deliveries</code> (UNIQUE(subscription_id, event_rowid) idempotent-retry pair); <code>src/webhooks/{storage,sqlite-storage}.ts</code>; ledger/engine <code>webhookStorage()</code> seam</td>
+<td>storage 5/5, migrations 4/4</td>
+</tr>
+<tr>
+<td>B1 dispatcher</td>
+<td><code>src/webhooks/dispatcher.ts</code> — ordered per-subscription delivery, head-of-line blocking, <code>base×5^(n-1)</code> backoff dues, exhaustion advancing the cursor, AbortController timeout, HMAC-SHA256 over raw body, injectable fetch/scheduler/clock/ids</td>
+<td>9/9 unit tests</td>
+</tr>
+<tr>
+<td>C1 routes + wiring</td>
+<td>Four operator-session routes (<code>POST/GET /api/v1/webhooks</code>, <code>DELETE …/:id</code>, <code>GET …/deliveries</code>); application id/secret minting (<code>whs_</code>/<code>whd_</code>/<code>whsec_</code>); five <code>DUMP_LEDGER_WEBHOOK*</code> envs; dispatcher lifecycle in <code>main.ts</code></td>
+<td>routes 4/4 + end-to-end 1/1</td>
+</tr>
+<tr>
+<td>D1 documentation</td>
+<td><code>docs/http-api.md</code> (inventory + auth labels), <code>docs/security-model.md</code> (SSRF gate, secrets at rest, signature contract), <code>README.md</code> envs, AI4 pointer in <code>analyzer-integration-design.md</code></td>
+<td>4 docs, additive-only</td>
+</tr>
+</tbody>
+</table>
+<h2 id="gate-results-integrator-run">Gate results (integrator-run)</h2>
+<ul>
+<li>typecheck clean (contracts + web + backend) · build green</li>
+<li>unit <strong>167/167</strong> · integration green · MBT <strong>28/28</strong></li>
+<li><code>check:model-interface</code> clean — no model inputs touched, as designed</li>
+<li>Full <code>pnpm test</code> green end-to-end (final run)</li>
+<li>End-to-end proof: real engine driven through <code>AcceptDump</code>, real loopback
+  HTTP receiver — exactly one signed POST, correct HMAC, feed-shaped body</li>
+<li>Integrator fixes outside worker scope: two pre-existing schema-version
+  assertions (<code>test/integration/ledger-catalog.test.ts</code>,
+  <code>test/integration/engine-analysis.test.ts</code>) updated <code>[1..10]</code> → <code>[1..11]</code></li>
+<li>Sandbox note: <code>webhook-delivery.test.ts</code> binds a loopback listener and
+  needs an unsandboxed run (<code>listen EPERM</code> inside the sandbox)</li>
+</ul>
+<h2 id="delivery-semantics-normative-summary">Delivery semantics (normative summary)</h2>
+<ul>
+<li>Ordered, at-least-once, head-of-line blocking per subscription; a failure
+  stops that subscription's page, other subscriptions proceed.</li>
+<li>Retry at 10 s → 50 s → ~4 m → ~21 m; after 5 attempts the delivery is
+  <code>exhausted</code> (visible in <code>GET …/deliveries</code>), cursor advances, feed remains
+  the recovery path.</li>
+<li>Body is exactly the feed <code>Event</code> shape; headers <code>X-DumpLedger-Event</code>,
+  <code>-Delivery</code>, <code>-Delivered-At</code>, <code>-Signature-256</code>, <code>User-Agent:
+  DumpLedger-Webhook/1</code>. Receiver verifies: <code>HMAC_SHA256(secret, raw body)</code>,
+  constant-time compare.</li>
+</ul>
+<h2 id="configuration">Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DUMP_LEDGER_WEBHOOKS</code></td>
+<td>off</td>
+<td><code>on</code> starts the dispatcher</td>
+</tr>
+<tr>
+<td><code>DUMP_LEDGER_WEBHOOK_TICK_MS</code></td>
+<td>2000</td>
+<td>poll interval</td>
+</tr>
+<tr>
+<td><code>DUMP_LEDGER_WEBHOOK_TIMEOUT_MS</code></td>
+<td>10000</td>
+<td>per-attempt HTTP timeout</td>
+</tr>
+<tr>
+<td><code>DUMP_LEDGER_WEBHOOK_RETRY_BASE_MS</code></td>
+<td>10000</td>
+<td>backoff base (×5 per attempt)</td>
+</tr>
+<tr>
+<td><code>DUMP_LEDGER_WEBHOOK_MAX_ATTEMPTS</code></td>
+<td>5</td>
+<td>attempts before exhaustion</td>
+</tr>
+</tbody>
+</table>
+<p>Enable + subscribe: <code>DUMP_LEDGER_WEBHOOKS=on</code>, then as operator
+<code>POST /api/v1/webhooks { "url": "http://analyzer:4180/webhooks",
+"actions": ["AcceptDump"] }</code> — the returned <code>secret</code> is shown once.</p>
+<h2 id="boundaries-and-next-gates">Boundaries and next gates</h2>
+<ul>
+<li>v1 boundaries (documented, not silently skipped): no guaranteed delivery
+  (feed is truth); no audit trail for subscription CRUD (operational config,
+  outside the TLA+ model); tick-driven, no wake-on-intake channel; analyzer
+  bearer token is not accepted on webhook routes.</li>
+<li>Working tree only — nothing committed or pushed; <code>.projectile-cache.eld</code>
+  remains unrelated pre-existing dirty state.</li>
+<li>Next gate candidates: commit · live fire drill against DumpAnalyzer · WH2
+  (wake-on-intake, admin audit trail, disable-after-N-exhaustions).</li>
+</ul>
+<hr><p><small>Rendered from <code>.agents/chatdoc/webhook-notifications-wh1-report.md</code>.</small></p>
+</body></html>

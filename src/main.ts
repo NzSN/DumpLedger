@@ -19,6 +19,7 @@ import { reconcile } from "./recovery/reconcile.js";
 import { runRetention } from "./recovery/retention.js";
 import { TransferManager } from "./transfer/manager.js";
 import { FilesystemVault } from "./vault/filesystem-vault.js";
+import { WebhookDispatcher } from "./webhooks/dispatcher.js";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
@@ -61,6 +62,16 @@ export async function main(): Promise<void> {
   const postProcessingAttempts = positiveIntegerEnvironment("DUMP_LEDGER_POST_PROCESSING_ATTEMPTS", 5);
   const retentionIntervalMs = positiveIntegerEnvironment("DUMP_LEDGER_RETENTION_INTERVAL_MS", 60_000);
   const retentionBatchSize = positiveIntegerEnvironment("DUMP_LEDGER_RETENTION_BATCH_SIZE", 32);
+  // Webhook dispatcher (docs/webhook-notifications-design.md, "Configuration"):
+  // exactly `on` enables it; when off, no dispatcher is built and the
+  // management routes still serve subscriptions. The tuning variables are read
+  // only when enabled, so an unused setting cannot fail an off deployment.
+  const webhookDispatcherOptions = process.env.DUMP_LEDGER_WEBHOOKS === "on" ? {
+    tickMs: positiveIntegerEnvironment("DUMP_LEDGER_WEBHOOK_TICK_MS", 2_000),
+    timeoutMs: positiveIntegerEnvironment("DUMP_LEDGER_WEBHOOK_TIMEOUT_MS", 10_000),
+    retryBaseMs: positiveIntegerEnvironment("DUMP_LEDGER_WEBHOOK_RETRY_BASE_MS", 10_000),
+    maxAttempts: positiveIntegerEnvironment("DUMP_LEDGER_WEBHOOK_MAX_ATTEMPTS", 5),
+  } : undefined;
   const https = process.env.DUMP_LEDGER_HTTPS === "true";
   const host = process.env.DUMP_LEDGER_HOST ?? "127.0.0.1";
   const trustedProxies = https ? trustedProxyAddresses(process.env.DUMP_LEDGER_TRUSTED_PROXIES) : [];
@@ -88,8 +99,14 @@ export async function main(): Promise<void> {
     inspection: createVaultMinidumpInspectionPort(vault),
     grantSecretKey: configuredGrantKey,
   });
+  let webhookDispatcher: WebhookDispatcher | undefined;
   try {
     reconcile(engine, vault);
+    webhookDispatcher = webhookDispatcherOptions === undefined ? undefined : new WebhookDispatcher({
+      source: engine,
+      storage: engine.webhookStorage(),
+      ...webhookDispatcherOptions,
+    });
   } catch (error) {
     engine.close();
     throw error;
@@ -142,6 +159,7 @@ export async function main(): Promise<void> {
     await server.close();
     await symbolsListener?.close();
     postProcessingQueue.close();
+    webhookDispatcher?.close();
     engine.close();
   };
   process.once("SIGINT", () => { void close(); });
@@ -156,11 +174,13 @@ export async function main(): Promise<void> {
       );
     }
     retentionJob.start();
+    webhookDispatcher?.start();
   } catch (error) {
     retentionJob.close();
     await server.close();
     await symbolsListener?.close();
     postProcessingQueue.close();
+    webhookDispatcher?.close();
     engine.close();
     throw error;
   }
