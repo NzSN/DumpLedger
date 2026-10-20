@@ -91,6 +91,34 @@ Dump-relevant actions (see http-api.md for the full vocabulary):
 Event `detail` is bounded to 4 KiB and contains identifiers and outcomes,
 never dump contents or secrets.
 
+#### Push alternative — webhooks (WH1)
+
+If the instance runs with `DUMP_LEDGER_WEBHOOKS=on`, you can skip polling:
+ask the **operator** to register a subscription for your endpoint (the
+management API is operator-session only — your analyzer token is rejected
+there by design):
+
+```
+POST /api/v1/webhooks { "url": "http://<your-host>/webhooks",
+                        "actions": ["AcceptDump", "RejectDump"] }
+```
+
+DumpLedger then POSTs each matching event — the exact same `Event` object
+the feed serves — to your URL, signed with the subscription secret the
+operator receives once at creation:
+
+```
+X-DumpLedger-Signature-256: sha256=<HMAC-SHA256(secret, raw body)>
+X-DumpLedger-Event: AcceptDump        X-DumpLedger-Delivery: whd_...
+```
+
+Verify the signature over the **raw** body before parsing, dedupe on the
+delivery id / `cursor`, and answer 2xx. Delivery is ordered and
+at-least-once with backoff (10 s → ~21 min); after five failed attempts the
+event is marked `exhausted` and skipped — so keep the feed as your
+reconciliation path for anything you cannot afford to miss. Full semantics:
+[webhook-notifications.md](webhook-notifications.md).
+
 ### 3. Retrieve bytes
 
 ```

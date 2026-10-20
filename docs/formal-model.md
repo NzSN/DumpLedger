@@ -47,6 +47,8 @@ Excluded:
 - bytes, cryptographic collision resistance, and filesystem contents;
 - retention clocks and backup expiry;
 - debugger or symbol behavior;
+- webhook subscription administration and notification delivery
+  (operational tap verified by unit/integration tests, not modeled);
 - liveness under a permanently crashed host or absent operator.
 
 These exclusions must be tested or modeled separately before their

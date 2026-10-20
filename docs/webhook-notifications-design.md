@@ -1,6 +1,6 @@
 # Webhook notifications design
 
-Status: design for milestone WH1. Resolves the AI4 open question in
+Status: shipped as milestone WH1 (2026-10-20, commit e604ba0). Resolves the AI4 open question in
 [`analyzer-integration-design.md`](analyzer-integration-design.md) ("long-poll
 or webhooks if pull proves insufficient") for the concrete case of an external
 analyzer that should react to a new dump without polling.

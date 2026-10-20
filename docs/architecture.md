@@ -72,6 +72,17 @@ and observation is synchronous. No SQLite transaction remains open across an
 startup reconciler handles durable interruption. Local operator import has not
 yet been implemented.
 
+### Webhooks module
+
+The webhook dispatcher is an operational tap, not ledger domain logic: it
+follows the append-only `audit_events` table through the engine's read-only
+keyset feed read (no engine command, no audit event, no projection change)
+and POSTs matching events to operator-registered URLs. Delivery is
+concurrency-1, ordered and at-least-once per subscription with exponential
+backoff; exhausted deliveries are recorded and skipped, with the feed as the
+recovery path. Its tables are operational configuration — outside the TLA+
+model and the audit trail. See docs/webhook-notifications.md.
+
 The interface includes these ordering constraints:
 
 - `appendBytes` is valid only for the currently open receiving session.
@@ -187,6 +198,13 @@ dumps
 
 audit_events
   event_id, occurred_at, action, customer_id, case_id, dump_id, detail_json
+
+webhook_subscriptions            -- operational (migration 11), outside the domain model
+  subscription_id, url, secret, actions_json, case_id, cursor_rowid, created_at
+
+webhook_deliveries               -- one row per (subscription, event) attempt chain
+  delivery_id, subscription_id, event_rowid, action, dump_id, status,
+  attempts, last_status_code, last_error, next_attempt_at, delivered_at, created_at
 ```
 
 Foreign keys are enabled. IDs are immutable. `dumps.case_id` has no update path

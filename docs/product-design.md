@@ -35,8 +35,11 @@ one-time grants, streaming upload, structural inspection, lifecycle display,
 case-manifest export, authenticated download, and server-clock-derived
 retention deadlines, startup reconciliation, and two-phase purge primitives. A
 bounded production job processes explicitly assigned `purge_at` values. The
-current web UI exposes the central customer/case/grant/dump paths and basic
-operational health.
+analyzer integration surface (bearer-token catalog reads, resumable audit
+event feed, analysis write-back) and signed webhook push notifications
+(operator-registered, `DUMP_LEDGER_WEBHOOKS=on`) are shipped. The current web
+UI exposes the central customer/case/grant/dump paths and basic operational
+health.
 
 The following product-design items are still targets rather than shipped
 behavior: local operator file import, case notes, external issue links, a direct

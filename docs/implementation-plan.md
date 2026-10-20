@@ -158,6 +158,22 @@ Deferred:
 - disk-space and backup-state health, deployment incident procedures, and grant
   key rotation.
 
+## AI1–AI3 — Analyzer integration: implemented and tested
+
+Read-only dump catalog (`GET /api/v1/dumps`, keyset filters), resumable
+audit event feed (`GET /api/v1/events`), analyzer bearer token, and analysis
+write-back (`POST/GET /api/v1/dumps/:id/analyses`) with rich report detail.
+Design and milestones: docs/analyzer-integration-design.md.
+
+## WH1 — Webhook notifications: implemented and tested
+
+Signed push tap on the audit feed for external consumers: migration-11
+subscription/delivery storage, concurrency-1 dispatcher with ordered
+at-least-once delivery and visible exhaustion, operator-session management
+API (four routes), `DUMP_LEDGER_WEBHOOKS=on` plus tuning envs. Feed remains
+the source of truth; subscription CRUD is operational and outside the TLA+
+model. Reference: docs/webhook-notifications.md.
+
 ## M5 — Product completion and packaging: deferred
 
 Remaining product/release work includes selecting an open-source license,

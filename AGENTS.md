@@ -4,7 +4,7 @@ DumpLedger is a self-hosted intake ledger for Windows minidumps: a TypeScript 7 
 
 ## Project Structure & Module Organization
 
-- `src/` — backend source, one folder per module (`auth`, `domain`, `engine`, `http`, `intake`, `ledger`, `vault`, `recovery`, `inspection`, `mbt`, `generated`); entry point `src/main.ts`.
+- `src/` — backend source, one folder per module (`auth`, `domain`, `engine`, `http`, `intake`, `ledger`, `vault`, `recovery`, `inspection`, `symbols`, `transfer`, `webhooks`, `mbt`, `generated`); entry point `src/main.ts`.
 - `test/unit/`, `test/integration/`, `test/mbt/` — node:test tiers; fixtures in `test/fixtures/`.
 - `e2e/` — Playwright journeys run against the production build.
 - `frontend/` — `@dump-ledger/web` React app; `packages/http-contracts/` — shared HTTP contracts (both pnpm workspace packages).

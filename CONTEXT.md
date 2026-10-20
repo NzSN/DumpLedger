@@ -42,6 +42,19 @@ The storage, validation, availability, and deletion state of one immutable dump
 artifact; it is independent of case workflow.
 _Avoid_: Case status
 
+**Webhook subscription**:
+An operator-registered push target (URL, optional action/case filters, signing
+secret) that receives audit events as signed HTTP POSTs. It is operational
+configuration, not ledger domain state.
+_Avoid_: Listener, hook
+
+**Delivery**:
+One subscription's attempt chain for a single audit event: `pending`,
+`delivered`, or `exhausted`. Deliveries are ordered and at-least-once per
+subscription; an `exhausted` delivery means the event was skipped after all
+retries and remains available through the audit event feed.
+_Avoid_: Message, notification record
+
 **Upload grant**:
 A short-lived, case-bound authorization to begin dump uploads. Each grant is
 issued with a slot count (`maxUploads`, 1–128); a one-slot grant is a one-time
