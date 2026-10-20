@@ -91,8 +91,18 @@ Verify over the **raw** body before parsing JSON. Redelivery is normal
 
 ## Managing subscriptions
 
-All four routes require the **operator session cookie**; the analyzer bearer
-token is not accepted. Mutations pass the Origin/Fetch-Metadata guard.
+All four routes require the **operator session cookie** or the WH2
+webhook-admin bearer token (below); the analyzer bearer token is not
+accepted. Session mutations pass the Origin/Fetch-Metadata guard.
+
+**WH2 authorization.** A machine caller presents
+`Authorization: Bearer <token>` with the digest configured in
+`DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH` (see
+[webhook-admin-token-design.md](webhook-admin-token-design.md)): no cookie and
+no CSRF/Origin evidence, because a machine caller has no ambient browser
+authority. An `Authorization` header selects the bearer path only — a wrong
+or disabled token is `401` even alongside a valid session cookie. The
+operator browser session is unchanged.
 
 | Route | Purpose |
 |---|---|
@@ -101,15 +111,97 @@ token is not accepted. Mutations pass the Origin/Fetch-Metadata guard.
 | `DELETE /api/v1/webhooks/:webhookId` | Remove; delivery rows cascade → `204`. |
 | `GET /api/v1/webhooks/:webhookId/deliveries` | Latest 50 delivery rows, newest first — the ops view of retries and exhaustions. |
 
-URL rules: `http:` or `https:`, no userinfo, ≤ 2048 chars. `actions` follows
-the feed filter bounds (≤ 32 entries, ≤ 64 chars each); a `caseId` must name
-an existing case. Example — subscribe to newly available dumps:
+**Request.** `{ "url": "http://analyzer:4180/webhooks", "actions":
+["AcceptDump"], "caseId": null }` — `url` must be `http:` or `https:`, no
+userinfo, ≤ 2048 chars; `actions` (optional, absent = all audit events)
+follows the feed filter bounds (≤ 32 entries, ≤ 64 chars each); `caseId`
+(optional) must name an existing case.
+
+**Response.** `201` with the subscription and its signing secret:
+
+```json
+{ "subscription": { "id": "whs_…", "url": "…", "actions": ["AcceptDump"],
+                    "caseId": null, "cursor": "0000000000000712",
+                    "createdAt": "2026-10-20T08:00:00.000Z" },
+  "secret": "whsec_…" }
+```
+
+The `secret` is returned **only in this response** — store it in the
+receiver's secret store immediately; it cannot be recovered (rotate by
+deleting and recreating). The `cursor` starts at the feed's live edge: the
+subscription delivers events from registration forward, never history.
+
+## Registering a webhook, step by step
+
+Both paths perform the same `POST /api/v1/webhooks`; they differ only in how
+the caller authenticates. Examples use the default loopback origin —
+deployments front the service with HTTPS (see README), so substitute the
+operator's HTTPS origin in practice.
+
+### Path A — machine caller (webhook-admin bearer token)
+
+The path DumpAnalyzer and other automation use (WH2). One-time setup on the
+server, then the caller needs no cookie and no CSRF token:
 
 ```sh
-curl -b cookies.txt -X POST http://127.0.0.1:4080/api/v1/webhooks \
+# 1. One-time, on the DumpLedger host: mint a credential.
+npm run generate:webhook-admin-token
+#   Webhook admin token (store in the caller's secret store, shown once): <token>
+#   DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH=<64 lowercase hex>
+
+# 2. Configure the digest and restart the service.
+export DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH='<digest from step 1>'
+
+# 3. Register — from any host that holds the token.
+curl -X POST https://<host>:4080/api/v1/webhooks \
+  -H 'Authorization: Bearer <token>' \
   -H 'Content-Type: application/json' \
   -d '{ "url": "http://analyzer:4180/webhooks", "actions": ["AcceptDump"] }'
 ```
+
+Idempotent (re)registration at boot: list first, reuse what matches your own
+URL, create only when absent:
+
+```sh
+curl -H 'Authorization: Bearer <token>' https://<host>:4080/api/v1/webhooks
+# → { "subscriptions": [ … ] }   # keep the entry whose url is yours
+```
+
+Notes: never combine paths — any `Authorization` header selects the bearer
+path exclusively, so a wrong token is `401` even with a valid session
+cookie. The analyzer token (feed/catalog scope) is **rejected** on these
+routes by design; only the webhook-admin token works here.
+
+### Path B — operator browser session (curl)
+
+The operator path: log in once, then send cookie + CSRF token.
+
+```sh
+# 1. Log in — sets dump_ledger_session in the jar and returns the CSRF token.
+curl -c cookies.txt -X POST https://<host>:4080/api/v1/session \
+  -H 'Content-Type: application/json' \
+  -d '{ "password": "<operator password>" }'
+# → { "authenticated": true, "csrfToken": "…", "expiresAt": "…" }
+
+# 2. Register — cookie authenticates, X-CSRF-Token proves intent.
+curl -b cookies.txt -X POST https://<host>:4080/api/v1/webhooks \
+  -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <csrfToken from step 1>' \
+  -d '{ "url": "http://analyzer:4180/webhooks", "actions": ["AcceptDump"] }'
+```
+
+Sessions expire (eight hours by default); re-read a fresh token with
+`GET /api/v1/session -b cookies.txt` instead of logging in again. Reads
+(`GET /api/v1/webhooks`, `…/deliveries`) need only the cookie; mutations
+(POST, DELETE) need the cookie **and** the CSRF header.
+
+### After registration
+
+Deliveries begin on the dispatcher's next tick (≤ 2 s by default). Verify
+`X-DumpLedger-Signature-256` on every POST (see [Wire
+format](#wire-format)), watch `GET
+/api/v1/webhooks/:webhookId/deliveries` for retries or `exhausted` rows, and
+`DELETE /api/v1/webhooks/:webhookId` to unregister (either credential).
 
 Useful actions for consumers: `AcceptDump` (uploaded, validated, available —
 the "new dump" signal), `RejectDump`, `SealUpload` (bytes arrived, not yet
@@ -136,7 +228,7 @@ delivers every audit event.
 - **Rotate** a secret by deleting and recreating the subscription.
 - Signing secrets are stored plaintext in `ledger.sqlite` (see
   [security-model.md](security-model.md)); protect the data directory as
-  instance-private. SSRF control is the operator-only registration gate.
+  instance-private. SSRF control is the operator-gated registration gate.
 
 ## Boundaries (v1)
 

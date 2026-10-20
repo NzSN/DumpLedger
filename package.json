@@ -16,6 +16,7 @@
     "generate:ingest-token": "tsc -p tsconfig.json && node dist/tools/generate-ingest-token.js",
     "generate:mbt-traces": "pnpm run build && node dist/tools/generate-mbt-traces.js",
     "generate:operator-password-hash": "tsc -p tsconfig.json && node dist/tools/generate-operator-password-hash.js",
+    "generate:webhook-admin-token": "tsc -p tsconfig.json && node dist/tools/generate-webhook-admin-token.js",
     "start": "node dist/src/main.js",
     "test": "pnpm run typecheck && pnpm run check:model-interface && pnpm run build && pnpm run test:unit && pnpm run test:integration && pnpm run test:mbt",
     "test:integration": "node --test dist/test/integration/**/*.test.js",

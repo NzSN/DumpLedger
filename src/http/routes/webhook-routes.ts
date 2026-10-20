@@ -9,23 +9,26 @@ import {
 import { DumpLedgerError } from "../../domain/errors.js";
 import type { WebhookApplicationPort } from "../application.js";
 import {
+  authorizeSessionOrWebhookAdmin,
+  authorizeSessionOrWebhookAdminMutation,
   contractErrorFor,
   decodeJsonRequest,
-  jsonRequireMutation,
-  jsonRequireSession,
   sendError,
 } from "../contracts/json.js";
 import type { RouteContext } from "./common.js";
 
 /**
  * Webhook management routes (docs/webhook-notifications-design.md,
- * "Management API"; milestone WH1).
+ * "Management API"; milestones WH1 and WH2).
  *
- * Every route is operator-session-only: registering a subscription makes the
- * server push event data to an arbitrary URL, so the analyzer bearer token is
- * deliberately not consulted here. Mutations additionally pass the CSRF/
- * Origin mutation guard. Subscription CRUD is operational configuration and
- * appends no audit event.
+ * Every route accepts the operator session or the dedicated webhook-admin
+ * bearer token (docs/webhook-admin-token-design.md, "Authorization model"):
+ * registering a subscription makes the server push event data to an arbitrary
+ * URL, so the analyzer bearer token is deliberately not consulted here.
+ * Session mutations additionally pass the CSRF/Origin mutation guard; bearer
+ * requests are machine callers with no ambient browser authority, so no
+ * CSRF/Origin evidence is checked on that path. Subscription CRUD is
+ * operational configuration and appends no audit event.
  */
 
 /** Maps a thrown application failure onto the stable error envelope, exactly
@@ -44,7 +47,7 @@ export function registerWebhookRoutes(server: FastifyInstance, ctx: RouteContext
   const application = options.application as typeof options.application & WebhookApplicationPort;
 
   server.post("/api/v1/webhooks", async (request, reply) => {
-    if (jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined) return reply;
+    if (authorizeSessionOrWebhookAdminMutation(request, reply, options) === undefined) return reply;
     const decoded = decodeJsonRequest(request, decodeCreateWebhookParams);
     if (!decoded.ok) return sendError(reply, "invalid_request");
     try {
@@ -60,7 +63,7 @@ export function registerWebhookRoutes(server: FastifyInstance, ctx: RouteContext
   });
 
   server.get("/api/v1/webhooks", async (request, reply) => {
-    if (jsonRequireSession(request, reply, options.sessions) === undefined) return reply;
+    if (authorizeSessionOrWebhookAdmin(request, reply, options) === undefined) return reply;
     try {
       return reply.type("application/json; charset=utf-8").send(encodeWebhookListResponse(application.listWebhooks()));
     } catch (error) {
@@ -69,7 +72,7 @@ export function registerWebhookRoutes(server: FastifyInstance, ctx: RouteContext
   });
 
   server.delete<{ Params: { webhookId: string } }>("/api/v1/webhooks/:webhookId", async (request, reply) => {
-    if (jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined) return reply;
+    if (authorizeSessionOrWebhookAdminMutation(request, reply, options) === undefined) return reply;
     try {
       if (!application.deleteWebhook(request.params.webhookId)) return sendError(reply, "not_found");
       return reply.code(204).send();
@@ -79,7 +82,7 @@ export function registerWebhookRoutes(server: FastifyInstance, ctx: RouteContext
   });
 
   server.get<{ Params: { webhookId: string } }>("/api/v1/webhooks/:webhookId/deliveries", async (request, reply) => {
-    if (jsonRequireSession(request, reply, options.sessions) === undefined) return reply;
+    if (authorizeSessionOrWebhookAdmin(request, reply, options) === undefined) return reply;
     try {
       const response = application.webhookDeliveries(request.params.webhookId);
       if (response === undefined) return sendError(reply, "not_found");

@@ -142,6 +142,10 @@ body)`, constant-time compare against the header.
 
 ## Management API (operator session only)
 
+**Superseded by WH2** ([webhook-admin-token-design.md](webhook-admin-token-design.md)):
+the four routes are dual-auth — operator session or webhook-admin bearer
+token. The session-only text below is the WH1 historical record.
+
 All four routes require the operator session cookie (`jsonRequireSession`);
 mutations additionally pass the mutation guard (`jsonRequireMutation`). The
 analyzer bearer token is **not** accepted: a subscription pushes event data
@@ -199,6 +203,9 @@ each). A `caseId` must name an existing case or creation fails
 ## Milestones
 
 - **WH1** (this design): storage, dispatcher, management API, docs.
-- **WH2 candidates** (only when a consumer asks): wake-on-intake channel,
+- **WH2** (shipped, separate design): the webhook-admin token lets a machine
+  caller (DumpAnalyzer) manage subscriptions without an operator session —
+  see [webhook-admin-token-design.md](webhook-admin-token-design.md).
+- **WH3 candidates** (only when a consumer asks): wake-on-intake channel,
   disable-after-N-exhaustions, delivery metrics, audit events for
   subscription administration (a TLA+ change).

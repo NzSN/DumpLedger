@@ -181,6 +181,23 @@ disabled:
 export DUMP_LEDGER_ANALYZER_TOKEN_HASH='<64 lowercase hex characters>'
 ```
 
+A machine caller — in the documented deployment, a DumpAnalyzer that registers
+its webhook subscription at boot — can manage the four
+webhook-administration routes with a dedicated bearer token instead of an
+operator session (it reaches nothing else; see
+[`docs/security-model.md`](docs/security-model.md)). Generate the token once,
+store it in the caller's secret store, and export only its printed sha256 —
+leaving the variable unset or empty keeps the bearer path disabled:
+
+```sh
+npm run --silent generate:webhook-admin-token
+export DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH='<64 lowercase hex characters>'
+```
+
+Rotating the digest retires the token immediately but does not delete the
+subscriptions it created; remove those first (`DELETE /api/v1/webhooks/:id`),
+then rotate.
+
 Webhook notifications are off by default. Set `DUMP_LEDGER_WEBHOOKS='on'` to
 start the dispatcher; any other value leaves it off while subscriptions remain
 manageable and undelivered events accumulate behind each subscription's

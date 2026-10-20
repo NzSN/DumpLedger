@@ -25,6 +25,7 @@ import {
 } from "@dump-ledger/http-contracts";
 import { verifyAnalyzerToken } from "../../auth/analyzer-token.js";
 import type { OperatorSession, OperatorSessions } from "../../auth/sessions.js";
+import { verifyWebhookAdminToken } from "../../auth/webhook-admin-token.js";
 import type { HttpServerOptions } from "../server.js";
 
 const HTTP_STATUS: Readonly<Record<HttpErrorCode, number>> = {
@@ -230,6 +231,82 @@ export function authorizeSessionOrAnalyzerMutation(
     return undefined;
   }
   return "analyzer-token";
+}
+
+/** Which credential walked a webhook-administration read route. */
+export type WebhookAdminReadAuthChannel = "operator" | "webhook-admin-token";
+
+/**
+ * Webhook-admin-or-session guard for the two read routes in the webhook-admin
+ * token's scope (docs/webhook-admin-token-design.md, "Authorization model";
+ * milestone WH2). Pinned bearer precedence, mirroring
+ * `authorizeSessionOrAnalyzer`: when the request carries any `Authorization`
+ * header, ONLY the bearer token path is consulted — a malformed header, a
+ * token that does not match the configured webhook-admin digest, or a
+ * disabled token configuration is the same generic 401 envelope the session
+ * guard sends, and it never falls through to the session cookie. Without the
+ * header the operator session guard applies unchanged. Bearer requests carry
+ * no cookie semantics, so no CSRF/Origin evidence applies on that path. Scope
+ * is exactly the four `/api/v1/webhooks` routes; the analyzer token remains
+ * rejected there.
+ */
+export function authorizeSessionOrWebhookAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: HttpServerOptions,
+): WebhookAdminReadAuthChannel | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization === undefined) {
+    return jsonRequireSession(request, reply, options.sessions) === undefined ? undefined : "operator";
+  }
+  // The scheme name is matched case-insensitively (HTTP auth semantics); the
+  // token itself is exact and opaque, compared by sha256 digest only.
+  const token = /^Bearer +(\S+)$/i.exec(authorization)?.[1];
+  if (token === undefined || !verifyWebhookAdminToken(options.webhookAdminTokenHash, token)) {
+    sendError(reply, "unauthenticated");
+    return undefined;
+  }
+  return "webhook-admin-token";
+}
+
+/**
+ * Which credential walked a webhook-administration mutation (create or
+ * delete); the value set matches {@link WebhookAdminReadAuthChannel}.
+ */
+export type WebhookAdminMutationAuthChannel = WebhookAdminReadAuthChannel;
+
+/**
+ * Webhook-admin-or-session guard for the mutation routes in the webhook-admin
+ * token's scope — `POST /api/v1/webhooks` and
+ * `DELETE /api/v1/webhooks/:webhookId` (docs/webhook-admin-token-design.md,
+ * "Authorization model"; milestone WH2). Pinned bearer precedence, mirroring
+ * `authorizeSessionOrAnalyzerMutation`: when the request carries any
+ * `Authorization` header, ONLY the bearer token path is consulted — a
+ * malformed header, a token that does not match the configured webhook-admin
+ * digest, or a disabled token configuration is the same generic 401 envelope
+ * the session guard sends, and it never falls through to the session cookie.
+ * Without the header the operator session+CSRF+Origin guard applies exactly
+ * as before. Bearer requests carry no cookie semantics, so there is no
+ * CSRF/Origin evidence to check on that path: a machine caller has no ambient
+ * browser authority.
+ */
+export function authorizeSessionOrWebhookAdminMutation(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: HttpServerOptions,
+): WebhookAdminMutationAuthChannel | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization === undefined) {
+    return jsonRequireMutation(request, reply, options.sessions, options.allowedOrigins) === undefined ? undefined : "operator";
+  }
+  // The scheme name is matched case-insensitively (HTTP auth semantics); the
+  // token itself is exact and opaque, compared by sha256 digest only.
+  const token = /^Bearer +(\S+)$/i.exec(authorization)?.[1];
+  if (token === undefined || !verifyWebhookAdminToken(options.webhookAdminTokenHash, token)) {
+    sendError(reply, "unauthenticated");
+    return undefined;
+  }
+  return "webhook-admin-token";
 }
 
 /**

@@ -79,8 +79,8 @@ The inventory below uses these access labels:
 | Symbol ingest | Mutation authentication, or the dedicated CI bearer token |
 | Analyzer | Valid session cookie, or the dedicated analyzer bearer token |
 | Mutation or Analyzer | Mutation authentication, or the dedicated analyzer bearer token |
-| Operator session only | Valid `dump_ledger_session` cookie; no bearer token is accepted |
-| Operator mutation only | `Operator session only` plus `X-CSRF-Token` and the Origin/Fetch Metadata checks |
+| Webhook admin | Valid session cookie, or the dedicated webhook-admin bearer token |
+| Mutation or Webhook admin | Mutation authentication, or the dedicated webhook-admin bearer token |
 
 Operator login sets an `HttpOnly; SameSite=Strict; Path=/` cookie, with `Secure`
 in HTTPS mode. Sessions expire after eight hours by default, live in process
@@ -117,10 +117,19 @@ no CSRF or Origin evidence applies. Its scope is exactly the five read routes
 retain access to those routes — the write-back as a mutation — and every other
 route, including the retention change, rejects a bearer token.
 
-Webhook administration is operator-session only: all four `/api/v1/webhooks`
-routes reject the analyzer and CI bearer tokens, and an `Authorization` header
-is not consulted at all. The mutation routes still require the CSRF token and
-Origin/Fetch Metadata evidence described above.
+The webhook-admin bearer token is verified against the SHA-256 digest
+configured in `DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH` (64 lowercase hex
+characters; unset or empty disables it) and follows the same pinned
+precedence: any `Authorization` header selects the bearer path only, so a
+wrong, malformed, or disabled token is the same generic `401 unauthenticated`
+even alongside a valid session cookie (the `Bearer` scheme name is matched
+case-insensitively). Without the header the operator session guard applies
+unchanged; its scope is exactly the four `/api/v1/webhooks` routes — list,
+create, delete, and delivery inspection — so it grants no catalog, feed,
+symbol, or other access. Mutation routes keep requiring the CSRF token and
+Origin/Fetch Metadata evidence on the session path, while bearer requests
+skip that evidence because they carry no ambient browser authority. The
+analyzer and CI bearer tokens remain rejected on every webhook route.
 
 See [security-model.md](security-model.md) for transport and deployment controls.
 
@@ -151,10 +160,10 @@ See [security-model.md](security-model.md) for transport and deployment controls
 | GET | `/api/v1/dumps/:dumpId/analyses` | Analyzer | 200 | List analysis reports |
 | GET | `/api/v1/events` | Analyzer | 200 | Audit event feed |
 | GET | `/api/v1/customers` | Analyzer | 200 | Customer list (id + display name; the analyzer's name-resolution surface) |
-| GET | `/api/v1/webhooks` | Operator session only | 200 | List webhook subscriptions |
-| POST | `/api/v1/webhooks` | Operator mutation only | 201 | Create webhook subscription |
-| DELETE | `/api/v1/webhooks/:webhookId` | Operator mutation only | 204 | Delete webhook subscription |
-| GET | `/api/v1/webhooks/:webhookId/deliveries` | Operator session only | 200 | Latest webhook delivery rows |
+| GET | `/api/v1/webhooks` | Webhook admin | 200 | List webhook subscriptions |
+| POST | `/api/v1/webhooks` | Mutation or Webhook admin | 201 | Create webhook subscription |
+| DELETE | `/api/v1/webhooks/:webhookId` | Mutation or Webhook admin | 204 | Delete webhook subscription |
+| GET | `/api/v1/webhooks/:webhookId/deliveries` | Webhook admin | 200 | Latest webhook delivery rows |
 | PUT | `/api/v1/dumps/:dumpId/retention` | Mutation | 200 | Schedule purge |
 | GET | `/api/v1/symbols` | Session | 200 | List PDB/image artifacts |
 | POST | `/api/v1/symbols` | Symbol ingest | 201 | Stream PDB/EXE/DLL |
@@ -611,9 +620,10 @@ and it runs only while `DUMP_LEDGER_WEBHOOKS=on`; see
 and exhaustion semantics.
 
 All four routes use the operator session (mutations also require the CSRF
-token and Origin/Fetch Metadata checks); the analyzer and CI bearer tokens are
-not accepted. Subscription CRUD is operational configuration and appends no
-audit event.
+token and Origin/Fetch Metadata checks) or the dedicated webhook-admin bearer
+token (`DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH`; see Authentication, including
+the pinned precedence); the analyzer and CI bearer tokens are not accepted.
+Subscription CRUD is operational configuration and appends no audit event.
 
 `POST /api/v1/webhooks` accepts:
 
@@ -938,7 +948,7 @@ Handled application errors use this envelope:
 | HTTP status | `error.code` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed or invalid request |
-| 401 | `unauthenticated` | Missing/invalid session, password, ingest token, or analyzer token |
+| 401 | `unauthenticated` | Missing/invalid session, password, ingest token, analyzer token, or webhook-admin token |
 | 403 | `forbidden` | CSRF, Origin, or Fetch Metadata check failed |
 | 404 | `not_found` | Resource or artifact not available |
 | 404 | `grant_unavailable` | Unknown, expired, revoked, or unusable grant |

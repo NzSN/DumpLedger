@@ -1,8 +1,10 @@
 /**
  * Webhook management API (docs/webhook-notifications-design.md, "Management
- * API"; milestone WH1): full CRUD through the real Fastify stack, the
- * operator-session-only boundary (analyzer bearer rejected), URL/filter/case
- * validation, secret-once semantics, live-edge cursors, and cascade-on-delete.
+ * API"; milestones WH1 and WH2): full CRUD through the real Fastify stack, the
+ * operator-session boundary (analyzer bearer rejected), the webhook-admin
+ * bearer path with pinned precedence and no CSRF/Origin evidence,
+ * URL/filter/case validation, secret-once semantics, live-edge cursors, and
+ * cascade-on-delete.
  */
 
 import assert from "node:assert/strict";
@@ -29,6 +31,8 @@ import { MemoryVault } from "../../src/vault/memory-vault.js";
 const FIXED_NOW = "2026-09-16T08:00:00.000Z";
 const ANALYZER_TOKEN = `analyzer-token-${"w".repeat(40)}`;
 const ANALYZER_TOKEN_HASH = createHash("sha256").update(ANALYZER_TOKEN, "utf8").digest();
+const WEBHOOK_ADMIN_TOKEN = `webhook-admin-token-${"v".repeat(40)}`;
+const WEBHOOK_ADMIN_TOKEN_HASH = createHash("sha256").update(WEBHOOK_ADMIN_TOKEN, "utf8").digest();
 const HOOK_URL = "http://127.0.0.1:9099/analyzer";
 
 function deterministicSecrets(count: number): string[] {
@@ -42,10 +46,11 @@ interface Fixture {
   readonly csrf: string;
 }
 
-/** Fresh real engine/vault/server per test, with the analyzer bearer token
- * configured so the operator-only boundary is exercised against a usable
- * token rather than a disabled path. */
-async function makeFixture(): Promise<Fixture> {
+/** Fresh real engine/vault/server per test, with the analyzer bearer token and
+ * the webhook-admin token configured so both bearer boundaries are exercised
+ * against usable credentials rather than disabled paths. Pass `null` to
+ * leave the webhook-admin bearer path disabled. */
+async function makeFixture(webhookAdminTokenHash: Buffer | null = WEBHOOK_ADMIN_TOKEN_HASH): Promise<Fixture> {
   const vault = new MemoryVault();
   const engine = createDumpLedgerEngine({
     databasePath: ":memory:",
@@ -64,6 +69,7 @@ async function makeFixture(): Promise<Fixture> {
     application: new EngineHttpApplication(engine, vault),
     sessions,
     analyzerTokenHash: ANALYZER_TOKEN_HASH,
+    ...(webhookAdminTokenHash === null ? {} : { webhookAdminTokenHash }),
     uploadLifecycle: new EngineUploadLifecycle(engine),
     uploadSink: new VaultUploadSink(vault),
     uploadPostProcessor: new EngineUploadPostProcessor(engine),
@@ -99,6 +105,10 @@ function bearer(): Record<string, string> {
   return { authorization: `Bearer ${ANALYZER_TOKEN}` };
 }
 
+function adminBearer(): Record<string, string> {
+  return { authorization: `Bearer ${WEBHOOK_ADMIN_TOKEN}` };
+}
+
 function errorCode(response: { json(): unknown }): string {
   return decodeErrorResponse(response.json(), "$").error.code;
 }
@@ -107,7 +117,7 @@ function cursorFor(rowid: number): string {
   return rowid.toString(10).padStart(16, "0");
 }
 
-test("webhook routes are operator-session-only and mutations need CSRF", async t => {
+test("webhook routes reject anonymous and analyzer bearers; session mutations need CSRF", async t => {
   const fixture = await makeFixture();
   t.after(async () => { await fixture.server.close(); fixture.engine.close(); });
 
@@ -116,8 +126,10 @@ test("webhook routes are operator-session-only and mutations need CSRF", async t
   assert.equal(errorCode(anonymous), "unauthenticated");
 
   // The analyzer token is a real credential for its own routes, but every
-  // webhook route ignores it: a subscription pushes event data to an
-  // arbitrary URL, so registration is an operator privilege.
+  // webhook route rejects it (see docs/webhook-admin-token-design.md, "Why
+  // not the analyzer token"): a subscription pushes event data to an
+  // arbitrary URL, so registration is an operator-class privilege with its
+  // own independently rotatable credential.
   const bearerList = await fixture.server.inject({ method: "GET", url: "/api/v1/webhooks", headers: bearer() });
   assert.equal(bearerList.statusCode, 401);
   assert.equal(errorCode(bearerList), "unauthenticated");
@@ -317,4 +329,123 @@ test("delete removes the subscription and cascades delivery rows", async t => {
     headers: mutationHeaders(fixture),
   });
   assert.equal(secondDelete.statusCode, 404);
+});
+
+test("webhook-admin bearer performs CRUD with no CSRF, cookie, or Origin evidence", async t => {
+  const fixture = await makeFixture();
+  t.after(async () => { await fixture.server.close(); fixture.engine.close(); });
+
+  const listBefore = await fixture.server.inject({ method: "GET", url: "/api/v1/webhooks", headers: adminBearer() });
+  assert.equal(listBefore.statusCode, 200);
+  assert.deepEqual(decodeWebhookListResponse(listBefore.json(), "$").subscriptions, []);
+
+  // Deliberately hostile browser evidence (no cookie, no CSRF header, a
+  // cross-site Origin and Fetch Metadata) proves the bearer path checks none
+  // of it: a machine caller has no ambient browser authority.
+  const created = await fixture.server.inject({
+    method: "POST",
+    url: "/api/v1/webhooks",
+    headers: {
+      ...adminBearer(),
+      "content-type": "application/json",
+      origin: "https://cross-site.example",
+      "sec-fetch-site": "cross-site",
+    },
+    payload: JSON.stringify({ url: HOOK_URL, actions: ["AcceptDump"] }),
+  });
+  assert.equal(created.statusCode, 201);
+  const body = decodeCreateWebhookResponse(created.json(), "$");
+  assert.equal(body.subscription.url, HOOK_URL);
+  assert.deepEqual(body.subscription.actions, ["AcceptDump"]);
+
+  const listed = await fixture.server.inject({ method: "GET", url: "/api/v1/webhooks", headers: adminBearer() });
+  assert.equal(listed.statusCode, 200);
+  const subscriptions = decodeWebhookListResponse(listed.json(), "$").subscriptions;
+  assert.equal(subscriptions.length, 1);
+  assert.deepEqual(subscriptions[0], body.subscription);
+
+  const deliveries = await fixture.server.inject({
+    method: "GET",
+    url: `/api/v1/webhooks/${body.subscription.id}/deliveries`,
+    headers: adminBearer(),
+  });
+  assert.equal(deliveries.statusCode, 200);
+  assert.deepEqual(decodeWebhookDeliveriesResponse(deliveries.json(), "$").deliveries, []);
+
+  const deleted = await fixture.server.inject({
+    method: "DELETE",
+    url: `/api/v1/webhooks/${body.subscription.id}`,
+    headers: adminBearer(),
+  });
+  assert.equal(deleted.statusCode, 204);
+  assert.equal(deleted.body, "");
+  assert.equal(fixture.engine.webhookStorage().findSubscription(body.subscription.id), null);
+});
+
+test("an unusable Authorization header is 401 even with a valid session cookie", async t => {
+  const fixture = await makeFixture();
+  t.after(async () => { await fixture.server.close(); fixture.engine.close(); });
+
+  const hostileHeaders: readonly Record<string, string>[] = [
+    { authorization: "Bearer not-the-admin-token" },
+    { authorization: "Bearer" },
+    { authorization: `Basic ${WEBHOOK_ADMIN_TOKEN}` },
+  ];
+  for (const headers of hostileHeaders) {
+    const list = await fixture.server.inject({
+      method: "GET",
+      url: "/api/v1/webhooks",
+      headers: { cookie: fixture.cookie, ...headers },
+    });
+    assert.equal(list.statusCode, 401, `expected 401 for ${JSON.stringify(headers)}`);
+    assert.equal(errorCode(list), "unauthenticated");
+
+    const created = await fixture.server.inject({
+      method: "POST",
+      url: "/api/v1/webhooks",
+      headers: { ...mutationHeaders(fixture), ...headers },
+      payload: JSON.stringify({ url: HOOK_URL }),
+    });
+    assert.equal(created.statusCode, 401, `expected 401 for ${JSON.stringify(headers)}`);
+    assert.equal(errorCode(created), "unauthenticated");
+
+    const deleted = await fixture.server.inject({
+      method: "DELETE",
+      url: "/api/v1/webhooks/whs_missing",
+      headers: { ...mutationHeaders(fixture), ...headers },
+    });
+    assert.equal(deleted.statusCode, 401);
+
+    const deliveries = await fixture.server.inject({
+      method: "GET",
+      url: "/api/v1/webhooks/whs_missing/deliveries",
+      headers: { cookie: fixture.cookie, ...headers },
+    });
+    assert.equal(deliveries.statusCode, 401);
+  }
+  // Pinned precedence means no request reached the application: nothing was
+  // created, and the delete never resolved the unknown id to a 404 first.
+  assert.equal(fixture.engine.webhookStorage().listSubscriptions().length, 0);
+});
+
+test("disabled webhook-admin configuration rejects every Authorization header without fall-through", async t => {
+  const fixture = await makeFixture(null);
+  t.after(async () => { await fixture.server.close(); fixture.engine.close(); });
+
+  const bearerList = await fixture.server.inject({ method: "GET", url: "/api/v1/webhooks", headers: adminBearer() });
+  assert.equal(bearerList.statusCode, 401);
+  assert.equal(errorCode(bearerList), "unauthenticated");
+
+  // Not even a valid session cookie may rescue a request that carries an
+  // Authorization header while the token configuration is absent.
+  const bearerWithCookie = await fixture.server.inject({
+    method: "GET",
+    url: "/api/v1/webhooks",
+    headers: { cookie: fixture.cookie, ...adminBearer() },
+  });
+  assert.equal(bearerWithCookie.statusCode, 401);
+  assert.equal(errorCode(bearerWithCookie), "unauthenticated");
+
+  const sessionList = await fixture.server.inject({ method: "GET", url: "/api/v1/webhooks", headers: { cookie: fixture.cookie } });
+  assert.equal(sessionList.statusCode, 200);
 });

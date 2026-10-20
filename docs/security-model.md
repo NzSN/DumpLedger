@@ -21,9 +21,10 @@ streamed byte limits, bounded concurrent-upload admission, bounded
 process-local rate limits for login and grant verification, opaque vault paths,
 no-follow/restrictive filesystem creation, bounded structural inspection,
 download gating, audit rows, startup reconciliation, explicit retention
-scheduling, two-phase deletion, and digest-only CI symbol-ingest tokens
-("CI symbol-ingest tokens" below) and analyzer read tokens ("Analyzer tokens"
-below).
+scheduling, two-phase deletion, digest-only CI symbol-ingest tokens
+("CI symbol-ingest tokens" below), analyzer read tokens ("Analyzer tokens"
+below), and webhook-administration bearer tokens
+("Webhook-administration tokens" below).
 
 This is not yet an internet-deployment approval. The operator API does not terminate
 TLS; a trusted reverse proxy and its network controls must be configured and
@@ -262,13 +263,15 @@ a delivery tap, not a second source of truth: the audit feed remains the
 resumable record.
 
 - **SSRF control is the operator gate.** Registration, not outbound URL
-  filtering, is the security boundary. Only a valid operator session — plus
-  CSRF and Origin/Fetch Metadata evidence for mutations — can create a
-  subscription; the analyzer and CI bearer tokens are rejected. The documented
+  filtering, is the security boundary. Only an operator-class credential — a
+  valid operator session (plus CSRF and Origin/Fetch Metadata evidence for
+  mutations) or the dedicated webhook-admin bearer token
+  ("Webhook-administration tokens" below) — can create a subscription; the
+  analyzer and CI bearer tokens are rejected. The documented
   deployment is LAN-resident and the analyzer receiver may legitimately sit on
   a private address, so the server deliberately applies no
   loopback/private-range/link-local filter to the registered URL. Compensating
-  controls are the operator-only registration path, the TLS and network
+  controls are the operator-gated registration path, the TLS and network
   placement of the operator API, and treating the subscription list as
   privileged configuration. An `http:` destination is accepted; use `https:`
   or an authenticated tunnel whenever the receiver is not on a trusted LAN.
@@ -292,6 +295,59 @@ resumable record.
   `X-DumpLedger-Delivery` plus the body `cursor` is the dedupe key because
   delivery is at-least-once. Payloads carry identifiers and outcomes, never
   dump bytes or tokens.
+
+### Webhook-administration tokens
+
+A machine caller — in the documented deployment, a DumpAnalyzer that
+registers itself at boot — can manage webhook subscriptions without an
+operator session. The token is bearer-equivalent, operator-class, and
+deliberately narrow (milestone WH2; see
+[webhook-admin-token-design.md](webhook-admin-token-design.md)).
+
+- **Disabled by default.** Token auth exists only while
+  `DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH` carries the 64-lowercase-hex sha256
+  of the bearer token. Unset or empty disables the path entirely: a presented
+  authorization is then a generic 401, never a fall-through to session
+  cookies.
+- **Exact webhook-admin scope.** The token is consulted by exactly the four
+  `/api/v1/webhooks` routes — subscription list, create, delete, and delivery
+  inspection. It grants no catalog, dump, feed, symbol, transfer, or other
+  access; the analyzer and CI bearer tokens remain rejected on those four
+  routes, and this token is rejected everywhere else.
+- **Digest at rest.** Only the sha256 digest is configured; the token itself
+  is generated with 256 bits of entropy
+  (`npm run generate:webhook-admin-token`), belongs in the caller's secret
+  store, and is never written to the ledger, logs, or audit details.
+- **Pinned precedence.** When a request carries any `Authorization` header on
+  one of these routes, only the bearer path is consulted: the header must be
+  a `Bearer` credential whose sha256 matches the configured digest in
+  constant time. A wrong token, a malformed header, or a disabled
+  configuration is the same generic 401 envelope the session guard uses —
+  there is no silent cookie/CSRF fallback. Without the header, the session
+  guard applies unchanged.
+- **No cookie semantics.** Bearer requests skip CSRF and Origin checks because
+  they carry no ambient browser authority; they must still ride TLS, and the
+  token must not be placed in URLs or logs. Subscription CRUD is operational
+  configuration, so it appends no audit event on either channel.
+- **Accepted residual — push-anywhere.** The token lists and manages all
+  subscriptions, so it can aim signed deliveries at any URL. Accepted because
+  issuance is operator-gated like the grant key and the deliveries list keeps
+  misuse operator-visible; a URL allowlist remains available as WH3 hardening
+  if the token is ever issued more broadly.
+- **Accepted residual — rotation does not revoke subscriptions.** Replacing
+  the configured digest retires the token immediately, but subscriptions it
+  registered keep pushing until deleted. Decommission procedure: delete the
+  caller's subscriptions (`DELETE /api/v1/webhooks/:id`) first, then rotate
+  the digest (documented in README and analyzer-guide).
+- **Why not the analyzer token.** Reusing the analyzer credential was
+  considered and rejected: registration makes the server originate POSTs to
+  arbitrary URLs, and the deliveries list reports `lastStatusCode`/`lastError`
+  — a LAN reachability oracle that the feed's pull-only reads never create; a
+  black-hole subscription costs up to the per-attempt timeout and degrades
+  every other subscriber (dispatcher DoS surface); a subscription outlives
+  analyzer-token rotation, so rotation must stop being effective; and
+  infrastructure administration is a different privilege class that deserves
+  a separately revocable credential.
 
 ### Dedicated symbols listener
 

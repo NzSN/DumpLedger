@@ -172,6 +172,16 @@ export interface HttpServerOptions {
    * mutation and non-analyzer route never consults it.
    */
   readonly analyzerTokenHash?: Buffer;
+  /**
+   * Optional sha256 digest of the webhook-administration bearer token
+   * (docs/webhook-admin-token-design.md, "The credential"), already validated
+   * by the composition root. Present enables `Authorization: Bearer <token>`
+   * on the four `/api/v1/webhooks` administration routes as an alternative to
+   * the operator session cookie; absent or undefined disables the bearer path
+   * entirely. The token's scope is exactly those routes: the analyzer token
+   * stays rejected there, and this token grants no other access.
+   */
+  readonly webhookAdminTokenHash?: Buffer;
   readonly uploadLifecycle: UploadLifecyclePort;
   readonly uploadSink: UploadByteSink;
   readonly now?: () => number;

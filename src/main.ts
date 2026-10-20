@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import { parseAnalyzerTokenHash } from "./auth/analyzer-token.js";
 import { parseIngestTokenHash } from "./auth/ingest-token.js";
+import { parseWebhookAdminTokenHash } from "./auth/webhook-admin-token.js";
 import { OperatorSessions } from "./auth/sessions.js";
 import { createDumpLedgerEngine } from "./engine/dump-ledger-engine.js";
 import { EngineHttpApplication } from "./http/application.js";
@@ -53,6 +54,11 @@ export async function main(): Promise<void> {
   // "Analyzer tokens"): unset or empty disables the bearer path entirely; a
   // malformed digest fails boot fast, exactly like the ingest token above.
   const analyzerTokenHash = parseAnalyzerTokenHash(process.env.DUMP_LEDGER_ANALYZER_TOKEN_HASH);
+  // Optional webhook-administration bearer token
+  // (docs/webhook-admin-token-design.md, "The credential"): unset or empty
+  // disables the bearer path entirely; a malformed digest fails boot fast,
+  // exactly like the two tokens above.
+  const webhookAdminTokenHash = parseWebhookAdminTokenHash(process.env.DUMP_LEDGER_WEBHOOK_ADMIN_TOKEN_HASH);
   const maxConcurrentUploads = positiveIntegerEnvironment("DUMP_LEDGER_MAX_CONCURRENT_UPLOADS", 2);
   const uploadTimeouts = validateUploadTimeouts({
     idleMs: positiveIntegerEnvironment("DUMP_LEDGER_UPLOAD_IDLE_TIMEOUT_MS", DEFAULT_UPLOAD_TIMEOUTS.idleMs),
@@ -139,6 +145,7 @@ export async function main(): Promise<void> {
     sessions,
     ...(ingestTokenHash === undefined ? {} : { ingestTokenHash }),
     ...(analyzerTokenHash === undefined ? {} : { analyzerTokenHash }),
+    ...(webhookAdminTokenHash === undefined ? {} : { webhookAdminTokenHash }),
     uploadLifecycle: new EngineUploadLifecycle(engine),
     uploadSink: new VaultUploadSink(vault),
     uploadPostProcessor: postProcessor,

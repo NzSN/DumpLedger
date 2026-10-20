@@ -91,21 +91,26 @@ Dump-relevant actions (see http-api.md for the full vocabulary):
 Event `detail` is bounded to 4 KiB and contains identifiers and outcomes,
 never dump contents or secrets.
 
-#### Push alternative — webhooks (WH1)
+#### Push alternative — webhooks (WH1; self-registration WH2)
 
-If the instance runs with `DUMP_LEDGER_WEBHOOKS=on`, you can skip polling:
-ask the **operator** to register a subscription for your endpoint (the
-management API is operator-session only — your analyzer token is rejected
-there by design):
+If the instance runs with `DUMP_LEDGER_WEBHOOKS=on`, you can skip polling.
+Ask the operator for a **webhook-admin token** — a dedicated bearer
+credential scoped to exactly the four `/api/v1/webhooks` routes
+([webhook-admin-token-design.md](webhook-admin-token-design.md)); your
+analyzer token is rejected there by design. At boot, send it as
+`Authorization: Bearer <webhook-admin token>` and self-register: list your
+subscriptions with `GET /api/v1/webhooks` first and keep an existing one for
+your URL (idempotent across restarts), otherwise create one:
 
 ```
 POST /api/v1/webhooks { "url": "http://<your-host>/webhooks",
                         "actions": ["AcceptDump", "RejectDump"] }
 ```
 
-DumpLedger then POSTs each matching event — the exact same `Event` object
-the feed serves — to your URL, signed with the subscription secret the
-operator receives once at creation:
+Persist the `secret` from the `201` response in your own secret store — it is
+returned only once. DumpLedger then POSTs each matching event — the exact
+same `Event` object the feed serves — to your URL, signed with that
+subscription secret:
 
 ```
 X-DumpLedger-Signature-256: sha256=<HMAC-SHA256(secret, raw body)>
@@ -116,8 +121,12 @@ Verify the signature over the **raw** body before parsing, dedupe on the
 delivery id / `cursor`, and answer 2xx. Delivery is ordered and
 at-least-once with backoff (10 s → ~21 min); after five failed attempts the
 event is marked `exhausted` and skipped — so keep the feed as your
-reconciliation path for anything you cannot afford to miss. Full semantics:
-[webhook-notifications.md](webhook-notifications.md).
+reconciliation path for anything you cannot afford to miss. Full semantics and the step-by-step registration walkthrough:
+[webhook-notifications.md](webhook-notifications.md#registering-a-webhook-step-by-step).
+
+To decommission, `DELETE /api/v1/webhooks/<id>` for your subscriptions and
+then ask the operator to rotate the webhook-admin token: rotation alone does
+not stop an existing subscription.
 
 ### 3. Retrieve bytes
 
